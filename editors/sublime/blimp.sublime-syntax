@@ -1,0 +1,45 @@
+%YAML 1.2
+---
+
+name: Blimp
+file_extensions: [bli, blt]
+scope: source.blimp
+
+variables:
+ symbol: '[`~@$%^&\*\[\]\-\+=:",\.<>/\?!]*[a-zA-Z0-9_]*'
+
+contexts:
+  main:
+    - include: comment
+    - include: expr
+
+  comment:
+    - match: '#.*\n'
+      scope: comment.line
+
+  expr:
+    - include: comment
+
+    - match: '{'
+      push: block
+
+    - match: '\b(bind)\b'
+      scope: keyword.control
+      push: method
+
+  method:
+    - match: '{{symbol}}'
+      scope: entity.name.function
+
+    - match: '$'
+      pop: true
+
+  block:
+    - match: '({{symbol}})\s*\|'
+      captures:
+        1: variable.function
+
+    - match: '}'
+      pop: true
+
+    - include: expr

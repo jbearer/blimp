@@ -1,0 +1,92 @@
+# Test a simple method with side-effects
+bind class.set_x (
+    x{:=| (that{.get|.}){.eval|.}; y }
+);
+bind class.get_x (
+    x{.get|.}
+);
+
+{do|
+    c {:=| {class|.}};
+    ((c{.get|.}) {.set_x|a}) {!expect|y};
+    ((c{.get|.}) {.get_x|.}) {!expect|a}
+} {.eval|.};
+
+# Test setting a variable in a scope does not set the variable on the receiver.
+bind class.dont_set_y (
+    y {:=| a }
+) {.eval|.};
+{do|
+    c {:=| {class|.} };
+    (c{.get|.}) {.dont_set_y|.};
+    {do| (c{.get|.}) {.get_y|.} } {!expect_error|.}
+} {.eval|.};
+
+# Test calling a method on the receiver in a scope.
+bind class.tricky_set_x ({do|
+    (this{.get|.}) {.set_x|that{.get|.}}
+} {.eval|.});
+{do|
+    c {:=| {class|.} };
+    (c{.get|.}) {.tricky_set_x|a};
+    ((c{.get|.}) {.get_x|.}) {!expect|a}
+} {.eval|.};
+
+# Test a fallthrough method
+bind class _ (
+    (this{.get|.}) {.set_x|that{.get|.}};
+    that{.get|.}
+);
+{do|
+    c {:=| {class|.}};
+    ((c{.get|.}) {.foo|.}) {!expect|foo};
+    ((c{.get|.}) {.get_x|.}) {!expect|foo}
+} {.eval|.}
+
+# Test a fallthrough receiver
+bind _ .set_z (
+    z {:=| that{.get|.}};
+    (this{.get|.}) {.get_x|.}
+);
+bind _.get_z (
+    z{.get|.}
+);
+{do|
+    c {:=| {class|.}};
+    (c{.get|.}) {.set_x|b};
+    ((c{.get|.}) {.method|a}) {!expect|b};
+    ((c{.get|.}) {.get_z|.}) {!expect|a}
+} {.eval|.};
+
+# Test calling a method on a symbol
+{do| sym{.get_z|.} } {!expect_error|.};
+sym{.set_z|a};
+sym{.get_z|.} {!expect|a};
+
+# Test binding a method on symbols
+bind symbol.is_a_symbol true
+foo{.is_a_symbol|.} {!expect|true}
+
+# Test unsanitary object creation
+{do|
+    x{:=| 0 };
+    {class|.}{.set_x|1};
+    (x{.get|.}) {!expect|1}
+} {.eval|.};
+
+# Test sanitary object creation
+bind new _
+    {that{.get|.}|.}
+;
+
+{do|
+    x {:=| 0 };
+    c {:=| {new|.} class };
+
+    (c{.get|.}) {.set_x|1};
+
+    ((c{.get|.}){.get_x|.}) {!expect|1};
+        # Check that the instance variable got set as expected.
+    (x{.get|.}) {!expect|0}
+        # Check that it didn't capture our `x`.
+} {.eval|.}

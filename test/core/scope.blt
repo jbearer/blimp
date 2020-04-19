@@ -1,0 +1,29 @@
+{do|
+    non_capturing {:=| {do|
+        x{:=|y};
+        (x{.get|.}) {!expect|y}
+    }};
+    ((non_capturing {.get|.}) {.eval|.}) {!expect|y};
+
+    # Check that assigning to `x` in the scope did not assign to `x` in the
+    # outer scope.
+    {do| x{.get|.} } {!expect_error|.};
+
+    # Check that the scope `non_capturing`, which already has its own version of
+    # `x`, does not share with a newly defined outer `x`.
+    x{:=|z};
+    (non_capturing{.get|.}) {.eval|.};
+    (x{.get|.}) {!expect|z};
+
+    # Check that once `x` has been defined globally, subsequent scopes which
+    # assign to `x` will update the global version (i.e. shadowing is not
+    # allowed).
+    capturing {:=| {do|
+        x{:=|w}
+    }};
+    (capturing{.get|.}) {.eval|.};
+    (x{.get|.}) {!expect|w};
+
+    # Check that we can read a variable from the outer scope in an inner scope.
+    ({do| x{.get|.} } {.eval|.}) {!expect|w}
+} {.eval|.}

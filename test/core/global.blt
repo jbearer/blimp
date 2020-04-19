@@ -1,0 +1,26 @@
+# Check that we can assign to a symbol in a scope and get the value back.
+non_capturing {:=| {do|
+    x{:=|y};
+    (x{.get|unit}) {!expect|y}
+}};
+((non_capturing {.get|unit}) {.eval|unit}) {!expect|y};
+
+# Check that assigning to `x` in the scope did not assign to `x` globally.
+{do| x{.get|unit} } {!expect_error|unit};
+
+# Check that the scope `non_capturing`, which already has its own version of
+# `x`, does not share with a globally defined `x`.
+x{:=|z};
+(non_capturing{.get|unit}) {.eval|unit};
+(x{.get|unit}) {!expect|z};
+
+# Check that once `x` has been defined globally, subsequent scopes which assign
+# to `x` will update the global version (i.e. shadowing is not allowed).
+capturing {:=| {do|
+    x{:=|w}
+}};
+(capturing{.get|unit}) {.eval|unit};
+(x{.get|unit}) {!expect|w};
+
+# Check that we can read a variable from the global scope in an inner scope.
+({do| x{.get|unit} } {.eval|unit}) {!expect|w}
