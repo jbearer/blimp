@@ -482,7 +482,8 @@ static Status Lexer_Next(Lexer *lex, Token *tok)
     return ret;
 }
 
-static Status Lexer_Consume(Lexer *lex, TokenType expected_token)
+static Status Lexer_ConsumeWithLoc(
+    Lexer *lex, TokenType expected_token, SourceLoc *loc)
 {
     Token tok;
     TRY(Lexer_Next(lex, &tok));
@@ -493,7 +494,16 @@ static Status Lexer_Consume(Lexer *lex, TokenType expected_token)
             StringOfTokenType(expected_token));
     }
 
+    if (loc) {
+        *loc = tok.range.end;
+    }
+
     return BLIMP_OK;
+}
+
+static Status Lexer_Consume(Lexer *lex, TokenType expected_token)
+{
+    return Lexer_ConsumeWithLoc(lex, expected_token, NULL);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -531,6 +541,7 @@ static Status ParseExpr(Lexer *lex, Expr **expr)
             // Construct a new expression representing the sequence `fst ; snd`.
             TRY(Malloc(lex->blimp, sizeof(Expr), expr));
             (*expr)->tag = EXPR_SEQ;
+            (*expr)->range = (SourceRange) { fst->range.start, snd->range.end };
             (*expr)->seq.fst = fst;
             (*expr)->seq.snd = snd;
 
@@ -576,6 +587,8 @@ static Status ParseStmt(Lexer *lex, Expr **expr)
             // Replace the top-level parse result with a new expression, which
             // will represent a send of `message` to `receiver`.
         (*expr)->tag = EXPR_SEND;
+        (*expr)->range = (SourceRange)
+            { receiver->range.start, message->range.end };
         (*expr)->send.receiver = receiver;
         (*expr)->send.message  = message;
     }
@@ -597,10 +610,17 @@ static Status ParseTerm(Lexer *lex, Expr **term)
     // are trying to parse.
     Token tok;
     TRY(Lexer_Next(lex, &tok));
+    (*term)->range = tok.range;
+        // We'll update the end of this range later if we have to, but the start
+        // should be accurate.
+
     switch (tok.type) {
         case TOK_LPAREN:
             TRY(ParseExpr(lex, term));
-            TRY(Lexer_Consume(lex, TOK_RPAREN));
+            (*term)->range.start = tok.range.start;
+                // ParseExpr overwrites the source range, so we have to reset it
+                // here to include the open parenthesis.
+            TRY(Lexer_ConsumeWithLoc(lex, TOK_RPAREN, &(*term)->range.end));
             return BLIMP_OK;
 
         case TOK_LBRACE:
@@ -611,7 +631,7 @@ static Status ParseTerm(Lexer *lex, Expr **term)
             TRY(ParseExpr(lex, &(*term)->block.tag));
             TRY(Lexer_Consume(lex, TOK_PIPE));
             TRY(ParseExpr(lex, &(*term)->block.code));
-            TRY(Lexer_Consume(lex, TOK_RBRACE));
+            TRY(Lexer_ConsumeWithLoc(lex, TOK_RBRACE, &(*term)->range.end));
 
             return BLIMP_OK;
 
@@ -627,6 +647,8 @@ static Status ParseTerm(Lexer *lex, Expr **term)
             TRY(ParseTerm(lex, &(*term)->bind.receiver));
             TRY(ParseTerm(lex, &(*term)->bind.message));
             TRY(ParseTerm(lex, &(*term)->bind.code));
+
+            (*term)->range.end = (*term)->bind.code->range.end;
 
             return BLIMP_OK;
 
