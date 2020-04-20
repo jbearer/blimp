@@ -202,6 +202,7 @@ static Status StringStream_New(
 static Status Stream_Peek(Stream *stream, int *c)
 {
     if (!stream->peek_valid) {
+        stream->peek_loc = stream->Location(stream);
         TRY(stream->Next(stream, &stream->peek));
         stream->peek_valid = true;
     }
@@ -226,7 +227,11 @@ static Status Stream_Consume(Stream *stream, int expected)
 
 static SourceLoc Stream_Location(Stream *stream)
 {
-    return stream->Location(stream);
+    if (stream->peek_valid) {
+        return stream->peek_loc;
+    } else {
+        return stream->Location(stream);
+    }
 }
 
 static void Stream_Delete(Stream *stream)
@@ -344,10 +349,10 @@ static Status Lexer_Peek(Lexer *lex, Token *tok)
 
     // Skip whitespace.
     do {
+        tok->range.start = Stream_Location(lex->input);
+        tok->range.end   = tok->range.start;
         TRY(Stream_Next(lex->input, &c));
     } while (isspace(c));
-
-    tok->range.start = Stream_Location(lex->input);
 
     switch (c) {
         case '{':
@@ -410,7 +415,9 @@ static Status Lexer_Peek(Lexer *lex, Token *tok)
                 // if it is another operator character.
             if (!IsOperatorChar(c)) break;
 
+            tok->range.end = Stream_Location(lex->input);
             Stream_Consume(lex->input, c);
+
             if (sym_length >= sym_capacity) {
                 TRY(Realloc(lex->blimp, 2*sym_capacity, &sym_name));
                 sym_capacity *= 2;
@@ -435,7 +442,9 @@ static Status Lexer_Peek(Lexer *lex, Token *tok)
         TRY(Stream_Peek(lex->input, &c));
         if (!IsIdentifierChar(c)) break;
 
+        tok->range.end = Stream_Location(lex->input);
         Stream_Consume(lex->input, c);
+
         if (sym_length >= sym_capacity) {
             TRY(Realloc(lex->blimp, 2*sym_capacity, &sym_name));
             sym_capacity *= 2;
@@ -462,7 +471,6 @@ static Status Lexer_Peek(Lexer *lex, Token *tok)
         // converted it to a Symbol (for symbols).
 
 success:
-    tok->range.end = Stream_Location(lex->input);
     lex->peek = *tok;
     return BLIMP_OK;
 }

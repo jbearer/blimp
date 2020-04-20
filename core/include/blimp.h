@@ -201,6 +201,7 @@ typedef struct BlimpStream {
     // which returns the next character in the stream without consuming it.
     int peek;
     bool peek_valid;
+    BlimpSourceLoc peek_loc;
 #endif
 } BlimpStream;
 
