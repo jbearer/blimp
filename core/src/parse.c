@@ -642,7 +642,7 @@ static Status ParseTerm(Lexer *lex, Expr **term)
 
         case TOK_BIND:
             TRY(Malloc(lex->blimp, sizeof(Expr), term));
-            (*term)->tag = EXPR_BLOCK;
+            (*term)->tag = EXPR_BIND;
 
             TRY(ParseTerm(lex, &(*term)->bind.receiver));
             TRY(ParseTerm(lex, &(*term)->bind.message));

@@ -64,7 +64,7 @@ static void PrintSourceRange(FILE *f, const SourceRange *range)
                 //  file:row:col
                 fprintf(f, "%s%s%s:%zu:%zu\n",
                     ANSI_PURPLE, range->start.file, ANSI_RESET,
-                    range->start.row, range->start.col);
+                    range->start.row+1, range->start.col+1);
             } else {
                 // Otherwise, print
                 //  file: row:col-col

@@ -30,7 +30,7 @@ Status Blimp_GetSymbol(Blimp *blimp, const char *name, const Symbol **symbol)
     Symbol *new_symbol;
     TRY(Malloc(blimp, sizeof(Symbol), &new_symbol));
     new_symbol->length = strlen(name);
-    TRY(Strndup(blimp, name, new_symbol->length, (char **)&new_symbol->name));
+    TRY(Strndup(blimp, name, new_symbol->length+1, (char **)&new_symbol->name));
 
     *symbol = new_symbol;
     blimp->symbols.symbols[blimp->symbols.size++] = *symbol;
