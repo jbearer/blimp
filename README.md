@@ -34,3 +34,9 @@ cd bld-debug
 cmake -DCMAKE_BUILD_TYPE=Debug ..
 make
 ```
+
+To run all tests:
+```
+cd bld-debug
+ctest
+```
