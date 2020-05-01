@@ -6,12 +6,17 @@ void Blimp_DumpExpr(FILE *file, const Expr *expr)
 {
     switch (expr->tag) {
         case EXPR_SYMBOL:
-            // The semantic model implemented in Redex assigns _ semantic
-            // meaning if it appears anywhere in a Redex term. We need to
-            // replace all occurences of _ in this bl:mp symbol with an escape
-            // identifier which is not otherwise a valid bl:mp identifier. We
-            // will use {under}, since curly braces are not allowed in bl:mp
-            // symbols.
+            // Certain valid bl:mp symbols are given special meaning in the
+            // Redex semantics; for example, `symbol` and `block` are keywords
+            // that indicate symbol and block values. Therefore, symbol literals
+            // need to be escaped somehow. We will surround all symbol literals
+            // with {} -- neither valid bl:mp characters nor meaningful Redex
+            // characters.
+            //
+            // Redex also assigns _ semantic meaning if it appears anywhere in a
+            // Redex term. We need to replace all occurences of _ in this bl:mp
+            // symbol with an escape identifier which is not otherwise a valid
+            // bl:mp identifier. We will use {-}.
             //
             // Of course, braces are not allowed in Racket symbols either, so we
             // also wrap the whole symbol in ||. Technically we only need to do
@@ -20,15 +25,15 @@ void Blimp_DumpExpr(FILE *file, const Expr *expr)
             // of characters which are interpreted by Racket but not Redex, such
             // as `.`. It also has the nice side-effect of making it clear in
             // the output what is a symbol.
-            fputc('|', file);
+            fputs("|{", file);
             for (const char *c = expr->symbol->name; *c; ++c) {
                 if (*c == '_') {
-                    fputs("{under}", file);
+                    fputs("{-}", file);
                 } else {
                     fputc(*c, file);
                 }
             }
-            fputc('|', file);
+            fputs("}|", file);
 
             break;
         case EXPR_BLOCK:

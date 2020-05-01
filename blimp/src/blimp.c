@@ -21,7 +21,7 @@ static void PrintUsage(FILE *f, int argc, char *const *argv)
     fprintf(f, "\n");
     fprintf(f, "Usage: %s [options] <file>\n", argv[0]);
     fprintf(f, "Options:\n");
-    fprintf(f, "    -h, --help      \n");
+    fprintf(f, "    -h, --help\n");
     fprintf(f, "        Show this help and exit\n");
     fprintf(f, "    -v, --version\n");
     fprintf(f, "        Print version information\n");

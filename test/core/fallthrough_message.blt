@@ -1,0 +1,21 @@
+bind class.set_x (
+    x{:=| (that{.get|.}){.eval|.} };
+    y
+);
+bind class.get_x (
+    x{.get|.}
+);
+
+# Test a fallthrough method
+bind class _ ({do|
+    arg{:=|that{.get|.}{.eval|.}};
+    (this{.get|.}) {.set_x|arg{.get|.}};
+    arg{.get|.}
+}{.eval|.});
+{do|
+    c {:=| {class|.}};
+    ((c{.get|.}) {.foo|bar}) {!expect|bar};
+    ((c{.get|.}) {.get_x|.}) {!expect|bar}
+} {.eval|.};
+
+.

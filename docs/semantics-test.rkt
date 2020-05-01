@@ -1,10 +1,22 @@
 #lang racket
 
+(require rackunit)
 (require redex)
 (require "semantics.rkt")
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; brief sanity check for bl:mp semantics
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+; Run with `raco test semantics-test.rkt`.
+; For a more thorough test, use the bl:mp test suite (blimp-test).
+;
+
+
+(module+ test
+
 ; Eval a symbol literal
-(test-equal
+(check-equal?
     (judgment-holds
         (eval foo M (symbol x r))
         x
@@ -13,7 +25,7 @@
 )
 
 ; Eval a block literal
-(test-equal
+(check-equal?
     (judgment-holds
         (eval (block a b) M (block x e r))
         (x e)
@@ -23,7 +35,7 @@
 
 
 ; Check a sequence of expressions.
-(test-equal
+(check-equal?
     (judgment-holds
         (eval (seq foo (block a b)) M (block x e r))
         (x e)
@@ -36,7 +48,7 @@
 ;   {c|.} {m|.}
 ; Should evaluate to
 ;   foo
-(test-equal
+(check-equal?
     (judgment-holds
         (eval (seq (bind c m foo) ((block c |.|) (block m |.|))) M (symbol x r))
         x
@@ -49,7 +61,7 @@
 ;   (.; {c|.}) (.; {m|.})
 ; Should evaluate to
 ;   foo
-(test-equal
+(check-equal?
     (judgment-holds
         (eval (seq (bind c m foo) ((seq |.| (block c |.|)) (seq |.| (block m |.|)))) M (symbol x r))
         x
@@ -63,7 +75,7 @@
 ;   {c|.} {m|.}
 ; Should evaluate to
 ;   bar
-(test-equal
+(check-equal?
     (judgment-holds
         (eval (seq (bind c m foo) (seq (bind c m bar) ((block c |.|) (block m |.|)))) M (symbol x r))
         x
@@ -76,7 +88,7 @@
 ;   {c|.} {m|.}
 ; Should evaluate to
 ;   foo
-(test-equal
+(check-equal?
     (judgment-holds
         (eval (seq (bind (seq |.| c) (seq |.| m) (seq |.| foo)) ((block c |.|) (block m |.|))) M (symbol x r))
         x
@@ -89,9 +101,9 @@
 ;   foo{.get|.}
 ; Should evaluate to
 ;   bar
-(test-equal
+(check-equal?
     (judgment-holds
-        (eval (seq (foo (block := bar)) (foo (block .get |.|))) M (symbol x r))
+        (eval (seq (foo (block |{:=}| bar)) (foo (block |{.get}| |.|))) M (symbol x r))
         x)
     '(bar)
 )
@@ -102,9 +114,9 @@
 ;   foo{.get|.}
 ; Should evaluate to
 ;   baz
-(test-equal
+(check-equal?
     (judgment-holds
-        (eval (seq (seq (foo (block := bar)) (foo (block := baz))) (foo (block .get |.|))) M (symbol x r))
+        (eval (seq (seq (foo (block |{:=}| bar)) (foo (block |{:=}| baz))) (foo (block |{.get}| |.|))) M (symbol x r))
         x)
     '(baz)
 )
@@ -113,9 +125,9 @@
 ;   {do|foo}{.eval|.}
 ; Should evaluate to
 ;   foo
-(test-equal
+(check-equal?
     (judgment-holds
-        (eval ((block do foo) (block .eval |.|)) M (symbol x r))
+        (eval ((block do foo) (block |{.eval}| |.|)) M (symbol x r))
         x)
     '(foo)
 )
@@ -125,10 +137,11 @@
 ;   {do|x{.get|.}}{.eval|.}
 ; Should evaluate to
 ;   0
-(test-equal
+(check-equal?
     (judgment-holds
-        (eval (seq (x (block := |0|)) ((block do (x (block .get |.|))) (block .eval |.|))) M (symbol x r))
+        (eval (seq (x (block |{:=}| |0|)) ((block do (x (block |{.get}| |.|))) (block |{.eval}| |.|))) M (symbol x r))
         x)
     '(|0|)
 )
 
+)

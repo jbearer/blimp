@@ -14,7 +14,7 @@ contexts:
     - include: expr
 
   comment:
-    - match: '#.*\n'
+    - match: '#.*$'
       scope: comment.line
 
   expr:

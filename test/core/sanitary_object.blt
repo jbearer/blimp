@@ -1,0 +1,25 @@
+bind class.set_x (
+    x{:=| (that{.get|.}){.eval|.} };
+    y
+);
+bind class.get_x (
+    x{.get|.}
+);
+
+# Test sanitary object creation
+bind new _
+    {that{.get|.}|.}
+;
+
+{do|
+    x {:=| 0 };
+    c {:=| {new|.} class };
+
+    (c{.get|.}) {.set_x|1};
+
+    ((c{.get|.}){.get_x|.}) {!expect|1};
+        # Check that the instance variable got set as expected.
+    (x{.get|.}) {!expect|0}
+        # Check that it didn't capture our `x`.
+} {.eval|.};
+.

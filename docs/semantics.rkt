@@ -1,6 +1,13 @@
 #lang racket
 (require redex)
-(provide eval)
+(provide
+    bl:mp
+    bl:mp-machine
+
+    eval
+    new-machine
+    steps-to
+    class-of)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; the semantics of bl:mp
@@ -349,7 +356,7 @@
     class-of : v -> x
     ; Get the symbol for the class of a value. For symbols, this is always `symbol`. For blocks, it
     ; is the tag of the block.
-    [(class-of (symbol x r)) sym]
+    [(class-of (symbol x r)) |{symbol}|]
     [(class-of (block x e r)) x]
 )
 
@@ -381,62 +388,20 @@
 
     ; If we didn't find (x_rcv, x_msg), look for (x_rcv, _) to check if the receiver has a fall-
     ; through handler to process messages dynamically.
-    [ (side-condition (distinct x_msg |{under}|))
+    [ (side-condition (distinct x_msg |{{-}}|))
       (side-condition (¬(vtable-contains V x_rcv x_msg)))
-      (resolves-to (H V) x_rcv |{under}| m)
+      (resolves-to (H V) x_rcv |{{-}}| m)
     ----------------------------------------------------------
       (resolves-to (H V) x_rcv x_msg m)
     ]
 
     ; If that failed, look for (_, x_msg) to see if there is a global handler for this message.
-    [ (side-condition (distinct x_rcv |{under}|))
+    [ (side-condition (distinct x_rcv |{{-}}|))
       (side-condition (¬(vtable-contains V x_rcv x_msg)))
-      (side-condition (¬(vtable-contains V x_rcv |{under}|)))
-      (resolves-to (H V) |{under}| x_msg m)
+      (side-condition (¬(vtable-contains V x_rcv |{{-}}|)))
+      (resolves-to (H V) |{{-}}| x_msg m)
     ----------------------------------------------------------
       (resolves-to (H V) x_rcv x_msg m)
-    ]
-)
-
-(define-judgment-form bl:mp-machine
-    #:mode     (call-method I I I I I O O)
-    #:contract (call-method M r m v v M v)
-    ; (call-method M_1 r m v_rcv v_msg M_2 v_m) holds if, given initial machine state `M_1`, the
-    ; method `m` with receiver `v_rcv` and messge `v_msg` evaluates to `v_m` in the scope `r`, and
-    ; the new machine state is `M_2`.
-
-    ; For primitive-get, we don't call anything, we just look up the symbol directly.
-    [ (get M r x_rcv v)
-    -----------------------------------------------------------------
-      (call-method M r primitive-get (symbol x_rcv r_rcv) v_msg M v)
-    ]
-
-    ; For primitive-set, we first evaluate the body of the message, and then we store the resulting
-    ; value in the current scope.
-    [ (steps-to M_1 r_msg e_msg M_2 v_msg)
-      (where (symbol x_rcv r_rcv) v_rcv)
-      (set M_2 r x_rcv v_msg M_3)
-    -------------------------------------------------------------------------------
-      (call-method M_1 r primitive-set v_rcv (block x_msg e_msg r_msg) M_3 v_rcv)
-    ]
-
-    ; For primitive-eval, just evaluate the body of the receiver.
-    [ (steps-to M_1 r_rcv e_rcv M_2 v_rcv)
-    -------------------------------------------------------------------------------
-      (call-method M_1 r primitive-eval (block x_rcv e_rcv r_rcv) v_msg M_2 v_rcv)
-    ]
-
-    ; For user-defined methods, evaluate the expression in the context of the receiver.
-    [
-      ; Store the receiver object in `this` and the message in `that` so that the method can access
-      ; them.
-      (set M_1 (value-scope v_rcv) this v_rcv M_2)
-      (set M_2 (value-scope v_rcv) that v_msg M_3)
-
-      ; Evaluate the body.
-      (steps-to M_3 (value-scope v_rcv) e_mth M_4 v_mth)
-    -----------------------------------------------------
-      (call-method M_1 r e_mth v_rcv v_msg M_4 v_mth)
     ]
 )
 
@@ -471,14 +436,57 @@
             ; first evaluate the receier
       (steps-to M_2 r e_msg M_3 v_msg)
             ; and then the message
-      (resolves-to M_3 (class-of v_rcv) (class-of v_msg) m_bod)
+      (resolves-to M_3 (class-of v_rcv) (class-of v_msg) e_bod)
             ; then look up the method in the vtable. It must exist, otherwise the overall judgment
             ; does not hold, and the abstract machine faults. If it does exist, and we get back the
             ; expression `e_bod`, then the evaluation of the overal send is the evaluation of
             ; `e_bod` in the scope of `v_rcv`.
-      (call-method M_3 r m_bod v_rcv v_msg M_4 v_bod)
-            ; Evaluate the method
+      (set M_3 (value-scope v_rcv) |{this}| v_rcv M_4)
+      (set M_4 (value-scope v_rcv) |{that}| v_msg M_5)
+            ; Store the receiver object in `this` and the message in `that` so that the method can
+            ; access them.
+      (steps-to M_5 (value-scope v_rcv) e_bod M_6 v_bod)
+            ; Evaluate the body.
     -------------------------------------------------------------------------
+      (steps-to M_1 r (e_rcv e_msg) M_6 v_bod)
+    ]
+
+    ; Handle primitive-get.
+    [ (steps-to M_1 r e_rcv M_2 (symbol x_rcv r_rcv))
+            ; The receiver must evaluate to a symbol.
+      (steps-to M_2 r e_msg M_3 v_msg)
+      (resolves-to M_3 |{symbol}| (class-of v_msg) primitive-get)
+      (get M_3 r x_rcv v)
+            ; Look up the symbol in the active scope.
+    -------------------------------------------------------------------------
+      (steps-to M_1 r (e_rcv e_msg) M_3 v)
+    ]
+
+    ; Handle primitive-set.
+    [ (steps-to M_1 r e_rcv M_2 (symbol x_rcv r_rcv))
+            ; The receiver must evalute to a symbol.
+      (steps-to M_2 r e_msg M_3 (block x_msg e_bod r_msg))
+            ; The message must have a body.
+      (resolves-to M_3 |{symbol}| x_msg primitive-set)
+
+      (steps-to M_3 r e_bod M_4 v_bod)
+            ; Evaluate the body of the message to find the new value of the symbol.
+      (set M_4 r x_rcv v_bod M_5)
+            ; Set the new value.
+    -------------------------------------------------------------------------
+      (steps-to M_1 r (e_rcv e_msg) M_5 v_bod)
+            ; By convention, the result of a set expression is the value to which we set the symbol.
+    ]
+
+    ; Handle primitive-eval
+    [ (steps-to M_1 r e_rcv M_2 (block x_rcv e_bod r_rcv))
+            ; The receiver must evalute to a block.
+      (steps-to M_2 r e_msg M_3 v_msg)
+      (resolves-to M_3 x_rcv (class-of v_msg) primitive-eval)
+
+      (steps-to M_3 r_rcv e_bod M_4 v_bod)
+            ; Evaluate the body in the scope of the receiver.
+    ------------------------------------------------------------
       (steps-to M_1 r (e_rcv e_msg) M_4 v_bod)
     ]
 
@@ -505,6 +513,24 @@
 )
 
 (define-judgment-form bl:mp-machine
+    #:mode     (new-machine O O)
+    #:contract (new-machine M r)
+
+    [ ;; Initialize the vtable
+      (where V ( |{symbol}|     |{.get}|  -> primitive-get
+               :(|{symbol}|     |{:=}|    -> primitive-set
+               :(|{{-}}|        |{.eval}| -> primitive-eval
+               : ∅
+               ))))
+
+      ;; Initialize the heap containing the global scope
+      (new (0 V) ε M r_global)
+    -----------------------------------------------------
+      (new-machine M r_global)
+    ]
+)
+
+(define-judgment-form bl:mp-machine
     #:mode     (eval I O O)
     #:contract (eval e M v)
     ; (eval e M v) holds if `e` evaluates to `v` in the global scope with the default machine state,
@@ -512,17 +538,7 @@
     ;
     ; This is the top-level entrypoint for evaluating complete bl:mp programs.
 
-    [ ;; Initialize the vtable
-      (where V ( sym    .get  -> primitive-get
-               :(sym    :=    -> primitive-set
-               :(|{under}|  .eval -> primitive-eval
-               : ∅
-               ))))
-
-      ;; Initialize the heap containing the global scope
-      (new (0 V) ε M r_global)
-
-      ;; Evaluate in the global scope
+    [ (new-machine M r_global)
       (steps-to M r_global e M_2 v)
     ----------------------------------
       (eval e M_2 v)
@@ -535,6 +551,13 @@
 ;;
 
 (define-metafunction bl:mp
+    distinct : any any -> boolean
     [(distinct any   any)   #f]
     [(distinct any_1 any_2) #t]
+)
+
+(define-metafunction bl:mp
+    ¬ : boolean -> boolean
+    [(¬ #t) #f]
+    [(¬ #f) #t]
 )

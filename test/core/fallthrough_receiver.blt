@@ -1,0 +1,25 @@
+bind class.set_x (
+    x{:=| (that{.get|.}){.eval|.} };
+    y
+);
+bind class.get_x (
+    x{.get|.}
+);
+
+# Test a fallthrough receiver
+bind _ .set_z (
+    z {:=| that{.get|.}{.eval|.}};
+    (this{.get|.}) {.get_x|.}
+);
+bind _.get_z (
+    z{.get|.}
+);
+{do|
+    c {:=| {class|.}};
+    (c{.get|.}) {.set_x|b};
+    ((c{.get|.}) {.set_z|a}) {!expect|b};
+    ((c{.get|.}) {.get_z|.}) {!expect|a};
+    .
+} {.eval|.};
+
+.

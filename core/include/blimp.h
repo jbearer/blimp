@@ -106,6 +106,11 @@ BlimpStatus Blimp_ErrorFrom(
 BlimpStatus Blimp_Reraise(Blimp *blimp);
 
 /**
+ * \brief Print information about the last error recorded in `blimp`.
+ */
+void Blimp_DumpLastError(Blimp *blimp, FILE *f);
+
+/**
  * \brief Print an error message and abort execution if `status != BLIMP_OK`.
  */
 void Blimp_Check(BlimpStatus status);
@@ -210,6 +215,21 @@ typedef struct BlimpStream {
  */
 BlimpStatus Blimp_FileStream(
     Blimp *blimp, const char *path, BlimpStream **stream);
+
+/**
+ * \brief Create a stream which reads input from an open file.
+ *
+ * The stream will close the file when parsing finishes.
+ *
+ * \param[in]  blimp The interpreter state.
+ * \param[in]  name  The name of the file. This is used for error messages only.
+ * \param[in]  file  The file to read from.
+ * \param[out] stream The new stream.
+ *
+ * \pre `file` must be opened for reading.
+ */
+BlimpStatus Blimp_OpenFileStream(
+    Blimp *blimp, const char *name, FILE *file, BlimpStream **stream);
 
 /**
  * \brief Create a stream which reads input from `str`.

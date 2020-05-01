@@ -1,5 +1,5 @@
 # bl:mp
-_A minimalist, block-oriented, imperative language.
+_A minimalist, block-oriented, imperative language._
 
 ## Project Structure
 The `bl:mp` project is divided into several sections:
@@ -40,3 +40,4 @@ To run all tests:
 cd bld-debug
 ctest
 ```
+Note: to run the full test suite, you must have Racket installed. If you don't, CTest will run the tests which can be run without Racket.

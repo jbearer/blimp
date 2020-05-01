@@ -241,13 +241,9 @@ BlimpErrorCode Blimp_GetLastError(
     return blimp->last_error.code;
 }
 
-void Blimp_Check(Status err)
+static void DumpError(FILE *f, Status err)
 {
-    if (err == BLIMP_OK) {
-        return;
-    }
-
-    fprintf(stderr, "%sbl:mp error%s %zu%s%s\n",
+    fprintf(f, "%sbl:mp error%s %zu%s%s\n",
         ANSI_RED, ANSI_RESET, (size_t)err->code,
         err->message[0] ? ": " : "",  err->message);
 
@@ -255,5 +251,20 @@ void Blimp_Check(Status err)
         PrintSourceRange(stderr, &err->range);
     }
 
+    exit(EXIT_FAILURE);
+}
+
+void Blimp_DumpLastError(Blimp *blimp, FILE *f)
+{
+    DumpError(f, &blimp->last_error);
+}
+
+void Blimp_Check(Status err)
+{
+    if (err == BLIMP_OK) {
+        return;
+    }
+
+    DumpError(stderr, err);
     exit(EXIT_FAILURE);
 }

@@ -118,7 +118,8 @@ static void FileStream_Close(Stream *stream)
     Free(self->blimp, &self);
 }
 
-static Status FileStream_New(Blimp *blimp, const char *path, FileStream **self)
+static Status FileStream_New(
+    Blimp *blimp, const char *name, FILE *file, FileStream **self)
 {
      TRY(Malloc(blimp, sizeof(FileStream), self));
      **self = (FileStream) {
@@ -129,16 +130,12 @@ static Status FileStream_New(Blimp *blimp, const char *path, FileStream **self)
         },
         .blimp = blimp,
         .loc = {
-            .file = path,
+            .file = name,
             .row  = 0,
             .col  = 0,
         },
-        .f = fopen(path, "r"),
+        .f = file,
      };
-     if ((*self)->f == NULL) {
-        return ErrorMsg(
-            blimp, BLIMP_IO_ERROR, "cannot open %s: %s", path, strerror(errno));
-     }
 
      return BLIMP_OK;
 }
@@ -682,7 +679,18 @@ static Status TryTerm(Lexer *lex, Expr **term)
 
 Status Blimp_FileStream(Blimp *blimp, const char *path, Stream **stream)
 {
-    return FileStream_New(blimp, path, (FileStream **)stream);
+    FILE *file = fopen(path, "r");
+    if (file == NULL) {
+        return ErrorMsg(
+            blimp, BLIMP_IO_ERROR, "cannot open %s: %s", path, strerror(errno));
+    }
+    return FileStream_New(blimp, path, file, (FileStream **)stream);
+}
+
+Status Blimp_OpenFileStream(
+    Blimp *blimp, const char *name, FILE *file, Stream **stream)
+{
+    return FileStream_New(blimp, name, file, (FileStream **)stream);
 }
 
 Status Blimp_StringStream(Blimp *blimp, const char *str, Stream **stream)

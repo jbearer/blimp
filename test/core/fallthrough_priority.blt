@@ -1,0 +1,13 @@
+# A matching class has higher priority than a matching method.
+bind class _        a;
+bind _     message  b;
+{class|.}{message|.}{!expect|a};
+
+# Matching both class and message has the highest priority.
+bind class message c;
+{class|.}{message|.}{!expect|c};
+
+# Check that the fallthrough methods are still in the vtable.
+{foo|.}{message|.}{!expect|b};
+{class|.}{foo|.}{!expect|a};
+.
