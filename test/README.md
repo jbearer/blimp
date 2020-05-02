@@ -21,3 +21,8 @@ A `bl:mp` test suite is a hierarchical division of test files. The hierarchy has
 * test: a single test, consisting of a `.blt` file which can be checked against the Racket semantics as well as the `bl:mp` interpreter.
 
 The `blimp-test` runner can automatically discover tests in immediate subdirectories of this project. Any subdirectory which contains at least one `.blt` file will become a test group, and all `.blt` files in that directory will become tests.
+
+## test options
+The `blimp-test` runner has a number of command line arguments which can be used to control how the tests are executed. For example, `--filter` controls which tests are run, `--skip-racket` controls whether to run the tests through the Racket semantic model, and so on. Use `blimp-test --help` for a complete list.
+
+Individual tests can also override the options passed via the command line using a special pragma: if the first line of a `.blt` file starts with `#:`, the test runner will interpret the remainder of that line as options which should override the global options just for that test. For example, to disable the Racket semantics for a particular test, add the line `#: --skip-racket` at the start of the test file. Or, to disable a test, you can add a filter that you know does not match the name of the test. For example: `#: -f"skipped: pending feature XYZ"`.

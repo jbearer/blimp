@@ -12,6 +12,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
+#include <wordexp.h>
 
 #include "blimp.h"
 #include "options.h"
@@ -33,9 +34,10 @@ typedef enum {
 typedef struct Test {
     // Inputs
     const char *name;
+    Options options;
     Blimp *blimp;
     BlimpStream *stream;
-    struct Suite *suite;
+    Racket *racket;
 
     // Outputs
     TestResult result;
@@ -44,17 +46,17 @@ typedef struct Test {
 typedef struct Group {
     // Inputs
     const char *name;
+    Options options;
     size_t num_tests;
-    struct Test **tests;
-    struct Group *next;
-    struct Suite *suite;
+    Test **tests;
 
     // Outputs
     size_t results[NUM_RESULT_TYPES];
 } Group;
 
 typedef struct Suite {
-    Group *groups;
+    size_t num_groups;
+    Group **groups;
     Racket racket;
     Options options;
 } Suite;
@@ -65,7 +67,7 @@ typedef struct Suite {
 
 static void FailTest(Test *test, const char *reason)
 {
-    if (test->suite->options.verbosity >= VERB_TEST) {
+    if (test->options.verbosity >= VERB_TEST) {
         printf(ANSI_RED "failed!" ANSI_RESET " %s: %s\n", test->name, reason);
     }
     test->result = TEST_FAILED;
@@ -73,12 +75,19 @@ static void FailTest(Test *test, const char *reason)
 
 static void PassTest(Test *test, size_t elapsed_ms)
 {
-    if (test->suite->options.verbosity >= VERB_TEST) {
+    if (test->options.verbosity >= VERB_TEST) {
         printf(ANSI_GREEN "passed!" ANSI_RESET " %s (%.3fs)\n",
             test->name, (float)elapsed_ms / 1000);
     }
     test->result = TEST_PASSED;
 }
+
+#define SkipTest(test, reason, ...) \
+    do { \
+        printf(ANSI_YELLOW "skipped!" ANSI_RESET " %s: " reason "\n", \
+            test->name, ##__VA_ARGS__); \
+        test->result = TEST_SKIPPED; \
+    } while (0)
 
 // Print a summary of a group of tests.
 //  header: a format string describing the results being summarized
@@ -114,6 +123,15 @@ static void PassTest(Test *test, size_t elapsed_ms)
 
 static void RunTest(Test *test)
 {
+    // Skip this test if it gets filtered out.
+    if (strncasecmp(
+            test->name, test->options.filter, strlen(test->options.filter))
+        != 0)
+    {
+        SkipTest(test, "does not match filter `%s'", test->options.filter);
+        return;
+    }
+
     struct timespec start, end;
     clock_gettime(CLOCK_MONOTONIC, &start);
 
@@ -123,13 +141,13 @@ static void RunTest(Test *test)
         return;
     }
 
-    if (test->suite->options.use_racket) {
-        FILE *command = Racket_BeginCommand(&test->suite->racket);
+    if (test->options.use_racket) {
+        FILE *command = Racket_BeginCommand(test->racket);
         fprintf(command, "(judgment-holds (test-eval ");
         Blimp_DumpExpr(command, expr);
         fprintf(command, " M v))");
         char *output = Racket_CommitCommand(
-            &test->suite->racket, test->suite->options.racket_timeout);
+            test->racket, test->options.racket_timeout);
         if (!output) {
             FailTest(test, "Racket error: expected output");
             return;
@@ -159,7 +177,7 @@ static void RunGroup(Group *group)
 {
     memset(group->results, 0, sizeof(group->results));
 
-    if (group->suite->options.verbosity >= VERB_TEST) {
+    if (group->options.verbosity >= VERB_TEST) {
         printf(ANSI_PURPLE "Running tests for group" ANSI_RESET " %s\n",
             group->name);
     }
@@ -169,152 +187,31 @@ static void RunGroup(Group *group)
         ++group->results[group->tests[i]->result];
     }
 
-    if (group->suite->options.verbosity >= VERB_GROUP) {
+    if (group->options.verbosity >= VERB_GROUP) {
         PrintResults(ANSI_PURPLE "Results for" ANSI_RESET " %s",
             group->results, group->num_tests, group->name);
     }
-    if (group->suite->options.verbosity >= VERB_TEST) {
+    if (group->options.verbosity >= VERB_TEST) {
         printf("\n");
     }
 }
 
 static bool RunSuite(Suite *suite)
 {
-    if (suite->options.use_racket) {
-        if (!Racket_Init(&suite->racket, &suite->options)) {
-            if (suite->options.verbosity >= VERB_SUITE) {
-                fprintf(stderr,
-                    "failed to open Racket "
-                    "(maybe you meant to run with --skip-racket)\n");
-            }
-            return false;
-        }
-
-        if (!Racket_Exec(&suite->racket, "(require redex)")) {
-            if (suite->options.verbosity >= VERB_SUITE) {
-                fprintf(stderr, "racket: failed to import redex\n");
-            }
-            return false;
-        }
-        if (!Racket_Exec(&suite->racket, "(require (file \"" SEMANTICS_PATH "\"))")) {
-            if (suite->options.verbosity >= VERB_SUITE) {
-                fprintf(stderr, "racket: failed to import semantics.rkt\n");
-            }
-            return false;
-        }
-    }
-
     size_t results[NUM_RESULT_TYPES] = {0};
     size_t num_tests = 0;
-    for (Group *group = suite->groups; group; group = group->next) {
-        RunGroup(group);
+    for (size_t i = 0; i < suite->num_groups; ++i) {
+        RunGroup(suite->groups[i]);
         for (TestResult result = 0; result < NUM_RESULT_TYPES; ++result) {
-            results[result] += group->results[result];
+            results[result] += suite->groups[i]->results[result];
         }
-        num_tests += group->num_tests;
+        num_tests += suite->groups[i]->num_tests;
     }
 
     if (suite->options.verbosity >= VERB_SUITE) {
         PrintResults(ANSI_PURPLE "Total results" ANSI_RESET, results, num_tests);
     }
     return results[TEST_FAILED] == 0;
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// Discovering tests
-//
-
-static int CompareTests(const void *p1, const void *p2)
-{
-    Test *t1 = *(Test **)p1;
-    Test *t2 = *(Test **)p2;
-    return strcmp(t1->name, t2->name);
-}
-
-static Suite *FindTests(const Options *options)
-{
-    Suite *suite = malloc(sizeof(Suite));
-    suite->options = *options;
-    suite->groups = NULL;
-
-    DIR *suite_dir = opendir(TEST_DIRECTORY);
-    if (!suite_dir) {
-        perror("opendir");
-        return NULL;
-    }
-
-    // Search each subdirectory of the test directory for .blt files. Any
-    // subdirectory containing at least one .blt fil will become a group.
-    struct dirent *group_de;
-    while ((group_de = readdir(suite_dir)) != NULL) {
-        int group_dir_fd = openat(
-            dirfd(suite_dir), group_de->d_name, O_RDONLY|O_DIRECTORY);
-        if (group_dir_fd < 0) {
-            if (errno == ENOTDIR) {
-                continue;
-            }
-
-            fprintf(stderr, "could not open test directory %s: %s\n",
-                group_de->d_name, strerror(errno));
-        }
-
-        Test **tests = NULL;
-        size_t tests_capacity = 0;
-        size_t num_tests = 0;
-
-        DIR *group_dir = fdopendir(group_dir_fd);
-        struct dirent *test_de;
-        while ((test_de = readdir(group_dir)) != NULL) {
-            // Is this a .blt file?
-            size_t name_len = strlen(test_de->d_name);
-            if (name_len < 4 ||
-                strcmp(test_de->d_name + name_len - 4, ".blt") != 0)
-            {
-                continue;
-            }
-
-            // It is! Does it match our filter?
-            if (strncasecmp(
-                    test_de->d_name, options->filter, strlen(options->filter))
-                != 0)
-            {
-                continue;
-            }
-
-            // It is! Create a test for it.
-            Test *test = malloc(sizeof(Test));
-            test->name = strdup(test_de->d_name);
-            test->blimp = Blimp_New();
-            FILE *test_file = fdopen(
-                openat(dirfd(group_dir), test_de->d_name, O_RDONLY), "r");
-            Blimp_Check(Blimp_OpenFileStream(
-                test->blimp, test_de->d_name, test_file, &test->stream));
-            test->suite = suite;
-
-            // Add it to our list of tests.
-            if (num_tests >= tests_capacity) {
-                tests_capacity = tests_capacity*2 + 1;
-                tests = realloc(tests, sizeof(Test *)*tests_capacity);
-            }
-            tests[num_tests++] = test;
-        }
-
-        // If we found any tests in this directory, create a group for them.
-        if (tests) {
-            // Sort the tests alphabetically.
-            qsort(tests, num_tests, sizeof(Test *), CompareTests);
-
-            Group *group = malloc(sizeof(Group));
-            group->name = strdup(group_de->d_name);
-            group->num_tests = num_tests;
-            group->tests = tests;
-            group->next = suite->groups;
-            group->suite = suite;
-            suite->groups = group;
-        }
-    }
-
-    return suite;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -329,7 +226,7 @@ static Suite *FindTests(const Options *options)
 //  6. The switch statement in ParseOptions
 //
 
-static void PrintUsage(FILE *f, int argc, char *const *argv)
+static void PrintUsage(FILE *f, int argc, char **argv)
 {
     (void)argc;
 
@@ -406,8 +303,15 @@ const Options default_options = {
 // termination of the program. If the return value is `true`, and `status` is
 // non-NULL, then `status` will point to an integer which should be the exit
 // status of the program.
-bool ParseOptions(int argc, char **argv, Options *options, int *status)
+static bool ParseOptions(int argc, char **argv, Options *options, int *status)
 {
+    // If `status` is NULL, point it somewhere so we don't have to keep checking
+    // for NULL.
+    int dummy_status = 0;
+    if (status == NULL) {
+        status = &dummy_status;
+    }
+
     struct option cli_options[] = {
         {"filter",         required_argument, NULL, FLAG_FILTER },
         {"skip-racket",    no_argument,       NULL, FLAG_SKIP_RACKET },
@@ -417,6 +321,10 @@ bool ParseOptions(int argc, char **argv, Options *options, int *status)
         {0, 0, 0, 0},
     };
 
+    optind = 1;
+        // Since ParseOptions may be called more than once (for example, to
+        // parse test-specific options) we need to reset this global variable
+        // each time.
     int option, i = 1;
     while ((option = getopt_long(argc, argv, "f:v::h", cli_options, &i)) != -1) {
         switch (option) {
@@ -495,6 +403,180 @@ bool ParseOptions(int argc, char **argv, Options *options, int *status)
     }
 
     return false;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Discovering tests
+//
+
+static int CompareTests(const void *p1, const void *p2)
+{
+    Test *t1 = *(Test **)p1;
+    Test *t2 = *(Test **)p2;
+    return strcmp(t1->name, t2->name);
+}
+
+static Suite *FindTests(const Options *options)
+{
+    Suite *suite = malloc(sizeof(Suite));
+    suite->options = *options;
+    suite->groups = NULL;
+    suite->num_groups = 0;
+    size_t groups_capacity = 0;
+
+    if (suite->options.use_racket) {
+        if (!Racket_Init(&suite->racket, &suite->options)) {
+            if (suite->options.verbosity >= VERB_SUITE) {
+                fprintf(stderr,
+                    "failed to open Racket "
+                    "(maybe you meant to run with --skip-racket)\n");
+            }
+            return false;
+        }
+
+        if (!Racket_Exec(&suite->racket, "(require redex)")) {
+            if (suite->options.verbosity >= VERB_SUITE) {
+                fprintf(stderr, "racket: failed to import redex\n");
+            }
+            return false;
+        }
+        if (!Racket_Exec(&suite->racket, "(require (file \"" SEMANTICS_PATH "\"))")) {
+            if (suite->options.verbosity >= VERB_SUITE) {
+                fprintf(stderr, "racket: failed to import semantics.rkt\n");
+            }
+            return false;
+        }
+    }
+
+    DIR *suite_dir = opendir(TEST_DIRECTORY);
+    if (!suite_dir) {
+        perror("opendir");
+        return NULL;
+    }
+
+    // Search each subdirectory of the test directory for .blt files. Any
+    // subdirectory containing at least one .blt fil will become a group.
+    struct dirent *group_de;
+    while ((group_de = readdir(suite_dir)) != NULL) {
+        int group_dir_fd = openat(
+            dirfd(suite_dir), group_de->d_name, O_RDONLY|O_DIRECTORY);
+        if (group_dir_fd < 0) {
+            if (errno == ENOTDIR) {
+                continue;
+            }
+
+            fprintf(stderr, "could not open test directory %s: %s\n",
+                group_de->d_name, strerror(errno));
+        }
+
+        size_t tests_capacity = 0;
+        Group *group = malloc(sizeof(Group));
+        group->name = strdup(group_de->d_name);
+        group->tests = NULL;
+        group->num_tests = 0;
+        group->options = suite->options;
+
+        DIR *group_dir = fdopendir(group_dir_fd);
+        struct dirent *test_de;
+        while ((test_de = readdir(group_dir)) != NULL) {
+            // Is this a .blt file?
+            size_t name_len = strlen(test_de->d_name);
+            if (name_len < 4 ||
+                strcmp(test_de->d_name + name_len - 4, ".blt") != 0)
+            {
+                continue;
+            }
+
+            // It is! Create a test for it.
+            Test *test = malloc(sizeof(Test));
+            test->name = strdup(test_de->d_name);
+            test->options = group->options;
+            test->blimp = Blimp_New();
+            FILE *test_file = fdopen(
+                openat(dirfd(group_dir), test_de->d_name, O_RDONLY), "r");
+            Blimp_Check(Blimp_OpenFileStream(
+                test->blimp, test_de->d_name, test_file, &test->stream));
+            test->racket = &suite->racket;
+
+            // Override group options with test-specific options.
+            char *first_line = NULL;
+            size_t n = 0;
+            getline(&first_line, &n, test_file);
+            if (first_line && first_line[0] == '#' && first_line[1] == ':') {
+                // The first line of the file is an options string.
+
+                // Strip trailing newline.
+                if (first_line[strlen(first_line) - 1] == '\n') {
+                    first_line[strlen(first_line) - 1] = '\0';
+                }
+
+                // Split into words, using the same string splitting altgorithm
+                // as the shell to respect quoted words with whitespace.
+                wordexp_t split = { .we_offs = 1 };
+                wordexp(&first_line[2], &split, WRDE_NOCMD|WRDE_DOOFFS);
+                    // Flags:
+                    //  WRDE_NOCMD: don't do command substitution.
+                    //  WRDE_DOOFFS:
+                    //      insert an initial NULL before the split words in the
+                    //      resulting `we_wordv` array. We will replace this
+                    //      with a pointer to the name of the executable
+                    //      (blimp-test), since ParseOptions expects this to be
+                    //      the first argument.
+
+                // Prepend the name of the executable.
+                split.we_wordv[0] = "blimp-test";
+                split.we_wordc++;
+
+                // Parse the array of split words as options.
+                ParseOptions(
+                    split.we_wordc, split.we_wordv, &test->options, NULL);
+
+                // Normally, after calling wordexp, we would call wordfree to
+                // free the memory that wordexp allocated. In this case, though,
+                // we want that memory to persist, since the Options structure
+                // might contain pointers to strings allocated by wordexp.
+                //
+                // We can, however, get rid of the raw line that we read from
+                // file.
+                free(first_line);
+            } else {
+                // The first line is not an options string, but it might contain
+                // test bl:mp code. Put it back into the stream.
+                rewind(test_file);
+            }
+
+            // Add it to our list of tests.
+            if (group->num_tests >= tests_capacity) {
+                tests_capacity = tests_capacity*2 + 1;
+                group->tests = realloc(
+                    group->tests, sizeof(Test *)*tests_capacity);
+            }
+            group->tests[group->num_tests++] = test;
+        }
+
+        // If we found any tests in this directory, create a group for them.
+        if (group->tests) {
+            // Sort the tests alphabetically.
+            qsort(group->tests, group->num_tests, sizeof(Test *), CompareTests);
+
+            // Add the group to the suite.
+            if (suite->num_groups >= groups_capacity) {
+                groups_capacity = groups_capacity*2 + 1;
+                suite->groups = realloc(
+                    suite->groups, sizeof(Group *)*groups_capacity);
+            }
+            suite->groups[suite->num_groups++] = group;
+        } else {
+            // Ditch the empty group.
+            free(group);
+        }
+
+        closedir(group_dir);
+    }
+
+    closedir(suite_dir);
+
+    return suite;
 }
 
 int main(int argc, char **argv)

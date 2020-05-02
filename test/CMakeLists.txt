@@ -9,7 +9,7 @@ target_link_libraries(blimp-test blimp)
 
 find_program(RACKET racket)
 
-set(BLIMP_TEST_FLAGS --verbose=test --racket-timeout=30)
+set(BLIMP_TEST_FLAGS --verbose=test)
 
 if (RACKET)
     message("-- Found Racket: ${RACKET}")

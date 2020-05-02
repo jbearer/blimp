@@ -1,3 +1,5 @@
+#: --racket-timeout=15
+
 bind class.set_x (
     x{:=| (that{.get|.}){.eval|.} };
     y
