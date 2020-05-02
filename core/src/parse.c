@@ -613,6 +613,7 @@ static Status ParseTerm(Lexer *lex, Expr **term)
 
     switch (tok.type) {
         case TOK_LPAREN:
+            Free(blimp, term);
             TRY(ParseExpr(lex, term));
             (*term)->range.start = tok.range.start;
                 // ParseExpr overwrites the source range, so we have to reset it
@@ -622,9 +623,6 @@ static Status ParseTerm(Lexer *lex, Expr **term)
 
         case TOK_LBRACE:
             (*term)->tag = EXPR_BLOCK;
-            TRY(Malloc(lex->blimp, sizeof(Expr), &(*term)->block.tag));
-            TRY(Malloc(lex->blimp, sizeof(Expr), &(*term)->block.code));
-
             TRY(ParseExpr(lex, &(*term)->block.tag));
             TRY(Lexer_Consume(lex, TOK_PIPE));
             TRY(ParseExpr(lex, &(*term)->block.code));
@@ -638,7 +636,6 @@ static Status ParseTerm(Lexer *lex, Expr **term)
             return BLIMP_OK;
 
         case TOK_BIND:
-            TRY(Malloc(lex->blimp, sizeof(Expr), term));
             (*term)->tag = EXPR_BIND;
 
             TRY(ParseTerm(lex, &(*term)->bind.receiver));

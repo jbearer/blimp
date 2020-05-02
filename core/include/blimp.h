@@ -19,6 +19,17 @@ typedef struct Blimp Blimp;
 Blimp *Blimp_New(void);
 
 /**
+ * \brief Destroy a Blimp and its associated resources.
+ *
+ * After this call returns, you may not use `blimp` _or_ any objects associated
+ * with the destroyed Blimp (such as expressions that it parsed) _except that_:
+ *  * expressions created by this Blimp may be passed to Blimp_FreeExpr (in
+ *    fact, they must be in order to clean up their resources, since the Blimp
+ *    itself does not keep track of all the expressions it has created).
+ */
+void Blimp_Delete(Blimp *blimp);
+
+/**
  * @}
  *
  * \defgroup errors Errors
@@ -151,6 +162,15 @@ BlimpStatus Blimp_GetSymbol(
     Blimp *blimp, const char *name, const BlimpSymbol **symbol);
 
 typedef struct BlimpExpr BlimpExpr;
+
+/**
+ * \brief Free memory associated with an expression.
+ *
+ * The expression must have been created by a Blimp function, such as
+ * Blimp_Parse. The expression will be destroyed and freed, and the contents of
+ * `expr` may not be used after Blimp_FreeExpr returns.
+ */
+void Blimp_FreeExpr(BlimpExpr *expr);
 
 /**
  * \brief Write a human-readable representation of `expr` to `file`.

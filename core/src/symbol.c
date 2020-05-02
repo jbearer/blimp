@@ -11,6 +11,16 @@ Status Blimp_InitSymbolTable(Blimp *blimp)
         blimp, sizeof(Symbol *)*blimp->symbols.capacity, &blimp->symbols.symbols);
 }
 
+void Blimp_DestroySymbolTable(Blimp *blimp)
+{
+    for (size_t i = 0; i < blimp->symbols.size; ++i) {
+        const Symbol *symbol = blimp->symbols.symbols[i];
+        Free(blimp, (void **)&symbol->name);
+        Free(blimp, (void **)&symbol);
+    }
+    Free(blimp, &blimp->symbols.symbols);
+}
+
 Status Blimp_GetSymbol(Blimp *blimp, const char *name, const Symbol **symbol)
 {
     for (size_t i = 0; i < blimp->symbols.size; ++i) {

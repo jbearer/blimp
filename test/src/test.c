@@ -129,7 +129,7 @@ static void RunTest(Test *test)
         != 0)
     {
         SkipTest(test, "does not match filter `%s'", test->options.filter);
-        return;
+        goto cleanup;
     }
 
     struct timespec start, end;
@@ -138,7 +138,7 @@ static void RunTest(Test *test)
     BlimpExpr *expr;
     if (Blimp_Parse(test->blimp, test->stream, &expr) != BLIMP_OK) {
         FailTest(test, "failed to parse");
-        return;
+        goto cleanup;
     }
 
     if (test->options.use_racket) {
@@ -150,7 +150,7 @@ static void RunTest(Test *test)
             test->racket, test->options.racket_timeout);
         if (!output) {
             FailTest(test, "Racket error: expected output");
-            return;
+            goto cleanup_parsed;
         }
 
         size_t output_len = strlen(output);
@@ -161,7 +161,7 @@ static void RunTest(Test *test)
             // Got an unexpected response.
             FailTest(test, "Racket error: judgment did not hold");
             free(output);
-            return;
+            goto cleanup_parsed;
         }
         free(output);
     }
@@ -171,7 +171,13 @@ static void RunTest(Test *test)
     size_t elapsed_ns = (end  .tv_sec*1000000000 + end  .tv_nsec) -
                         (start.tv_sec*1000000000 + start.tv_nsec);
     PassTest(test, elapsed_ns/1000000);
+
+cleanup_parsed:
+    Blimp_FreeExpr(expr);
+cleanup:
+    Blimp_Delete(test->blimp);
 }
+
 
 static void RunGroup(Group *group)
 {

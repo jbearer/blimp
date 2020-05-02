@@ -2,6 +2,36 @@
 
 #include "internal/expr.h"
 
+void Blimp_FreeExpr(Expr *expr)
+{
+    // Free subexpressions.
+    switch (expr->tag) {
+        case EXPR_SYMBOL:
+            // Do nothing. Symbols are global, and they don't get cleaned up
+            // until the entire bl:mp is destroyed.
+            break;
+        case EXPR_BLOCK:
+            Blimp_FreeExpr(expr->block.tag);
+            Blimp_FreeExpr(expr->block.code);
+            break;
+        case EXPR_SEND:
+            Blimp_FreeExpr(expr->send.receiver);
+            Blimp_FreeExpr(expr->send.message);
+            break;
+        case EXPR_BIND:
+            Blimp_FreeExpr(expr->bind.receiver);
+            Blimp_FreeExpr(expr->bind.message);
+            Blimp_FreeExpr(expr->bind.code);
+            break;
+        case EXPR_SEQ:
+            Blimp_FreeExpr(expr->seq.fst);
+            Blimp_FreeExpr(expr->seq.snd);
+            break;
+    }
+
+    free(expr);
+}
+
 void Blimp_DumpExpr(FILE *file, const Expr *expr)
 {
     switch (expr->tag) {

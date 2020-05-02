@@ -15,3 +15,9 @@ Blimp *Blimp_New(void)
 
     return blimp;
 }
+
+void Blimp_Delete(Blimp *blimp)
+{
+    Blimp_DestroySymbolTable(blimp);
+    free(blimp);
+}
