@@ -13,7 +13,7 @@ The headers in `include/internal/` define an extended API which is only to be us
 * They declare function prototypes and macros for additional, private interfaces
 * They declare shorter names for many of the common Blimp types and functions. For example, `typedef BlimpStatus Status`.
 
-These headers are included in the `src/` files and from each other. They should not be included from anywhere else, especially not from any public header in `include/` or any header included from a public header in `include/`. In addition, to avoid naming conflicts, all non-static functions defined in `src/` must be qualified with `Blimp` in a manner similar to the public functions, even if the functions in question are not declared in `blimp.h`.
+These headers are included in the `src/` files and from each other. They should not be included from anywhere else, especially not from any public header in `include/` or any header included from a public header in `include/`. In addition, to avoid naming conflicts, all non-static functions defined in `src/` must be declared `PRIVATE` or qualified with `Blimp` in a manner similar to the public functions, even if the functions in question are not declared in `blimp.h`.
 
 ## Building
 

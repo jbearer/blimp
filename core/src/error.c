@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <sys/types.h>
 
+#include "internal/blimp.h"
 #include "internal/error.h"
 
 #define ANSI_GREEN  "\e[1;32m"

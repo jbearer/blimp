@@ -3,7 +3,7 @@
 
 #include <string.h>
 
-#include "internal/blimp.h"
+#include "internal/common.h"
 
 // Abbreviations for the Blimp_Error* functions.
 #define Error(...) Blimp_Error(__VA_ARGS__)
@@ -30,6 +30,12 @@
         : BLIMP_OK \
     )
 
+#define Calloc(blimp, n, size, ret) (\
+    (*(void **)(ret) = calloc(n, size)) == NULL \
+        ? Error(blimp, BLIMP_OUT_OF_MEMORY) \
+        : BLIMP_OK \
+    )
+
 // Wrapper around realloc which returns a Status. The pointer `p` to be resized
 // an in-out-param of type `T **`.
 #define Realloc(blimp, size, p) ( \
@@ -44,6 +50,7 @@ static inline Status Strndup(
 {
     TRY(Malloc(blimp, length, ret));
     strncpy(*ret, str, length);
+    (*ret)[length-1] = '\0';
     return BLIMP_OK;
 }
 

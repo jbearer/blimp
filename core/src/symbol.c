@@ -1,48 +1,84 @@
+#include <assert.h>
+
 #include "internal/blimp.h"
 #include "internal/expr.h"
 #include "internal/error.h"
 #include "internal/symbol.h"
 
-Status Blimp_InitSymbolTable(Blimp *blimp)
+static size_t Hash(const char **str)
 {
-    blimp->symbols.size = 0;
-    blimp->symbols.capacity = 16;
-    return Malloc(
-        blimp, sizeof(Symbol *)*blimp->symbols.capacity, &blimp->symbols.symbols);
+    // FNV1a hash function.
+
+    static const size_t offset = 14695981039346656037ull;
+    static const size_t prime  = 1099511628211ull;
+
+    size_t hash = offset;
+    for (const char *c = *str; *c; ++c) {
+        hash = (hash ^ *c) * prime;
+    }
+    return hash;
 }
 
-void Blimp_DestroySymbolTable(Blimp *blimp)
+static bool Eq(const char **str1, const char **str2)
 {
-    for (size_t i = 0; i < blimp->symbols.size; ++i) {
-        const Symbol *symbol = blimp->symbols.symbols[i];
-        Free(blimp, (void **)&symbol->name);
-        Free(blimp, (void **)&symbol);
-    }
-    Free(blimp, &blimp->symbols.symbols);
+    return strcmp(*str1, *str2) == 0;
 }
 
-Status Blimp_GetSymbol(Blimp *blimp, const char *name, const Symbol **symbol)
+Status SymbolTable_Init(Blimp *blimp, SymbolTable *symbols)
 {
-    for (size_t i = 0; i < blimp->symbols.size; ++i) {
-        if (strcmp(name, blimp->symbols.symbols[i]->name) == 0) {
-            *symbol = blimp->symbols.symbols[i];
-            return BLIMP_OK;
-        }
+    return HashMap_Init(
+        blimp, symbols, sizeof(char *), sizeof(Symbol *),
+        (EqFunc)Eq, (HashFunc)Hash, NULL);
+}
+
+void SymbolTable_Destroy(SymbolTable *symbols)
+{
+    HashMap_Destroy(symbols);
+}
+
+Status SymbolTable_GetSymbol(
+    SymbolTable *symbols, const char *name, const Symbol **symbol)
+{
+    Blimp *blimp = HashMap_GetBlimp(symbols);
+
+    HashMapEntry *entry;
+    bool created;
+    TRY(HashMap_Emplace(symbols, &name, &entry, &created));
+
+    char **key;
+    Symbol **value;
+    HashMap_GetEntry(symbols, entry, (void **)&key, (void **)&value);
+
+    if (!created) {
+        // The entry we are using was already in the map, so it's fully valid,
+        // and there's nothing else for us to do.
+        *symbol = *value;
+        return BLIMP_OK;
     }
 
-    if (blimp->symbols.size >= blimp->symbols.capacity) {
-        TRY(Realloc(blimp, sizeof(Symbol *)*2*blimp->symbols.capacity,
-            &blimp->symbols.symbols));
-        blimp->symbols.capacity *= 2;
+    // Otherwise, we created and inserted a new entry into the map. Now we need
+    // to initialie it. It's key is currently the same pointer as `name`:
+    assert(*key == name);
+    // In order to take ownership of that string, we need to duplicate it into
+    // our own memory:
+    size_t len = strlen(name);
+    Status ret;
+    if ((ret = Strndup(blimp, name, len+1, key)) != BLIMP_OK) {
+        HashMap_AbortEmplace(symbols, entry);
+        return ret;
     }
-
-    // Create a new symbol, but don't put it anywhere until we succeed.
+    // The value of the entry is completely uninitialized. We need to create a
+    // new symbol for it:
     Symbol *new_symbol;
-    TRY(Malloc(blimp, sizeof(Symbol), &new_symbol));
-    new_symbol->length = strlen(name);
-    TRY(Strndup(blimp, name, new_symbol->length+1, (char **)&new_symbol->name));
-
+    if ((ret = Malloc(blimp, sizeof(Symbol), &new_symbol)) != BLIMP_OK) {
+        HashMap_AbortEmplace(symbols, entry);
+        return ret;
+    }
+    new_symbol->length = len;
+    new_symbol->name   = *key;
+    *value  = new_symbol;
     *symbol = new_symbol;
-    blimp->symbols.symbols[blimp->symbols.size++] = *symbol;
+
+    HashMap_CommitEmplace(symbols, entry);
     return BLIMP_OK;
 }

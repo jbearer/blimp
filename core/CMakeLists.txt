@@ -1,6 +1,6 @@
 # Build the core library.
 file(GLOB LIB_BLIMP_SRC "src/*.c")
-add_library(blimp ${LIB_BLIMP_SRC})
+add_library(blimp SHARED ${LIB_BLIMP_SRC})
 target_include_directories(blimp PUBLIC include)
 target_compile_options(blimp PRIVATE -Wall -Wextra -Werror -ansi -std=c99)
 

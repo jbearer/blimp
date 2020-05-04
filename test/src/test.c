@@ -507,13 +507,13 @@ static Suite *FindTests(const Options *options)
             // Override group options with test-specific options.
             char *first_line = NULL;
             size_t n = 0;
-            getline(&first_line, &n, test_file);
+            ssize_t line_len = getline(&first_line, &n, test_file);
             if (first_line && first_line[0] == '#' && first_line[1] == ':') {
                 // The first line of the file is an options string.
 
                 // Strip trailing newline.
-                if (first_line[strlen(first_line) - 1] == '\n') {
-                    first_line[strlen(first_line) - 1] = '\0';
+                if (first_line[line_len - 1] == '\n') {
+                    first_line[line_len - 1] = '\0';
                 }
 
                 // Split into words, using the same string splitting altgorithm

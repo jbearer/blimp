@@ -8,7 +8,7 @@ Blimp *Blimp_New(void)
         return NULL;
     }
 
-    if (Blimp_InitSymbolTable(blimp) != BLIMP_OK) {
+    if (SymbolTable_Init(blimp, &blimp->symbols) != BLIMP_OK) {
         free(blimp);
         return NULL;
     }
@@ -18,6 +18,11 @@ Blimp *Blimp_New(void)
 
 void Blimp_Delete(Blimp *blimp)
 {
-    Blimp_DestroySymbolTable(blimp);
+    SymbolTable_Destroy(&blimp->symbols);
     free(blimp);
+}
+
+Status Blimp_GetSymbol(Blimp *blimp, const char *name, const Symbol **symbol)
+{
+    return SymbolTable_GetSymbol(&blimp->symbols, name, symbol);
 }

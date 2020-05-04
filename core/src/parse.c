@@ -462,6 +462,7 @@ static Status Lexer_Peek(Lexer *lex, Token *tok)
     } else {
         tok->type = TOK_SYMBOL;
         TRY(Blimp_GetSymbol(lex->blimp, sym_name, &tok->symbol));
+        assert(tok->symbol);
     }
     Free(lex->blimp, &sym_name);
         // We don't need the string anymore. We either ignore it (for keywords) or
