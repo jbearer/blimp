@@ -215,12 +215,12 @@ Status BlimpObject_Eval(Object *obj, Object **ret)
 // Architecture
 //
 // The memory managed by the allocator is divided into large contiguous slabs,
-// or batches. Each batch consists of a small header and an array of BATCH_SIZE
+// or batches. Each batch consists of a small header and an array of batch_size
 // objects. Each batch is itself allocated from the system allocator using
 // `malloc`. Allocating space for many objects at once using batches allow us to
 // amortize the cost of the system allocator.
 //
-// When a batch is first allocated, it constains space for BATCH_SIZE objects,
+// When a batch is first allocated, it constains space for batch_size objects,
 // but none of those objects are initialized. When an object is first allocated
 // from a batch, it is fully initialized, but when it is returned to the
 // allocator, it is only partially deinitialized. As discussed above, this
@@ -354,10 +354,6 @@ Status BlimpObject_Eval(Object *obj, Object **ret)
 // API.
 //
 
-#define BATCH_SIZE ((1ull<<20)/sizeof(Object))
-    // Allocate 1MB worth of objects at a time.
-_Static_assert(BATCH_SIZE > 0, "object batch size must be positive");
-
 typedef struct ObjectBatch {
     size_t uninitialized;
     struct ObjectBatch *next;
@@ -366,8 +362,16 @@ typedef struct ObjectBatch {
 
 Status ObjectPool_Init(Blimp *blimp, ObjectPool *pool)
 {
+    // Compute batch size in terms of number of objects, rather than bytes, and
+    // round up to ensure we get at least one object per batch.
+    pool->batch_size =
+        (blimp->options.object_pool_batch_size/sizeof(Object)) + 1;
+
     TRY(Malloc(
-        blimp, sizeof(ObjectBatch) + sizeof(Object)*BATCH_SIZE, &pool->batches));
+        blimp,
+        sizeof(ObjectBatch) + sizeof(Object)*pool->batch_size,
+        &pool->batches
+    ));
     pool->batches->uninitialized = 0;
     pool->batches->next = NULL;
     pool->free_list = NULL;
@@ -404,15 +408,18 @@ static Status New(Blimp *blimp, Object *parent, Object **obj)
 
     // If that failed, try to allocate from the active batch.
     ObjectBatch *batch = blimp->objects.batches;
-    if (batch->uninitialized >= BATCH_SIZE) {
+    if (batch->uninitialized >= blimp->objects.batch_size) {
         // If the batch is saturated, allocate a new batch.
         TRY(Malloc(
-            blimp, sizeof(ObjectBatch) + sizeof(Object)*BATCH_SIZE, &batch));
+            blimp,
+            sizeof(ObjectBatch) + sizeof(Object)*blimp->objects.batch_size,
+            &batch
+        ));
         batch->uninitialized = 0;
         batch->next = blimp->objects.batches;
         blimp->objects.batches = batch;
     }
-    assert(batch->uninitialized < BATCH_SIZE);
+    assert(batch->uninitialized < blimp->objects.batch_size);
 
     // Grab the next uninitialized object from the batch and initialize it.
     *obj = &batch->objects[batch->uninitialized++];

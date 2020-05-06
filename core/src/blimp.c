@@ -2,12 +2,21 @@
 #include "internal/expr.h"
 #include "internal/symbol.h"
 
-Blimp *Blimp_New(void)
+BlimpOptions DEFAULT_BLIMP_OPTIONS = {
+    .object_pool_batch_size = (1ull<<20), // 1MB
+};
+
+Blimp *Blimp_New(const BlimpOptions *options)
 {
+    if (options == NULL) {
+        options = &DEFAULT_BLIMP_OPTIONS;
+    }
+
     Blimp *blimp = malloc(sizeof(Blimp));
     if (blimp == NULL) {
         goto err_malloc;
     }
+    blimp->options = *options;
 
     if (SymbolTable_Init(blimp, &blimp->symbols) != BLIMP_OK) {
         goto err_symbols;

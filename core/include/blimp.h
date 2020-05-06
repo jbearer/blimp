@@ -21,7 +21,43 @@
  */
 typedef struct Blimp Blimp;
 
-Blimp *Blimp_New(void);
+typedef struct {
+    size_t object_pool_batch_size;
+        ///< When allocating new \ref objects, this option controls the number
+        ///  of objects allocated at once, to be initialized on demand later.
+        ///  Specifically, `object_pool_batch_size` is the number of bytes worth
+        ///  of objects allocated at a time.
+        ///
+        ///  Tuning this paramter adjusts the tradeoff between excess memory
+        ///  usage (when `object_pool_batch_size` is larger than necessary) and
+        ///  high allocation latency (when `object_pool_batch_size` is small).
+        ///  Since most `bl:mp` programs allocate and free many short-lived
+        ///  objects rapidly, overall performance is very sensitive to
+        ///  allocation latency. If you're interested in tuning performance, you
+        ///  should try to set this parameter as large as your memory
+        ///  constraints will allow.
+        ///
+        ///  The default is 1MB.
+} BlimpOptions;
+
+extern BlimpOptions DEFAULT_BLIMP_OPTIONS;
+
+/**
+ * \brief Create a new `bl:mp` interpreter.
+ *
+ * \param options
+ *      A pointer to a BlimpOptions object controlling various properties and
+ *      tunable parameters of the interpreter.
+ *      <br>
+ *      The recommended way to set options is to copy `DEFAULT_BLIMP_OPTIONS`,
+ *      modify the fields of interest, and pass a pointer to the copy to
+ *      Blimp_New(). This technique only requires explicitly setting the fields
+ *      you want to change, and it should be forwards compatible with new
+ *      options being added.
+ *      <br>
+ *      Passing NULL here is the same as passing `&DEFAULT_BLIMP_OPTIONS`.
+ */
+Blimp *Blimp_New(const BlimpOptions *options);
 
 /**
  * \brief Destroy a Blimp and its associated resources.

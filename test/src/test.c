@@ -497,7 +497,7 @@ static Suite *FindTests(const Options *options)
             Test *test = malloc(sizeof(Test));
             test->name = strdup(test_de->d_name);
             test->options = group->options;
-            test->blimp = Blimp_New();
+            test->blimp = Blimp_New(NULL);
             FILE *test_file = fdopen(
                 openat(dirfd(group_dir), test_de->d_name, O_RDONLY), "r");
             Blimp_Check(Blimp_OpenFileStream(

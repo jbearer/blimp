@@ -32,6 +32,7 @@ struct BlimpObject {
 // destruction, and reuse of short-lived objects, which are very common in bl:mp
 // programs. See the comments in object.c for details on the implementation.
 typedef struct {
+    size_t batch_size;
     struct ObjectBatch *batches;
     Object *free_list;
 } ObjectPool;

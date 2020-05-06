@@ -27,23 +27,55 @@ static void PrintUsage(FILE *f, int argc, char *const *argv)
     fprintf(f, "        Print version information\n");
 }
 
+typedef enum {
+    FLAG_HELP               = 'h',
+    FLAG_VERSION            = 'v',
+
+    FLAG_NO_SHORT_OPTION    = 'z'+1,
+        // Dummy option which should be greater than all the short options
+        // specified above. Any flag declared after this sentinel with no
+        // explicit short option value will be automatically assigned a value
+        // greater than the value of the sentinel, which should guarantee that
+        // all the flags have unique values.
+
+    FLAG_OBJECT_POOL_BATCH_SIZE,
+} Flag;
+
 int main(int argc, char *const *argv)
 {
     struct option options[] = {
-        {"help",    no_argument, NULL, 'h'},
-        {"version", no_argument, NULL, 'v'},
+        {"object-pool-batch-size",  required_argument,  NULL, FLAG_OBJECT_POOL_BATCH_SIZE},
+        {"help",                    no_argument,        NULL, FLAG_HELP},
+        {"version",                 no_argument,        NULL, FLAG_VERSION},
         {0, 0, 0, 0},
     };
+
+    BlimpOptions blimp_options = DEFAULT_BLIMP_OPTIONS;
 
     int option, i = 1;
     while ((option = getopt_long(argc, argv, "hv", options, &i)) != -1) {
         switch (option) {
-            case 'h':
+            case FLAG_OBJECT_POOL_BATCH_SIZE: {
+                char *invalid;
+                blimp_options.object_pool_batch_size = strtol(
+                    optarg, &invalid, 0);
+                if (!*optarg || *invalid) {
+                    fprintf(stderr,
+                        "object-pool-batch-size: argument must be an integer\n");
+                    PrintUsage(stderr, argc, argv);
+                    return EXIT_FAILURE;
+                }
+                break;
+            }
+
+            case FLAG_HELP:
                 PrintUsage(stdout, argc, argv);
                 return EXIT_SUCCESS;
-            case 'v':
+
+            case FLAG_VERSION:
                 PrintVersion(stdout);
                 return EXIT_SUCCESS;
+
             default:
                 PrintUsage(stderr, argc, argv);
                 return EXIT_FAILURE;
@@ -56,7 +88,7 @@ int main(int argc, char *const *argv)
     }
     const char *file = argv[i];
 
-    Blimp *blimp = Blimp_New();
+    Blimp *blimp = Blimp_New(&blimp_options);
     if (blimp == NULL) {
         fprintf(stderr, "bl:mp: unable to initialize interpreter\n");
         return EXIT_FAILURE;

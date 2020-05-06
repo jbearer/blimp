@@ -9,6 +9,7 @@
 #define ERR_MSG_LEN 100
 
 struct Blimp {
+    BlimpOptions options;
     SymbolTable symbols;
     ObjectPool objects;
 
