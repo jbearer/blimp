@@ -3,12 +3,14 @@
 
 #include "../blimp.h"
 #include "internal/common.h"
+#include "internal/object.h"
 #include "internal/symbol.h"
 
 #define ERR_MSG_LEN 100
 
 struct Blimp {
     SymbolTable symbols;
+    ObjectPool objects;
 
     struct BlimpErrorInfo {
         BlimpErrorCode code;

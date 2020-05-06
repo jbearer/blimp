@@ -614,7 +614,7 @@ static Status ParseTerm(Lexer *lex, Expr **term)
 
     switch (tok.type) {
         case TOK_LPAREN:
-            Free(blimp, term);
+            Free(lex->blimp, term);
             TRY(ParseExpr(lex, term));
             (*term)->range.start = tok.range.start;
                 // ParseExpr overwrites the source range, so we have to reset it

@@ -73,6 +73,8 @@ typedef struct {
         // HashMapEntry is a variably sized struct consisting of a header
         // followed by the key and value, C's built-in array indexing math won't
         // be correct.
+    HashMapEntry *first;
+    HashMapEntry *last;
     size_t capacity;
     size_t size;
     size_t key_size;
@@ -129,9 +131,22 @@ static inline size_t HashMap_Size(const HashMap *map)
     return map->size;
 }
 
-static inline Blimp *HashMap_GetBlimp(HashMap *map)
+static inline Blimp *HashMap_GetBlimp(const HashMap *map)
 {
     return map->blimp;
+}
+
+static inline HashMapEntry *HashMap_Begin(const HashMap *map)
+{
+    return map->entries;
+}
+
+PRIVATE HashMapEntry *HashMap_Next(const HashMap *map, HashMapEntry *it);
+
+static inline HashMapEntry *HashMap_End(const HashMap *map)
+{
+    (void)map;
+    return NULL;
 }
 
 /**
@@ -206,16 +221,16 @@ PRIVATE void HashMap_AbortEmplace(HashMap *map, HashMapEntry *entry);
  * you want with `value`.
  */
 PRIVATE void HashMap_GetEntry(
-    HashMap *map, HashMapEntry *entry, void **key, void **value);
+    const HashMap *map, HashMapEntry *entry, void **key, void **value);
 
-static inline void *HashMap_GetKey(HashMap *map, HashMapEntry *entry)
+static inline void *HashMap_GetKey(const HashMap *map, HashMapEntry *entry)
 {
     void *key;
     HashMap_GetEntry(map, entry, &key, NULL);
     return key;
 }
 
-static inline void *HashMap_GetValue(HashMap *map, HashMapEntry *entry)
+static inline void *HashMap_GetValue(const HashMap *map, HashMapEntry *entry)
 {
     void *value;
     HashMap_GetEntry(map, entry, NULL, &value);
@@ -239,11 +254,30 @@ static inline Status HashMap_Update(
 }
 
 /**
+ * \brief Get a reference to the entry with the given key.
+ *
+ * This can be an efficient way to update the value corresponding to a key only
+ * if the key already exists in the map, without making separate calls to
+ * HashMap_Find and HashMap_Update.
+ *
+ * If the given key does not exist in the map, the result is `NULL`.
+ */
+PRIVATE HashMapEntry *HashMap_FindEntry(const HashMap *map, const void *key);
+
+/**
  * \brief Get a pointer to the value associated with `key`.
  *
  * If `key` does not exist in the map, the result is NULL.
  */
-PRIVATE void *HashMap_Find(HashMap *map, const void *key);
+static inline void *HashMap_Find(const HashMap *map, const void *key)
+{
+    HashMapEntry *entry = HashMap_FindEntry(map, key);
+    if (entry) {
+        return HashMap_GetValue(map, entry);
+    } else {
+        return NULL;
+    }
+}
 
 /**
  * \brief Remove an entry from the map given its key.
@@ -257,5 +291,7 @@ PRIVATE void *HashMap_Find(HashMap *map, const void *key);
  * `value` are undefined.
  */
 PRIVATE bool HashMap_Remove(HashMap *map, const void *key, void *value);
+
+PRIVATE void HashMap_Clear(HashMap *map);
 
 #endif

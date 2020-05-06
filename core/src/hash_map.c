@@ -15,6 +15,11 @@
 // prime-sized table. Quadratic probing requires a power-of-two sized table,
 // which is much easier to create and is probably friendlier to the allocator.
 //
+// This hash map also supports efficient, deterministic iteration in the order
+// in which entries were inserted into the map. To facilitate this, it maintains
+// a doubly linked list through the array of entries, using the `next` and
+// `prev` fields in HashMapEntry.
+//
 
 #include <assert.h>
 #include <limits.h>
@@ -58,6 +63,9 @@ struct HashMapEntry {
             // called.
     } status;
 
+    HashMapEntry *next;
+    HashMapEntry *prev;
+
     char key[] __attribute__((aligned (ALIGNMENT)));
     // Value is at offsetof(HashMapEntry, key) + RoundUpToAlignment(key_size).
 };
@@ -84,7 +92,7 @@ static inline size_t EntrySize(const HashMap *map)
     ;
 }
 // ...and our own array indexing.
-static inline HashMapEntry *NthEntry(HashMap *map, size_t n)
+static inline HashMapEntry *NthEntry(const HashMap *map, size_t n)
 {
     assert(n < map->capacity);
     return (HashMapEntry *)((char *)map->entries + n*EntrySize(map));
@@ -96,7 +104,7 @@ static inline HashMapEntry *NthEntry(HashMap *map, size_t n)
 // This function will terminate as long as the key exists in the map, _or_ there
 // is at least one ABSENT entry in the map. The MAX_LOAD constraint should
 // guarantee the latter condition for all valid maps.
-static HashMapEntry *Find(HashMap *map, size_t hash, const void *key)
+static HashMapEntry *Find(const HashMap *map, size_t hash, const void *key)
 {
     size_t n = hash % map->capacity;
         // The index of the entry we're currently searching.
@@ -104,8 +112,8 @@ static HashMapEntry *Find(HashMap *map, size_t hash, const void *key)
         // If we ever encounter a DELETED entry in our search, and then later we
         // fail to find the key, we want to return the DELETED entry so it can
         // be reclaimed to insert the new key. If we have ever encountered such
-        // a node during the search, it will be stored here so we can return it
-        // at the end.
+        // an entry during the search, it will be stored here so we can return
+        // it at the end.
     size_t probe_delta = 1;
         // If we have a collision, we probe using triangular numbers; we try
         // entry `n + 1`, then `n + 3`, then `n + 6`, and so on. There are two
@@ -153,7 +161,7 @@ static HashMapEntry *Find(HashMap *map, size_t hash, const void *key)
 
             case ABSENT:
                 return ret ? ret : entry;
-                    // If we've reached an ABSENT node and we haven't found our
+                    // If we've reached an ABSENT entry and we haven't found our
                     // key, it doesn't exist.
 
             default:
@@ -188,10 +196,7 @@ static Status MakeSpace(HashMap *map)
             // initialized, which means that their `status` field is ABSENT.
     }
 
-    size_t        old_capacity = map->capacity;
-    HashMapEntry *old_entries  = map->entries;
-
-    size_t new_capacity = old_capacity * 2;
+    size_t new_capacity = map->capacity * 2;
     HashMapEntry *new_entries;
     TRY(Calloc(map->blimp, new_capacity, EntrySize(map), &new_entries));
         // Calloc ensures that all the entries in the new array are zero-
@@ -201,13 +206,23 @@ static Status MakeSpace(HashMap *map)
     map->entries  = new_entries;
 
     // For each entry in the old map, compute it's position in the new map and
-    // copy it there.
-    for (size_t i = 0; i < old_capacity; ++i) {
-        HashMapEntry *old_entry =
-            (HashMapEntry *)((char *)old_entries + i*EntrySize(map));
-        if (old_entry->status != PRESENT) {
-            continue;
-        }
+    // copy it there. We iterate through the entries using the linked list, both
+    // because it allows us to skip ABSENT and DELETED entries which shouldn't
+    // get copied over anyways, and because by keeping track of the new location
+    // of the previously visited entry in the old map, we can easily update the
+    // linked list fields in the new map as we go.
+    HashMapEntry **next_pointer_in_new_map = &map->first;
+        // A pointer to the pointer which points to the next entry in the list
+        // in the new map. Starting out, we haven't copied any entrys yet, so
+        // the pointer which points to the next entry to be copied is the first
+        // pointer of the list. In subsequent iterations of the loop, this will
+        // point to the `next` pointer of the previously copied entry.
+    HashMapEntry *old_entry = map->first;
+        // The entry we're currently working on in the old map.
+    HashMapEntry *prev = NULL;
+        // The previous node in the new map.
+    while (old_entry) {
+        assert(old_entry->status == PRESENT);
 
         // Search for the location in the new map where this entry should go.
         // This loop implements a quadratic probing search using triangular
@@ -217,24 +232,37 @@ static Status MakeSpace(HashMap *map)
         //    entries get skipped in the outer loop, so we never copy a DELETED
         //    entry into the new map.
         //  * We know all the keys in the old map are distinct, so we never have
-        //    to do any equality checks in this loop: if we find a PRESENT node,
-        //    we know it is not equal to the key we're currently working on, so
-        //    we just keep probing.
-        // With those two simplification, this loop amounts to just finding the
-        // first ABSENT node on the triangular number sequence and copying the
-        // old node there.
+        //    to do any equality checks in this loop: if we find a PRESENT
+        //    entry, we know it is not equal to the key we're currently working
+        //    on, so we just keep probing. With those two simplification, this
+        //    loop amounts to just finding the first ABSENT entry on the
+        //    triangular number sequence and copying the old entry there.
         size_t n           = old_entry->hash % new_capacity;
         size_t probe_delta = 1;
         while (true) {
             HashMapEntry *new_entry = NthEntry(map, n);
             if (new_entry->status == ABSENT) {
                 memcpy(new_entry, old_entry, EntrySize(map));
+                    // Copy the key and value into the new map.
+                *next_pointer_in_new_map = new_entry;
+                    // Point the next pointer of the previous entry at the newly
+                    // copied entry.
+                next_pointer_in_new_map = &new_entry->next;
+                    // Update the next pointer so that the next entry gets
+                    // appended after this entry.
+                new_entry->prev = prev;
+                prev = new_entry;
                 break;
             }
             n = (n + probe_delta) % new_capacity;
             ++probe_delta;
         }
+
+        old_entry = old_entry->next;
     }
+
+    // Fix the tail of the list.
+    map->last = prev;
 
     return BLIMP_OK;
 }
@@ -253,6 +281,8 @@ Status HashMap_Init(
     }
 
     map->blimp      = blimp;
+    map->first      = NULL;
+    map->last       = NULL;
     map->key_size   = key_size;
     map->value_size = value_size;
     map->hash       = hash_func;
@@ -281,6 +311,12 @@ void HashMap_Destroy(HashMap *map)
     Free(map->blimp, &map->entries);
 }
 
+HashMapEntry *HashMap_Next(const HashMap *map, HashMapEntry *entry)
+{
+    (void)map;
+    return entry->next;
+}
+
 Status HashMap_Emplace(
     HashMap *map, const void *key, HashMapEntry **entry, bool *created)
 {
@@ -305,6 +341,18 @@ void HashMap_CommitEmplace(HashMap *map, HashMapEntry *entry)
     assert(map->hash(entry->key, map->user_data) == entry->hash);
     if (entry->status == CREATED) {
         entry->status = PRESENT;
+
+        // Insert into the iteration list.
+        assert(entry->next == NULL);
+        entry->prev = map->last;
+        if (map->last) {
+            map->last->next = entry;
+        } else {
+            assert(!map->first);
+            map->first = entry;
+            map->last = entry;
+        }
+
         ++map->size;
     } else {
         assert(entry->status == PRESENT);
@@ -322,11 +370,11 @@ void HashMap_AbortEmplace(HashMap *map, HashMapEntry *entry)
     }
 }
 
-void *HashMap_Find(HashMap *map, const void *key)
+HashMapEntry *HashMap_FindEntry(const HashMap *map, const void *key)
 {
     HashMapEntry *entry = Find(map, map->hash(key, map->user_data), key);
     if (entry->status == PRESENT) {
-        return HashMap_GetValue(map, entry);
+        return entry;
     } else {
         return NULL;
     }
@@ -340,6 +388,26 @@ bool HashMap_Remove(HashMap *map, const void *key, void *value)
             memcpy(value, HashMap_GetValue(map, entry), map->value_size);
         }
         entry->status = DELETED;
+
+        // Remove from the iteration list.
+        if (entry->next) {
+            assert(map->last != entry);
+            entry->next->prev = entry->prev;
+        } else {
+            assert(map->last == entry);
+            map->last = entry->prev;
+        }
+        if (entry->prev) {
+            assert(map->first != entry);
+            entry->prev->next = entry->next;
+        } else {
+            assert(map->first == entry);
+            map->first = entry->next;
+        }
+        entry->prev = NULL;
+        entry->next = NULL;
+
+        --map->size;
         return true;
     } else {
         return false;
@@ -347,7 +415,7 @@ bool HashMap_Remove(HashMap *map, const void *key, void *value)
 }
 
 void HashMap_GetEntry(
-    HashMap *map, HashMapEntry *entry, void **key, void **value)
+    const HashMap *map, HashMapEntry *entry, void **key, void **value)
 {
     if (key) {
         *key = &entry->key;
@@ -355,4 +423,12 @@ void HashMap_GetEntry(
     if (value) {
         *value = (char *)&entry->key + RoundUpToAlignment(map->key_size);
     }
+}
+
+void HashMap_Clear(HashMap *map)
+{
+    if (map->entries) {
+        memset(map->entries, 0, EntrySize(map)*map->capacity);
+    }
+    map->size = 0;
 }

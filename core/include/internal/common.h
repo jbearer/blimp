@@ -14,6 +14,7 @@ typedef BlimpSourceRange SourceRange;
 typedef BlimpSymbol Symbol;
 typedef BlimpStream Stream;
 typedef BlimpExpr Expr;
+typedef BlimpObject Object;
 
 #ifdef NDEBUG
 # ifdef assert

@@ -15,7 +15,12 @@
  * @{
  */
 
+/**
+ * \struct Blimp
+ * \copydoc interpreter
+ */
 typedef struct Blimp Blimp;
+
 Blimp *Blimp_New(void);
 
 /**
@@ -56,6 +61,14 @@ typedef enum BlimpErrorCode {
     // Parsing errors
     BLIMP_INVALID_CHARACTER,
     BLIMP_UNEXPECTED_TOKEN,
+
+    // Runtime errors
+    BLIMP_NO_SUCH_SYMBOL,
+    BLIMP_MUST_BE_BLOCK,
+    BLIMP_MUST_BE_SYMBOL,
+
+    // Internal consistency errors
+    BLIMP_INVALID_EXPR,
 
     // Generic errors
     BLIMP_OUT_OF_MEMORY,
@@ -275,6 +288,247 @@ BlimpStatus Blimp_ParseFile(Blimp *blimp, const char *path, BlimpExpr **output);
  * \brief Parse the contents of `str` and construct a `BlimpExpr`.
  */
 BlimpStatus Blimp_ParseString(Blimp *blimp, const char *str, BlimpExpr **output);
+
+/**
+ * @}
+ *
+ * \defgroup objects Objects
+ *
+ * A BlimpObject is the runtime representation of a value. It is the result of
+ * succesfully evaluating a BlimpExpr.
+ *
+ * There are two kinds of objects in bl:mp: symbols objects (e.g. the result of
+ * evaluating `foo`) and block objects (e.g. the result of evaluating `{a|b}`).
+ * All objects have in common the following properites:
+ *  * scope:
+ *      a mutable map from symbols to objects
+ *  * parent:
+ *      a parent scope. If a symbol is not in scope in the object's own scope,
+ *      it will be looked up in the parent scope. Only one object, the global
+ *      scope, does not have a parent. It is an error to look up a symbol that
+ *      does not exist in the global scope.
+ * In addition, the two kinds of objects have some properties specific to that
+ * kind of object:
+ *
+ * _Blocks_
+ *  * tag:
+ *      the symbol which is used for vtable lookups when the block is used as
+ *  * code:
+ *      the expression which is evaluated when the block is sent a `.eval`
+ *      message
+ *
+ * _Symbols_
+ *  * symbol: the value of the symbol
+ *
+ * In addition to the general and type-specific properties of objects, all
+ * objects have a "reference count", which is the number of times
+ * BlimpObject_Release() must be called on that object before it is destroyed.
+ * The reference count cannot be inspected or manipulated directly, but the
+ * BlimpObject_Borrow() and BlimpObject_Release() APIs can be used to increment
+ * and decrement the reference count, respectively.
+ *
+ * A few useful bits of notation:
+ *  * Many BlimpObject_* functions require a "managed" object. This is an object
+ *    with a nonzero reference count, which was allocated from the bl:mp
+ *    interpreter object pool corresponding to some Blimp object `b` (for
+ *    example, by BlimpObject_NewBlock or BlimpObject_NewSymbol, or as the
+ *    result of Blimp_Eval). We say such an object is "managed by `b`".
+ *  * Many functions are documented to return a "fresh" object: this is simply
+ *    an managed object with a reference count of 1, such as a newly created
+ *    object.
+ *
+ * @{
+ */
+
+/**
+ * \struct BlimpObject
+ * \copydoc objects
+ */
+typedef struct BlimpObject BlimpObject;
+
+/**
+ * \defgroup objects_creating Creating Objects
+ *
+ * These constructor functions allocate and initialize each of the two kinds of
+ * objects. Both constructors take an interpreter and a parent object, as well
+ * as the type-specific object properties (tag and code for blocks; symbol for
+ * symbols). The scope of the new object is initially empty.
+ *
+ * @{
+ */
+
+/**
+ * \brief Create a new block object.
+ * \returns a fresh object
+ */
+BlimpStatus BlimpObject_NewBlock(
+    Blimp *blimp,
+    BlimpObject *parent,
+    const BlimpSymbol *tag,
+    const BlimpExpr *code,
+    BlimpObject **obj);
+
+/**
+ * \brief Create a new symbol object.
+ * \returns a fresh object
+ */
+BlimpStatus BlimpObject_NewSymbol(
+    Blimp *blimp,
+    BlimpObject *parent,
+    const BlimpSymbol *sym,
+    BlimpObject **obj);
+
+/**
+ * \brief Increment the reference count of an object.
+ *
+ * This function registers a new managed owner of `obj`. Conceptually, it
+ * increments the reference count of `obj`. If, before this call, the `n`th call
+ * to BlimpObject_Release would have destroyed `obj`, then after this call,
+ * `obj` will not be destroyed until the `n+1`th call to BlimpObject_Release.
+ *
+ * \returns `obj`
+ */
+BlimpObject *BlimpObject_Borrow(BlimpObject *obj);
+
+/**
+ * \brief Decrement the reference count of an object
+ *
+ * This function relinqushes shared ownership of an object. If the caller is the
+ * last owner of the object (that is, if the reference count before the call was
+ * 1), thens the object will be destroyed and returned to the interpreter for
+ * possible future reuse. Otherwise, the reference count is decremented.
+ *
+ * Since the caller cannot necessarily tell if they are the last owner of the
+ * object, they must never use `obj` again after this function is called.
+ */
+void BlimpObject_Release(BlimpObject *obj);
+
+/**
+ * @}
+ *
+ * \defgroup objects_inspecting Inspecting Objects
+ *
+ * @{
+ */
+
+BlimpObject *BlimpObject_Parent(BlimpObject *obj);
+
+/**
+ * \brief Retrieve the type-specific properties of a block object.
+ *
+ * \param[in]   obj     The object to inspect (must be a block object).
+ * \param[out]  tag     If not `NULL`, will be initialized to point to the block
+ *                      object's tag.
+ * \param[out]  code    If not `NULL`, will be initialized to point to the block
+ *                      object's code.
+ *
+ * \par Errors
+ *  * `BLIMP_MUST_BE_BLOCK`:
+ *      `obj` was not a block object. The contents of `*tag` and `*code` are
+ *      undefined.
+ */
+BlimpStatus BlimpObject_ParseBlock(
+    const BlimpObject *obj, const BlimpSymbol **tag, const BlimpExpr **code);
+
+/**
+ * \brief Retrieve the type-specific properties of a symbol object.
+ *
+ * \param[in]   obj     The object to inspect (must be a symbol object).
+ * \param[out]  sym     If not `NULL`, will be initialized to point to the
+ *                      symbol object's value.
+ *
+ * \par Errors
+ *  * `BLIMP_MUST_BE_SYMBOL`:
+ *      `obj` was not a symbol object. The contents of `*sym` are undefined.
+ */
+BlimpStatus BlimpObject_ParseSymbol(
+    const BlimpObject *obj, const BlimpSymbol **sym);
+
+/**
+ * @}
+ *
+ * \defgroup objects_primitives Primitive Operations
+ *
+ * These functions implement the three primitive bl:mp operations: `symbol.get`,
+ * `symbol:=`, and `_.eval`.
+ *
+ * @{
+ */
+
+/**
+ * \brief Get the value of a symbol in an object's scope.
+ *
+ * This function implements the primitive `symbol.get` operation. Specifically,
+ *  * The symbol `sym` is looked up in the scope of `obj`. If it is found, it is
+ *    returned.
+ *  * Otherwise, if `obj` has a parent object, the symbol is looked up in the
+ *    scope of the parent (and the parent's parent, and so on, as if by calling
+ *    BlimpObject_Get recursively on the scope of the parent).
+ *  * If the symbol is not found in the object's scope or the scope of any of
+ *    its parents, an error is returned.
+ *
+ * \par Errors
+ *  * `BLIMP_NO_SUCH_SYMBOL`:
+ *      the symbol was not found in the scope of `obj` or any of its parents.
+ */
+BlimpStatus BlimpObject_Get(
+    const BlimpObject *obj, const BlimpSymbol *sym, BlimpObject **ret);
+
+/**
+ * \brief Set the value of a symbol in an object's scope.
+ *
+ * This function implements the primitive `symbol :=` operation. Specifically,
+ *  * If the symbol exists in the scope of `obj` or any of its parents (that is,
+ *    if `BlimpObject_Get(obj, sym, &val)` would succeed) then the value of the
+ *    symbol is replaced by `val` in the _innermost_ scope containing the
+ *    symbol. If the symbol exists in more than one scope among `obj` and all of
+ *    its parents, it is set in `obj` if possible, or in the immediate parent of
+ *    `obj` if possible, and so on.
+ *  * Otherwise, if the symbol does not exist in the scope of `obj` or any of
+ *    its parents, it is added to the scope of `obj` and associated with the
+ *    given value.
+ *
+ * The implementation of the function automatically increments the reference
+ * count of `val`, as if by calling BlimpObject_Borrow(). This means that the
+ * caller keeps their managed reference to `val`, so they must still eventually
+ * call BlimpObject_Release(). It also decrements the reference count of the old
+ * value, as if by calling BlimpObject_Release(), to release the reference that
+ * was borrowed by BlimpObject_Set() when that old value was set.
+ *
+ * \par Errors
+ *  * `BLIMP_OUT_OF_MEMORY`
+ */
+BlimpStatus BlimpObject_Set(
+    BlimpObject *obj, const BlimpSymbol *sym, BlimpObject *val);
+
+/**
+ * \brief Evaluate the code in a block object.
+ *
+ * This function implements the primitive `_.eval` operation. `obj` must be a
+ * block object. It's code expression is evaluated as if by calling `Blimp_Eval`
+ * in the scope of `obj`, and the resulting new object is stored in `*ret`.
+ */
+BlimpStatus BlimpObject_Eval(BlimpObject *obj, BlimpObject **ret);
+
+/**
+ * @}
+ * @}
+ *
+ * \defgroup interpreting Interpreting bl:mp Programs
+ *
+ * @{
+ */
+
+/**
+ * \brief Interpret a bl:mp expression.
+ *
+ *
+ */
+BlimpStatus Blimp_Eval(
+    Blimp *blimp,
+    const BlimpExpr *expr,
+    BlimpObject *scope,
+    BlimpObject **result);
 
 /**
  * @}

@@ -2,12 +2,7 @@
 #define BLIMP_EXPR_H
 
 #include "internal/blimp.h"
-
-struct BlimpSymbol {
-    const char *name;
-    size_t hash;
-    size_t length;
-};
+#include "internal/symbol.h"
 
 struct BlimpExpr {
     enum {

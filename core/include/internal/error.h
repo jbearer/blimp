@@ -22,6 +22,15 @@
         } \
     } while (0)
 
+#define TRY_FROM(range, e) \
+    do { \
+        Status s = (e); \
+        if (s != BLIMP_OK) { \
+            s->range = range; \
+            return s; \
+        } \
+    } while (0)
+
 // Wrapper around malloc which returns a Status. The allocated pointer `ret` is
 // an out-param of type `T **`.
 #define Malloc(blimp, size, ret) ( \
@@ -56,6 +65,7 @@ static inline Status Strndup(
 
 // Wrapper around free which stores NULL into the freed pointer.
 #define Free(blimp, p) do { \
+    (void)blimp; \
     free(*p); \
     *p = NULL; \
 } while (0)
