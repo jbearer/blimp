@@ -15,6 +15,7 @@ typedef BlimpSymbol Symbol;
 typedef BlimpStream Stream;
 typedef BlimpExpr Expr;
 typedef BlimpObject Object;
+typedef BlimpMethod Method;
 
 #ifdef NDEBUG
 # ifdef assert

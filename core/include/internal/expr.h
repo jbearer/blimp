@@ -13,6 +13,7 @@ struct BlimpExpr {
         EXPR_SEQ,
     } tag;
 
+    size_t refcount;
     SourceRange range;
 
     union {

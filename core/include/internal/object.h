@@ -16,15 +16,16 @@ struct BlimpObject {
     enum {
         OBJ_SYMBOL,
         OBJ_BLOCK,
+        OBJ_GLOBAL,
         OBJ_FREE,
     } type;
     union {
         const Symbol *symbol;   // Symbol for symbol objects
         struct {
             const Symbol *tag;  // Class of blocks
-            const Expr   *code; // Body of blocks
+            Expr *code;         // Body of blocks
         };
-        Object       *next;     // Next free object in a free list.
+        Object *next;           // Next free object in a free list.
     };
 };
 
@@ -35,9 +36,11 @@ typedef struct {
     size_t batch_size;
     struct ObjectBatch *batches;
     Object *free_list;
+    const Symbol *symbol_tag;
 } ObjectPool;
 
 PRIVATE Status ObjectPool_Init(Blimp *blimp, ObjectPool *pool);
 PRIVATE void ObjectPool_Destroy(Blimp *blimp, ObjectPool *pool);
+PRIVATE Status BlimpObject_NewGlobal(Blimp *blimp, Object **object);
 
 #endif

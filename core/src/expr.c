@@ -4,6 +4,12 @@
 
 void Blimp_FreeExpr(Expr *expr)
 {
+    assert(expr->refcount > 0);
+
+    if (--expr->refcount != 0) {
+        return;
+    }
+
     // Free subexpressions.
     switch (expr->tag) {
         case EXPR_SYMBOL:
@@ -95,6 +101,45 @@ void Blimp_DumpExpr(FILE *file, const Expr *expr)
             fputc(' ', file);
             Blimp_DumpExpr(file, expr->seq.snd);
             fputc(')', file);
+            break;
+        default:
+            assert(false);
+    }
+}
+
+void Blimp_PrintExpr(FILE *f, const Expr *expr)
+{
+    switch (expr->tag) {
+        case EXPR_SYMBOL:
+            fputs(expr->symbol->name, f);
+            break;
+        case EXPR_BLOCK:
+            fputc('{', f);
+            Blimp_PrintExpr(f, expr->block.tag);
+            fputc('|', f);
+            Blimp_PrintExpr(f, expr->block.code);
+            fputc('}', f);
+            break;
+        case EXPR_SEND:
+            fputc('(', f);
+            Blimp_PrintExpr(f, expr->send.receiver);
+            fputs(") (", f);
+            Blimp_PrintExpr(f, expr->send.message);
+            fputc(')', f);
+            break;
+        case EXPR_BIND:
+            fputs("bind (", f);
+            Blimp_PrintExpr(f, expr->bind.receiver);
+            fputs(") (", f);
+            Blimp_PrintExpr(f, expr->bind.message);
+            fputs(") (", f);
+            Blimp_PrintExpr(f, expr->bind.code);
+            fputc(')', f);
+            break;
+        case EXPR_SEQ:
+            Blimp_PrintExpr(f, expr->seq.fst);
+            fputs("; ", f);
+            Blimp_PrintExpr(f, expr->seq.snd);
             break;
         default:
             assert(false);

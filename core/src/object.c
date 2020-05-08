@@ -1,4 +1,5 @@
 #include "internal/blimp.h"
+#include "internal/expr.h"
 #include "internal/hash_map.h"
 #include "internal/symbol.h"
 
@@ -84,9 +85,40 @@ static Object **Lookup(const Object *obj, const Symbol *sym)
     return NULL;
 }
 
-Object *BlimpObject_Parent(Object *obj)
+Object *BlimpObject_Parent(const Object *obj)
 {
     return obj->parent;
+}
+
+const Symbol *BlimpObject_Tag(const Object *obj)
+{
+    switch (obj->type) {
+        case OBJ_BLOCK:
+            return obj->tag;
+        case OBJ_SYMBOL:
+            return GetBlimp(obj)->objects.symbol_tag;
+        case OBJ_GLOBAL:
+            return NULL;
+        default:
+            assert(false);
+            return NULL;
+    }
+}
+
+void BlimpObject_Print(FILE *f, const Object *obj)
+{
+    switch (obj->type) {
+        case OBJ_SYMBOL:
+            fputs(obj->symbol->name, f);
+            break;
+        case OBJ_BLOCK:
+            fprintf(f, "{%s|", obj->tag->name);
+            Blimp_PrintExpr(f, obj->code);
+            fprintf(f, "}");
+            break;
+        default:
+            assert(false);
+    }
 }
 
 Status BlimpObject_ParseBlock(
@@ -119,8 +151,9 @@ Status BlimpObject_ParseSymbol(const Object *obj, const Symbol **sym)
 
 Status BlimpObject_Get(const Object *obj, const Symbol *sym, Object **ret)
 {
-    *ret = *Lookup(obj, sym);
-    if (*ret) {
+    Object **value = Lookup(obj, sym);
+    if (value) {
+        *ret = *value;
         return BLIMP_OK;
     } else {
         return ErrorMsg(
@@ -362,6 +395,8 @@ typedef struct ObjectBatch {
 
 Status ObjectPool_Init(Blimp *blimp, ObjectPool *pool)
 {
+    TRY(Blimp_GetSymbol(blimp, "symbol", &pool->symbol_tag));
+
     // Compute batch size in terms of number of objects, rather than bytes, and
     // round up to ensure we get at least one object per batch.
     pool->batch_size =
@@ -437,13 +472,14 @@ Status BlimpObject_NewBlock(
     Blimp *blimp,
     Object *parent,
     const Symbol *tag,
-    const Expr *code,
+    Expr *code,
     Object **obj)
 {
     TRY(New(blimp, parent, obj));
     (*obj)->type = OBJ_BLOCK;
     (*obj)->tag  = tag;
     (*obj)->code = code;
+    ++code->refcount;
     return BLIMP_OK;
 }
 
@@ -453,6 +489,13 @@ Status BlimpObject_NewSymbol(
     TRY(New(blimp, parent, obj));
     (*obj)->type = OBJ_SYMBOL;
     (*obj)->symbol = sym;
+    return BLIMP_OK;
+}
+
+Status BlimpObject_NewGlobal(Blimp *blimp, Object **obj)
+{
+    TRY(New(blimp, NULL, obj));
+    (*obj)->type = OBJ_GLOBAL;
     return BLIMP_OK;
 }
 
@@ -475,6 +518,11 @@ void BlimpObject_Release(Object *obj)
              entry = Scope_Next(&obj->scope, entry))
         {
             BlimpObject_Release(Scope_GetValue(&obj->scope, entry));
+        }
+
+        // Release our reference to the code expression if this is a block.
+        if (obj->type == OBJ_BLOCK) {
+            Blimp_FreeExpr(obj->code);
         }
 
         // Push the object onto the free list.

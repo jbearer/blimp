@@ -539,6 +539,7 @@ static Status ParseExpr(Lexer *lex, Expr **expr)
             // Construct a new expression representing the sequence `fst ; snd`.
             TRY(Malloc(lex->blimp, sizeof(Expr), expr));
             (*expr)->tag = EXPR_SEQ;
+            (*expr)->refcount = 1;
             (*expr)->range = (SourceRange) { fst->range.start, snd->range.end };
             (*expr)->seq.fst = fst;
             (*expr)->seq.snd = snd;
@@ -585,6 +586,7 @@ static Status ParseStmt(Lexer *lex, Expr **expr)
             // Replace the top-level parse result with a new expression, which
             // will represent a send of `message` to `receiver`.
         (*expr)->tag = EXPR_SEND;
+        (*expr)->refcount = 1;
         (*expr)->range = (SourceRange)
             { receiver->range.start, message->range.end };
         (*expr)->send.receiver = receiver;
@@ -595,6 +597,7 @@ static Status ParseStmt(Lexer *lex, Expr **expr)
 static Status ParseTerm(Lexer *lex, Expr **term)
 {
     TRY(Malloc(lex->blimp, sizeof(Expr), term));
+    (*term)->refcount = 1;
 
     // The <term> non-terminal consists of four productions:
     //

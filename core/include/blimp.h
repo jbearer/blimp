@@ -100,6 +100,7 @@ typedef enum BlimpErrorCode {
 
     // Runtime errors
     BLIMP_NO_SUCH_SYMBOL,
+    BLIMP_NO_SUCH_METHOD,
     BLIMP_MUST_BE_BLOCK,
     BLIMP_MUST_BE_SYMBOL,
 
@@ -220,6 +221,15 @@ typedef struct BlimpExpr BlimpExpr;
  * `expr` may not be used after Blimp_FreeExpr returns.
  */
 void Blimp_FreeExpr(BlimpExpr *expr);
+
+/**
+ * \brief Write a human-readable representation of `expr` to `file`.
+ *
+ * This function produces `bl:mp` code representing `expr` and writes it to
+ * `file`, which must be open for writing. The resulting code would yield `expr`
+ * again if parsed using Blimp_Parse().
+ */
+void Blimp_PrintExpr(FILE *file, const BlimpExpr *expr);
 
 /**
  * \brief Write a human-readable representation of `expr` to `file`.
@@ -401,7 +411,7 @@ BlimpStatus BlimpObject_NewBlock(
     Blimp *blimp,
     BlimpObject *parent,
     const BlimpSymbol *tag,
-    const BlimpExpr *code,
+    BlimpExpr *code,
     BlimpObject **obj);
 
 /**
@@ -442,12 +452,41 @@ void BlimpObject_Release(BlimpObject *obj);
 /**
  * @}
  *
+ * \defgroup objects_global The Global Object
+ *
+ * @{
+ */
+
+BlimpObject *Blimp_GlobalObject(Blimp *blimp);
+
+/**
+ * @}
+ *
  * \defgroup objects_inspecting Inspecting Objects
  *
  * @{
  */
 
-BlimpObject *BlimpObject_Parent(BlimpObject *obj);
+/**
+ * \brief Get the parent object of an object.
+ *
+ * Returns the parent of `obj`, or `NULL` if `obj` is the global object.
+ */
+BlimpObject *BlimpObject_Parent(const BlimpObject *obj);
+
+/**
+ * \brief Get the tag of an object.
+ *
+ * If `obj` is a block `{tag|code}`, then this returns `tag`. If `obj` is a
+ * symbol, the result is `symbol`. If `obj` is the global object, the result is
+ * `NULL`.
+ */
+const BlimpSymbol *BlimpObject_Tag(const BlimpObject *obj);
+
+/**
+ * \brief Print a legible representation of `obj` to a file.
+ */
+void BlimpObject_Print(FILE *file, const BlimpObject *obj);
 
 /**
  * \brief Retrieve the type-specific properties of a block object.
@@ -550,6 +589,215 @@ BlimpStatus BlimpObject_Eval(BlimpObject *obj, BlimpObject **ret);
  * @}
  * @}
  *
+ * \defgroup vtable The V-Table
+ *
+ * The `bl:mp` V-Table maps (receiver tag, message tag) pairs to code which runs
+ * when a message with that tag is sent to an object with that tag. For example,
+ * the message send `{receiver|.} {message|.}` would look up the code associated
+ * with `(receiver, message)` in the V-Table. Or, the message `foo{.get|.}`
+ * would look up the code associated with `(symbol, .get)`.
+ *
+ * Truthfully, the lookup is actually slightly more complicated than this,
+ * because `bl:mp` allows fallthrough receivers and fallthrough messages,
+ * denoted by the wildcard symbol `_`. If a (receiver, message) lookup fails,
+ * then we will try to look up (receiver, _) instead. This is a fallthrough
+ * method; it allows the receiving class to handle the incoming message
+ * dynamically if it does not have an explicit handler for the tag of the
+ * message. If that lookup fails, then we will lookup (_, message). This is a
+ * fallthrough receiver: it says if `message` is not directly handled by the
+ * receiver of the message, then it should be handled by the global fallthrough
+ * receiver for that message type. If _that_ lookup fails, then we finally exit
+ * with an error (`BLIMP_NO_SUCH_METHOD`).
+ *
+ * The code associated with each pair of symbols in the V-Table is called a
+ * _method_. At its most general, a method is a C function operating on the
+ * Blimp interpreter together with some data which gets passed to that function
+ * each time the method is called. Since arbitrary C functions can be bound to
+ * symbol pairs in the V-Table, users interacting with the V-Table directly
+ * through the V-Table API (e.g. Blimp_Bind()) can cause virtually anything to
+ * happen when a message is sent in a `bl:mp` program, including causing the
+ * interpreter to crash, or worse. You must be careful when binding custom
+ * methods in the V-Table.
+ *
+ * Of course, the vast majority of `bl:mp` messages are not handled by arbitrary
+ * C functions. They are handled by evaluating a single BlimpExpr which was
+ * bound to that method by a `bind` expression in the program. For this common
+ * use case, we provide the BlimpMethod_Eval() function, which is the method
+ * implementing this simple behavior. For convenience, we also provide
+ * Blimp_BindExpr(), which is similar to Blimp_Bind(), but instead of binding an
+ * arbitrary method, it binds BlimpMethod_Eval() together with the BlimpExpr you
+ * give it.
+ *
+ * The V-Table API also consists of a few other special methods implementing the
+ * three `bl:mp` primitive operations. These methods are automatically bound in
+ * the V-Table when the interpreter is created, but they are accessible here if
+ * you want to call them directly:
+ *
+ *    Receier Tag | Message Tag | Primitive Method
+ *  --------------|-------------|-----------------------------
+ *     `symbol`   |   `.get`    | BlimpMethod_PrimitiveGet()
+ *     `symbol`   |    `:=`     | BlimpMethod_PrimitiveSet()
+ *        _       |   `.eval`   | BlimpMethod_PrimitiveEval()
+ *
+ * @{
+ */
+
+/**
+ * \brief A handler function for message sends.
+ *
+ * \param[in] blimp
+ *      The interpreter.
+ * \param[in] context
+ *      The object in whose scope the method send is being evaluated. For sends
+ *      executing in the code of a block, this is that block. For code executing
+ *      at file scope, this is the global object.
+ * \param[in] receiver
+ *      The object receiving the method. This object's tag was used as the
+ *      receiver tag when resolving this method handler in the V-Table.
+ * \param[in] message
+ *      The object which is being sent to the receiver. This object's tag was
+ *      used as the essage tag when resolving this method handler in the
+ *      V-Table.
+ * \param[in] data
+ *      Data which was previously associated with this method via Blimp_Bind().
+ * \param[out] result
+ *      The result of the message send expression being evaluated.
+ */
+typedef BlimpStatus (*BlimpMethod)(
+    Blimp *blimp,
+    BlimpObject *context,
+    BlimpObject *receiver,
+    BlimpObject *message,
+    void *data,
+    BlimpObject **result);
+
+/**
+ * \brief Bind a method handler and data to a symbol pair.
+ */
+BlimpStatus Blimp_Bind(
+    Blimp *blimp,
+    const BlimpSymbol *receiver_tag,
+    const BlimpSymbol *message_tag,
+    const BlimpMethod *method,
+    void *data);
+
+/**
+ * \brief Bind an expression to a symbol pair.
+ *
+ * When this (receiver, message) pair is resolved, the result of the message
+ * will be computed by evaluating `expr` in the scope of the receiving object
+ * (as opposed to the more general method of calling a bound method handler
+ * function).
+ *
+ * Under the hood, this function uses the message handler system by binding
+ * BlimpMethod_Eval() as the handler for this symbol pair, and binding `expr` as
+ * the argument to be passed to BlimpMethod_Eval().
+ */
+BlimpStatus Blimp_BindExpr(
+    Blimp *blimp,
+    const BlimpSymbol *receiver_tag,
+    const BlimpSymbol *message_tag,
+    BlimpExpr *expr);
+
+/**
+ * \brief Find the method associated with a symbol pair.
+ *
+ * This function implements the three-tiered method resolution algorithm:
+ *  1. First try (`receiver_tag`, `message_tag`).
+ *  2. If that fails, try (`receiver_tag`, _).
+ *  3. If that fails, try (_, `message_tag`).
+ *
+ * \par Errors
+ *  * `BLIMP_NO_SUCH_METHOD`:
+ *      the pair (`receiver_tag`, `message_tag`) does not having a binding in
+ *      the V-Table. You must call Blimp_Bind() or Blimp_BindExpr(), or evaluate
+ *      an appropriate `bind` expression, before trying to resolve the symbol
+ *      pair.
+ *
+ */
+BlimpStatus Blimp_Resolve(
+    Blimp *blimp,
+    const BlimpSymbol *receiver_tag,
+    const BlimpSymbol *message_tag,
+    BlimpMethod *method,
+    void **data);
+
+/**
+ * \brief Evaluate a message send.
+ *
+ * This function evaluates the result of sending the given message to the given
+ * receiver object, exactly as if we were evaluating a message send expression.
+ *
+ * This is merely a convenience wrapper around other API functions. It is
+ * equivalent to calling Blimp_Resolve() to get the method handler and then
+ * invoking the handler.
+ */
+BlimpStatus Blimp_Send(
+    Blimp *blimp,
+    BlimpObject *context,
+    BlimpObject *receiver,
+    BlimpObject *message,
+    BlimpObject **result);
+
+/**
+ * \defgroup primitives Built-in Methods
+ * @{
+ */
+
+/**
+ * \brief Handle a message by evaluating the expression bound to that message.
+ *
+ * This method handler implements the most common behavior for message sends:
+ * if `expr` was associated with the relevant (receiver, message) pair in the
+ * V-Table -- either by a previous call to Blimp_BindExpr() or by evaluating
+ * `bind receiver message expr` -- then `expr` is evaluated in the scope of the
+ * receiver.
+ */
+BlimpStatus BlimpMethod_Eval(
+    Blimp *blimp,
+    BlimpObject *context,
+    BlimpObject *receiver,
+    BlimpObject *message,
+    BlimpObject **result,
+    const BlimpExpr *body);
+
+/**
+ * \brief Method handler implementing the default behavior for `symbol .get`.
+ */
+BlimpStatus BlimpMethod_PrimitiveGet(
+    Blimp *blimp,
+    BlimpObject *context,
+    BlimpObject *receiver,
+    BlimpObject *message,
+    BlimpObject **result,
+    void *data);
+
+/**
+ * \brief Method handler implementing the default behavior for `symbol :=`.
+ */
+BlimpStatus BlimpMethod_PrimitiveSet(
+    Blimp *blimp,
+    BlimpObject *context,
+    BlimpObject *receiver,
+    BlimpObject *message,
+    BlimpObject **result,
+    void *data);
+
+/**
+ * \brief Method handler implementing the default behavior for `_ .eval`.
+ */
+BlimpStatus BlimpMethod_PrimitiveEval(
+    Blimp *blimp,
+    BlimpObject *context,
+    BlimpObject *receiver,
+    BlimpObject *message,
+    BlimpObject **result,
+    void *data);
+
+/**
+ * @}
+ * @}
+ *
  * \defgroup interpreting Interpreting bl:mp Programs
  *
  * @{
@@ -558,13 +806,42 @@ BlimpStatus BlimpObject_Eval(BlimpObject *obj, BlimpObject **ret);
 /**
  * \brief Interpret a bl:mp expression.
  *
- *
+ * \param[in] blimp
+ *      The interpreter.
+ * \param[in] expr
+ *      The expression to evaluate.
+ * \param[in] scope
+ *      The object in whose scope to do the evaluation. This affects, for
+ *      example, the behavior of the primitive `symbol .get` and `symbol :=`
+ *      operations, which work in the ambient scope
+ * \param[out] result
  */
 BlimpStatus Blimp_Eval(
     Blimp *blimp,
     const BlimpExpr *expr,
     BlimpObject *scope,
     BlimpObject **result);
+
+/**
+ * \brief Evaluate a bl:mp expression and require that the result is a symbol.
+ *
+ * If `expr` succesfully evaluates to a symbol, then this function succeeds and
+ * sets `*sym` to that symbol. If `expr` evaluates but not to a symbol, this
+ * function raises the error `BLIMP_MUST_BE_SYMBOL`, and the contents of `*sym`
+ * are unspecified.
+ *
+ * No matter what, this function does not retain a reference to the evaluated
+ * Object: it evaluates the object, extracts the symbol, and then releases the
+ * object.
+ *
+ * You can think of this as a wrapper around Blimp_Eval(),
+ * BlimpObject_ParseSymbol(), and BlimpObject_Release().
+ */
+BlimpStatus Blimp_EvalSymbol(
+    Blimp *blimp,
+    const BlimpExpr *expr,
+    BlimpObject *scope,
+    const BlimpSymbol **sym);
 
 /**
  * @}

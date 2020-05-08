@@ -251,8 +251,6 @@ static void DumpError(FILE *f, Status err)
     if (err->has_range) {
         PrintSourceRange(stderr, &err->range);
     }
-
-    exit(EXIT_FAILURE);
 }
 
 void Blimp_DumpLastError(Blimp *blimp, FILE *f)

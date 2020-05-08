@@ -106,6 +106,12 @@ static inline HashMapEntry *NthEntry(const HashMap *map, size_t n)
 // guarantee the latter condition for all valid maps.
 static HashMapEntry *Find(const HashMap *map, size_t hash, const void *key)
 {
+    if (map->entries == NULL) {
+        return NULL;
+            // We haven't allocated any memory yet due to lazy allocation
+            // (HashMapOptions::create_empty) so we can't find any entries.
+    }
+
     size_t n = hash % map->capacity;
         // The index of the entry we're currently searching.
     HashMapEntry *ret = NULL;
@@ -325,12 +331,16 @@ Status HashMap_Emplace(
     size_t hash = map->hash(key, map->user_data);
     *entry = Find(map, hash, key);
     if ((*entry)->status == PRESENT) {
-        *created = false;
+        if (created) {
+            *created = false;
+        }
     } else {
         memcpy((*entry)->key, key, map->key_size);
         (*entry)->hash = hash;
         (*entry)->status = CREATED;
-        *created = true;
+        if (created) {
+            *created = true;
+        }
     }
 
     return BLIMP_OK;
@@ -350,8 +360,8 @@ void HashMap_CommitEmplace(HashMap *map, HashMapEntry *entry)
         } else {
             assert(!map->first);
             map->first = entry;
-            map->last = entry;
         }
+        map->last = entry;
 
         ++map->size;
     } else {
@@ -373,7 +383,7 @@ void HashMap_AbortEmplace(HashMap *map, HashMapEntry *entry)
 HashMapEntry *HashMap_FindEntry(const HashMap *map, const void *key)
 {
     HashMapEntry *entry = Find(map, map->hash(key, map->user_data), key);
-    if (entry->status == PRESENT) {
+    if (entry && entry->status == PRESENT) {
         return entry;
     } else {
         return NULL;
@@ -382,36 +392,38 @@ HashMapEntry *HashMap_FindEntry(const HashMap *map, const void *key)
 
 bool HashMap_Remove(HashMap *map, const void *key, void *value)
 {
-    HashMapEntry *entry = Find(map, map->hash(key, map->user_data), key);
-    if (entry->status == PRESENT) {
-        if (value) {
-            memcpy(value, HashMap_GetValue(map, entry), map->value_size);
-        }
-        entry->status = DELETED;
-
-        // Remove from the iteration list.
-        if (entry->next) {
-            assert(map->last != entry);
-            entry->next->prev = entry->prev;
-        } else {
-            assert(map->last == entry);
-            map->last = entry->prev;
-        }
-        if (entry->prev) {
-            assert(map->first != entry);
-            entry->prev->next = entry->next;
-        } else {
-            assert(map->first == entry);
-            map->first = entry->next;
-        }
-        entry->prev = NULL;
-        entry->next = NULL;
-
-        --map->size;
-        return true;
-    } else {
+    HashMapEntry *entry = HashMap_FindEntry(map, key);
+    if (entry == NULL) {
         return false;
     }
+
+    assert(entry->status == PRESENT);
+
+    if (value) {
+        memcpy(value, HashMap_GetValue(map, entry), map->value_size);
+    }
+    entry->status = DELETED;
+
+    // Remove from the iteration list.
+    if (entry->next) {
+        assert(map->last != entry);
+        entry->next->prev = entry->prev;
+    } else {
+        assert(map->last == entry);
+        map->last = entry->prev;
+    }
+    if (entry->prev) {
+        assert(map->first != entry);
+        entry->prev->next = entry->next;
+    } else {
+        assert(map->first == entry);
+        map->first = entry->next;
+    }
+    entry->prev = NULL;
+    entry->next = NULL;
+
+    --map->size;
+    return true;
 }
 
 void HashMap_GetEntry(
