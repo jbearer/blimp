@@ -4,6 +4,11 @@ project(bl:mp)
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
+# Platform specific options
+if (USE_POSIX08)
+    set(CMAKE_C_FLAGS ${CMAKE_C_FLAGS} -D_POSIX_C_SOURCE=200809L)
+endif()
+
 enable_testing()
 add_subdirectory(core)
 add_subdirectory(blimp)

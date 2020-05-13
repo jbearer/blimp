@@ -80,10 +80,25 @@ Status Blimp_Bind(
     Blimp *blimp,
     const Symbol *receiver,
     const Symbol *message,
-    const Method *method,
+    const Method method,
     void *data)
 {
-    return VTable_Bind(&blimp->vtable, receiver, message, (Method)method, data);
+    return VTable_Bind(&blimp->vtable, receiver, message, method, data);
+}
+
+Status Blimp_BindVTableFragment(Blimp *blimp, BlimpVTableFragment fragment)
+{
+    for (BlimpVTableEntry *entry = fragment; entry->receiver; ++entry) {
+        const Symbol *receiver;
+        TRY(Blimp_GetSymbol(blimp, entry->receiver, &receiver));
+
+        const Symbol *message;
+        TRY(Blimp_GetSymbol(blimp, entry->message, &message));
+
+        TRY(Blimp_Bind(blimp, receiver, message, entry->method, entry->data));
+    }
+
+    return BLIMP_OK;
 }
 
 Status Blimp_BindExpr(
@@ -127,7 +142,7 @@ Status Blimp_Send(
     TRY(VTable_Resolve(
         &blimp->vtable, receiver_tag, message_tag, &method, &data));
 
-    return method(blimp, context, receiver, message, result, data);
+    return method(blimp, context, receiver, message, data, result);
 }
 
 Status BlimpMethod_Eval(
@@ -135,8 +150,8 @@ Status BlimpMethod_Eval(
     Object *context,
     Object *receiver,
     Object *message,
-    Object **result,
-    const Expr *body)
+    const Expr *body,
+    Object **result)
 {
     (void)context;
 
@@ -150,8 +165,8 @@ Status BlimpMethod_PrimitiveGet(
     Object *context,
     Object *receiver,
     Object *message,
-    Object **result,
-    void *data)
+    void *data,
+    Object **result)
 {
     (void)blimp;
     (void)message;
@@ -169,8 +184,8 @@ Status BlimpMethod_PrimitiveSet(
     Object *context,
     Object *receiver,
     Object *message,
-    Object **result,
-    void *data)
+    void *data,
+    Object **result)
 {
     (void)data;
 
@@ -191,8 +206,8 @@ Status BlimpMethod_PrimitiveEval(
     Object *context,
     Object *receiver,
     Object *message,
-    Object **result,
-    void *data)
+    void *data,
+    Object **result)
 {
     (void)blimp;
     (void)context;
@@ -280,6 +295,14 @@ err_send:
 err_message:
             BlimpObject_Release(receiver);
 err_receiver:
+            if (ret && !ret->has_range) {
+                // A lot of specialized method handlers do not assign source.
+                // locations to their errors. If this was one of those methods,
+                // set the location to the location of the overal expression.
+                ret->range = expr->range;
+                ret->has_range = true;
+            }
+
             return ret;
         }
 

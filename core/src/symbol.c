@@ -57,7 +57,8 @@ Status SymbolTable_GetSymbol(
 
     char **key;
     Symbol **value;
-    HashMap_GetEntry(symbols, entry, (void **)&key, (void **)&value);
+    size_t hash;
+    HashMap_GetEntry(symbols, entry, (void **)&key, (void **)&value, &hash);
 
     if (!created) {
         // The entry we are using was already in the map, so it's fully valid,
@@ -86,9 +87,15 @@ Status SymbolTable_GetSymbol(
     }
     new_symbol->length = len;
     new_symbol->name   = *key;
+    new_symbol->hash   = hash;
     *value  = new_symbol;
     *symbol = new_symbol;
 
     HashMap_CommitEmplace(symbols, entry);
     return BLIMP_OK;
+}
+
+const char *BlimpSymbol_GetName(const Symbol *sym)
+{
+    return sym->name;
 }

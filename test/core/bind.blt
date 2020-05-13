@@ -1,4 +1,4 @@
-#: --racket-timeout=15
+#: --racket-timeout=20
 
 # Test a simple method that just returns a value
 bind class.get_const foo;

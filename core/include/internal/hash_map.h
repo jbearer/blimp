@@ -138,7 +138,7 @@ static inline Blimp *HashMap_GetBlimp(const HashMap *map)
 
 static inline HashMapEntry *HashMap_Begin(const HashMap *map)
 {
-    return map->entries;
+    return map->first;
 }
 
 PRIVATE HashMapEntry *HashMap_Next(const HashMap *map, HashMapEntry *it);
@@ -221,19 +221,23 @@ PRIVATE void HashMap_AbortEmplace(HashMap *map, HashMapEntry *entry);
  * you want with `value`.
  */
 PRIVATE void HashMap_GetEntry(
-    const HashMap *map, HashMapEntry *entry, void **key, void **value);
+    const HashMap *map,
+    HashMapEntry *entry,
+    void **key,
+    void **value,
+    size_t *hash);
 
 static inline void *HashMap_GetKey(const HashMap *map, HashMapEntry *entry)
 {
     void *key;
-    HashMap_GetEntry(map, entry, &key, NULL);
+    HashMap_GetEntry(map, entry, &key, NULL, NULL);
     return key;
 }
 
 static inline void *HashMap_GetValue(const HashMap *map, HashMapEntry *entry)
 {
     void *value;
-    HashMap_GetEntry(map, entry, NULL, &value);
+    HashMap_GetEntry(map, entry, NULL, &value, NULL);
     return value;
 }
 

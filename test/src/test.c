@@ -1,4 +1,6 @@
-#define _POSIX_C_SOURCE 200809L
+#ifndef _POSIX_C_SOURCE
+# define _POSIX_C_SOURCE 200809L
+#endif
 
 #include <dirent.h>
 #include <errno.h>
@@ -17,6 +19,7 @@
 #include "blimp.h"
 #include "options.h"
 #include "racket.h"
+#include "test_blimp.h"
 
 #define ANSI_GREEN  "\e[1;32m"
 #define ANSI_RED    "\e[1;31m"
@@ -67,7 +70,7 @@ typedef struct Suite {
 
 static void FailTest(Test *test, const char *reason)
 {
-    if (test->options.verbosity >= VERB_TEST) {
+    if (test->options.verbosity >= VERB_FAILURES) {
         printf(ANSI_RED "failed!" ANSI_RESET " %s: %s\n", test->name, reason);
     }
     test->result = TEST_FAILED;
@@ -84,8 +87,10 @@ static void PassTest(Test *test, size_t elapsed_ms)
 
 #define SkipTest(test, reason, ...) \
     do { \
-        printf(ANSI_YELLOW "skipped!" ANSI_RESET " %s: " reason "\n", \
-            test->name, ##__VA_ARGS__); \
+        if (test->options.verbosity >= VERB_TEST) { \
+            printf(ANSI_YELLOW "skipped!" ANSI_RESET " %s: " reason "\n", \
+                test->name, ##__VA_ARGS__); \
+        } \
         test->result = TEST_SKIPPED; \
     } while (0)
 
@@ -166,12 +171,27 @@ static void RunTest(Test *test)
         free(output);
     }
 
+    BlimpObject *result = NULL;
+    if (test->options.use_blimp) {
+        if (Blimp_Eval(
+                test->blimp, expr, Blimp_GlobalObject(test->blimp), &result)
+            != BLIMP_OK)
+        {
+            FailTest(test, "bl:mp error");
+            if (test->options.verbosity >= VERB_FAILURES) {
+                Blimp_DumpLastError(test->blimp, stdout);
+            }
+            goto cleanup_parsed;
+        }
+    }
+
     clock_gettime(CLOCK_MONOTONIC, &end);
 
     size_t elapsed_ns = (end  .tv_sec*1000000000 + end  .tv_nsec) -
                         (start.tv_sec*1000000000 + start.tv_nsec);
     PassTest(test, elapsed_ns/1000000);
 
+    if (result) BlimpObject_Release(result);
 cleanup_parsed:
     Blimp_FreeExpr(expr);
 cleanup:
@@ -183,7 +203,7 @@ static void RunGroup(Group *group)
 {
     memset(group->results, 0, sizeof(group->results));
 
-    if (group->options.verbosity >= VERB_TEST) {
+    if (group->options.verbosity >= VERB_FAILURES) {
         printf(ANSI_PURPLE "Running tests for group" ANSI_RESET " %s\n",
             group->name);
     }
@@ -197,7 +217,7 @@ static void RunGroup(Group *group)
         PrintResults(ANSI_PURPLE "Results for" ANSI_RESET " %s",
             group->results, group->num_tests, group->name);
     }
-    if (group->options.verbosity >= VERB_TEST) {
+    if (group->options.verbosity >= VERB_FAILURES) {
         printf("\n");
     }
 }
@@ -245,6 +265,9 @@ static void PrintUsage(FILE *f, int argc, char **argv)
     fprintf(f, "    --skip-racket\n");
     fprintf(f, "        Do not run Racket semantics tests.\n");
     fprintf(f, "\n");
+    fprintf(f, "    --skip-blimp\n");
+    fprintf(f, "        Do not run bl:mp evaluation tests.\n");
+    fprintf(f, "\n");
     fprintf(f, "    --racket-timeout SECONDS\n");
     fprintf(f, "        Consider a test failed if it takes more than SECONDS to evaluate\n");
     fprintf(f, "        in the Redex semantic model. SECONDS may be an integer or floating\n");
@@ -254,7 +277,8 @@ static void PrintUsage(FILE *f, int argc, char **argv)
     fprintf(f, "        Show verbose output at LEVEL. LEVEL may be one of the following\n");
     fprintf(f, "        (each named verbosity level implies the level below it):\n");
     fprintf(f, "         * debug: show output useful for debugging the test runner\n");
-    fprintf(f, "         * test:  show output for each test run\n");
+    fprintf(f, "         * test: show output for each test run\n");
+    fprintf(f, "         * failures: show output only for tests which fail\n");
     fprintf(f, "         * group: show output for each group of tests\n");
     fprintf(f, "         * suite: show summary output for the entire test suite\n");
     fprintf(f, "         * none: do not show any output\n");
@@ -290,6 +314,7 @@ typedef enum {
         // all the flags have unique values.
 
     FLAG_SKIP_RACKET,
+    FLAG_SKIP_BLIMP,
     FLAG_RACKET_TIMEOUT,
 } Flag;
 
@@ -297,6 +322,7 @@ const Options default_options = {
     .verbosity      = VERB_GROUP,
     .filter         = "",
     .use_racket     = true,
+    .use_blimp      = true,
     .racket_timeout = 5000,
 };
 
@@ -321,6 +347,7 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
     struct option cli_options[] = {
         {"filter",         required_argument, NULL, FLAG_FILTER },
         {"skip-racket",    no_argument,       NULL, FLAG_SKIP_RACKET },
+        {"skip-blimp",     no_argument,       NULL, FLAG_SKIP_BLIMP },
         {"racket-timeout", required_argument, NULL, FLAG_RACKET_TIMEOUT },
         {"verbose",        optional_argument, NULL, FLAG_VERBOSE },
         {"help",           no_argument,       NULL, FLAG_HELP },
@@ -340,6 +367,10 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
 
             case FLAG_SKIP_RACKET:
                 options->use_racket = false;
+                break;
+
+            case FLAG_SKIP_BLIMP:
+                options->use_blimp = false;
                 break;
 
             case FLAG_RACKET_TIMEOUT: {
@@ -382,6 +413,8 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
                     options->verbosity = VERB_DEBUG;
                 } else if (strcmp(optarg, "test") == 0) {
                     options->verbosity = VERB_TEST;
+                } else if (strcmp(optarg, "failures") == 0) {
+                    options->verbosity = VERB_FAILURES;
                 } else if (strcmp(optarg, "group") == 0) {
                     options->verbosity = VERB_GROUP;
                 } else if (strcmp(optarg, "suite") == 0) {
@@ -497,7 +530,7 @@ static Suite *FindTests(const Options *options)
             Test *test = malloc(sizeof(Test));
             test->name = strdup(test_de->d_name);
             test->options = group->options;
-            test->blimp = Blimp_New(NULL);
+            test->blimp = TestBlimp_New(NULL);
             FILE *test_file = fdopen(
                 openat(dirfd(group_dir), test_de->d_name, O_RDONLY), "r");
             Blimp_Check(Blimp_OpenFileStream(
@@ -545,11 +578,8 @@ static Suite *FindTests(const Options *options)
                 // We can, however, get rid of the raw line that we read from
                 // file.
                 free(first_line);
-            } else {
-                // The first line is not an options string, but it might contain
-                // test bl:mp code. Put it back into the stream.
-                rewind(test_file);
             }
+            rewind(test_file);
 
             // Add it to our list of tests.
             if (group->num_tests >= tests_capacity) {

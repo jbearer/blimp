@@ -13,9 +13,12 @@ bind new _
     {that{.get|.}|.}
 ;
 
+# Global singleton object factor
+new{:=|{new|.}};
+
 {do|
     x {:=| 0 };
-    c {:=| {new|.} class };
+    c {:=| new{.get|.} class };
 
     (c{.get|.}) {.set_x|1};
 

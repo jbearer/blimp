@@ -211,6 +211,8 @@ typedef struct BlimpSymbol BlimpSymbol;
 BlimpStatus Blimp_GetSymbol(
     Blimp *blimp, const char *name, const BlimpSymbol **symbol);
 
+const char *BlimpSymbol_GetName(const BlimpSymbol *symbol);
+
 typedef struct BlimpExpr BlimpExpr;
 
 /**
@@ -382,6 +384,20 @@ BlimpStatus Blimp_ParseString(Blimp *blimp, const char *str, BlimpExpr **output)
  *  * Many functions are documented to return a "fresh" object: this is simply
  *    an managed object with a reference count of 1, such as a newly created
  *    object.
+ *  * Some functions are documented to return a "new reference". This means that
+ *    the caller now owns a reference to the object which was returned, and it
+ *    is their responsibility to eventually call BlimpObject_Release() on that
+ *    reference. Until they do so, they can trust that the reference will remain
+ *    valid.
+ *  * Other functions return a "transient reference". This contrasts with a "new
+ *    reference" in that the callee, not the caller, is responsible for managing
+ *    the reference. If the caller wants the object to persist independently of
+ *    the callee, they must call BlimpObject_Borrow() explicitly. Typically,
+ *    functions that return a transient reference will guarantee that it lives
+ *    "at least as long as" some other reference, which the caller likely owns.
+ *    If the caller is satisfied with this lifetime, they can use the transient
+ *    reference without ever callin BlimpObject_Borrow() and
+ *    BlimpObject_Release().
  *
  * @{
  */
@@ -432,7 +448,7 @@ BlimpStatus BlimpObject_NewSymbol(
  * to BlimpObject_Release would have destroyed `obj`, then after this call,
  * `obj` will not be destroyed until the `n+1`th call to BlimpObject_Release.
  *
- * \returns `obj`
+ * \returns a new reference to `obj`
  */
 BlimpObject *BlimpObject_Borrow(BlimpObject *obj);
 
@@ -457,6 +473,11 @@ void BlimpObject_Release(BlimpObject *obj);
  * @{
  */
 
+/**
+ * \brief Get a reference to the global object.
+ *
+ * \returns a transient reference (lives as long as the interpreter)
+ */
 BlimpObject *Blimp_GlobalObject(Blimp *blimp);
 
 /**
@@ -471,6 +492,8 @@ BlimpObject *Blimp_GlobalObject(Blimp *blimp);
  * \brief Get the parent object of an object.
  *
  * Returns the parent of `obj`, or `NULL` if `obj` is the global object.
+ *
+ * \returns a transient reference (lives at least as long as `obj`)
  */
 BlimpObject *BlimpObject_Parent(const BlimpObject *obj);
 
@@ -542,6 +565,10 @@ BlimpStatus BlimpObject_ParseSymbol(
  *  * If the symbol is not found in the object's scope or the scope of any of
  *    its parents, an error is returned.
  *
+ * \returns
+ *      a transient reference (lives at least as long as `obj`, or until the
+ *      next call to BlimpObject_Set(), whichever is shorter)
+ *
  * \par Errors
  *  * `BLIMP_NO_SUCH_SYMBOL`:
  *      the symbol was not found in the scope of `obj` or any of its parents.
@@ -582,6 +609,8 @@ BlimpStatus BlimpObject_Set(
  * This function implements the primitive `_.eval` operation. `obj` must be a
  * block object. It's code expression is evaluated as if by calling `Blimp_Eval`
  * in the scope of `obj`, and the resulting new object is stored in `*ret`.
+ *
+ * \returns a new reference
  */
 BlimpStatus BlimpObject_Eval(BlimpObject *obj, BlimpObject **ret);
 
@@ -661,7 +690,7 @@ BlimpStatus BlimpObject_Eval(BlimpObject *obj, BlimpObject **ret);
  * \param[in] data
  *      Data which was previously associated with this method via Blimp_Bind().
  * \param[out] result
- *      The result of the message send expression being evaluated.
+ *      A new reference.
  */
 typedef BlimpStatus (*BlimpMethod)(
     Blimp *blimp,
@@ -678,7 +707,7 @@ BlimpStatus Blimp_Bind(
     Blimp *blimp,
     const BlimpSymbol *receiver_tag,
     const BlimpSymbol *message_tag,
-    const BlimpMethod *method,
+    BlimpMethod method,
     void *data);
 
 /**
@@ -698,6 +727,24 @@ BlimpStatus Blimp_BindExpr(
     const BlimpSymbol *receiver_tag,
     const BlimpSymbol *message_tag,
     BlimpExpr *expr);
+
+typedef struct {
+    const char *receiver;
+    const char *message;
+    BlimpMethod method;
+    void *data;
+} BlimpVTableEntry;
+
+typedef BlimpVTableEntry BlimpVTableFragment[];
+
+/**
+ * \brief Convenience function to bind a number of T-Table mappings at once.
+ *
+ * The final entry in the fragment must be all zero.
+ */
+BlimpStatus Blimp_BindVTableFragment(
+    Blimp *blimp, BlimpVTableFragment fragment);
+
 
 /**
  * \brief Find the method associated with a symbol pair.
@@ -758,8 +805,8 @@ BlimpStatus BlimpMethod_Eval(
     BlimpObject *context,
     BlimpObject *receiver,
     BlimpObject *message,
-    BlimpObject **result,
-    const BlimpExpr *body);
+    const BlimpExpr *body,
+    BlimpObject **result);
 
 /**
  * \brief Method handler implementing the default behavior for `symbol .get`.
@@ -769,8 +816,8 @@ BlimpStatus BlimpMethod_PrimitiveGet(
     BlimpObject *context,
     BlimpObject *receiver,
     BlimpObject *message,
-    BlimpObject **result,
-    void *data);
+    void *data,
+    BlimpObject **result);
 
 /**
  * \brief Method handler implementing the default behavior for `symbol :=`.
@@ -780,8 +827,8 @@ BlimpStatus BlimpMethod_PrimitiveSet(
     BlimpObject *context,
     BlimpObject *receiver,
     BlimpObject *message,
-    BlimpObject **result,
-    void *data);
+    void *data,
+    BlimpObject **result);
 
 /**
  * \brief Method handler implementing the default behavior for `_ .eval`.
@@ -791,8 +838,8 @@ BlimpStatus BlimpMethod_PrimitiveEval(
     BlimpObject *context,
     BlimpObject *receiver,
     BlimpObject *message,
-    BlimpObject **result,
-    void *data);
+    void *data,
+    BlimpObject **result);
 
 /**
  * @}
@@ -813,8 +860,9 @@ BlimpStatus BlimpMethod_PrimitiveEval(
  * \param[in] scope
  *      The object in whose scope to do the evaluation. This affects, for
  *      example, the behavior of the primitive `symbol .get` and `symbol :=`
- *      operations, which work in the ambient scope
+ *      operations, which work in the ambient scope.
  * \param[out] result
+ *      A new reference.
  */
 BlimpStatus Blimp_Eval(
     Blimp *blimp,

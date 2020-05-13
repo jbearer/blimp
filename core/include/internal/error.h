@@ -63,6 +63,11 @@ static inline Status Strndup(
     return BLIMP_OK;
 }
 
+static inline Status Strdup(Blimp *blimp, const char *str, char **ret)
+{
+    return Strndup(blimp, str, strlen(str) + 1, ret);
+}
+
 // Wrapper around free which stores NULL into the freed pointer.
 #define Free(blimp, p) do { \
     (void)blimp; \

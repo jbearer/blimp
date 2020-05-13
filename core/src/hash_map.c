@@ -249,6 +249,7 @@ static Status MakeSpace(HashMap *map)
             HashMapEntry *new_entry = NthEntry(map, n);
             if (new_entry->status == ABSENT) {
                 memcpy(new_entry, old_entry, EntrySize(map));
+                assert(new_entry->status == PRESENT);
                     // Copy the key and value into the new map.
                 *next_pointer_in_new_map = new_entry;
                     // Point the next pointer of the previous entry at the newly
@@ -320,6 +321,11 @@ void HashMap_Destroy(HashMap *map)
 HashMapEntry *HashMap_Next(const HashMap *map, HashMapEntry *entry)
 {
     (void)map;
+
+    assert(entry);
+    assert(entry->status == PRESENT);
+    assert(entry->next == NULL || entry->next->status == PRESENT);
+
     return entry->next;
 }
 
@@ -427,13 +433,20 @@ bool HashMap_Remove(HashMap *map, const void *key, void *value)
 }
 
 void HashMap_GetEntry(
-    const HashMap *map, HashMapEntry *entry, void **key, void **value)
+    const HashMap *map,
+    HashMapEntry *entry,
+    void **key,
+    void **value,
+    size_t *hash)
 {
     if (key) {
         *key = &entry->key;
     }
     if (value) {
         *value = (char *)&entry->key + RoundUpToAlignment(map->key_size);
+    }
+    if (hash) {
+        *hash = entry->hash;
     }
 }
 
@@ -443,4 +456,6 @@ void HashMap_Clear(HashMap *map)
         memset(map->entries, 0, EntrySize(map)*map->capacity);
     }
     map->size = 0;
+    map->first = NULL;
+    map->last = NULL;
 }

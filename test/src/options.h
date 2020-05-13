@@ -5,6 +5,7 @@ typedef enum {
     VERB_NONE,
     VERB_SUITE,
     VERB_GROUP,
+    VERB_FAILURES,
     VERB_TEST,
     VERB_DEBUG,
     MAX_VERBOSITY,
@@ -14,6 +15,7 @@ typedef struct {
     Verbosity verbosity;
     const char *filter;
     bool use_racket;
+    bool use_blimp;
     size_t racket_timeout; // ms
 } Options;
 

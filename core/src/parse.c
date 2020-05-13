@@ -65,11 +65,12 @@
 // case with an ad hoc algorithm which parses as many <term>s as it can from
 // left to right, folding them into a "send" <expr> as it goes.
 //
-
 #include <assert.h>
 #include <ctype.h>
 #include <errno.h>
+#include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "internal/blimp.h"
 #include "internal/error.h"
@@ -78,6 +79,8 @@
 ////////////////////////////////////////////////////////////////////////////////
 // I/O
 //
+
+#define PATH_MAX 256
 
 typedef struct {
     Stream base;
@@ -118,11 +121,44 @@ static void FileStream_Close(Stream *stream)
     Free(self->blimp, &self);
 }
 
+static const char *GetPathFromFile(FILE *file)
+{
+#if _POSIX_C_SOURCE >= 200112L
+    char proc_path[PATH_MAX+1];
+    if (snprintf(
+            proc_path, PATH_MAX+1, "/proc/self/fd/%d", fileno(file))
+        > PATH_MAX)
+    {
+        return NULL;
+    }
+
+    char *path = malloc(PATH_MAX+1);
+    if (path == NULL) {
+        return NULL;
+    }
+
+    ssize_t len = readlink(proc_path, path, PATH_MAX+1);
+    if (len < 0) {
+        free(path);
+        return NULL;
+    }
+    if (len > PATH_MAX) {
+        free(path);
+        return NULL;
+    }
+    path[len] = '\0';
+    return path;
+#else
+    (void)file;
+    return NULL;
+#endif
+}
+
 static Status FileStream_New(
     Blimp *blimp, const char *name, FILE *file, FileStream **self)
 {
-     TRY(Malloc(blimp, sizeof(FileStream), self));
-     **self = (FileStream) {
+    TRY(Malloc(blimp, sizeof(FileStream), self));
+    **self = (FileStream) {
         .base = {
             .Next     = FileStream_Next,
             .Location = FileStream_Location,
@@ -130,12 +166,20 @@ static Status FileStream_New(
         },
         .blimp = blimp,
         .loc = {
-            .file = name,
+            .file = NULL,
             .row  = 0,
             .col  = 0,
         },
         .f = file,
-     };
+    };
+
+    // Try to get the real path that actually corresponds to `file`, according
+    // to the operating system.
+    if (((*self)->loc.file = GetPathFromFile(file)) == NULL) {
+        Strdup(blimp, name, (char **)&(*self)->loc.file);
+            // If that failed, just use the given `name` (which may be
+            // meaningless) as the path.
+    }
 
      return BLIMP_OK;
 }

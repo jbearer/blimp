@@ -74,7 +74,7 @@ static Object **Lookup(const Object *obj, const Symbol *sym)
 {
     const Object *curr = obj;
     while (curr) {
-        Object **ret = Scope_Lookup(&obj->scope, sym);
+        Object **ret = Scope_Lookup(&curr->scope, sym);
         if (ret) {
             return ret;
         } else {
@@ -163,9 +163,14 @@ Status BlimpObject_Get(const Object *obj, const Symbol *sym, Object **ret)
     }
 }
 
-
 Status BlimpObject_Set(Object *obj, const Symbol *sym, Object *val)
 {
+    assert(val);
+    BlimpObject_Borrow(val);
+        // Acquire a reference to the new value, since we're about to store it
+        // persistently. This reference will be released when the new value is
+        // replaced with a newer value, or when the object itself is destroyed.
+
     // If the symbol is already in scope, update the existing value.
     Object **existing_value = Lookup(obj, sym);
     if (existing_value) {
@@ -173,19 +178,13 @@ Status BlimpObject_Set(Object *obj, const Symbol *sym, Object *val)
             // This scope owned a reference to the existing value. After this
             // operation, the old value will no longer be reachable through this
             // scope, so we have to release our reference.
+
         *existing_value = BlimpObject_Borrow(val);
-            // Acquire a reference to the new value, since we're about to store
-            // it persistently. This reference will be released when the new
-            // value is replaced with a newer value, or when the object itself
-            // is destroyed.
         return BLIMP_OK;
     }
 
     // Otherwise, add it to the innermost scope.
     TRY(Scope_Update(&obj->scope, sym, val));
-    BlimpObject_Borrow(val);
-        // We have stored a persistent reference to `val`.
-
     return BLIMP_OK;
 }
 
@@ -434,37 +433,38 @@ static Status New(Blimp *blimp, Object *parent, Object **obj)
         Scope_Clear(&(*obj)->scope);
             // The scope should already be initialized. Just make sure it's
             // empty.
+    } else {
+        // If that failed, try to allocate from the active batch.
+        ObjectBatch *batch = blimp->objects.batches;
+        if (batch->uninitialized >= blimp->objects.batch_size) {
+            // If the batch is saturated, allocate a new batch.
+            TRY(Malloc(
+                blimp,
+                sizeof(ObjectBatch) + sizeof(Object)*blimp->objects.batch_size,
+                &batch
+            ));
+            batch->uninitialized = 0;
+            batch->next = blimp->objects.batches;
+            blimp->objects.batches = batch;
+        }
+        assert(batch->uninitialized < blimp->objects.batch_size);
 
-        assert((*obj)->refcount == 0);
-        (*obj)->refcount = 1;
-        (*obj)->parent = parent;
-        return BLIMP_OK;
+        // Grab the next uninitialized object from the batch and initialize it.
+        *obj = &batch->objects[batch->uninitialized++];
+        if (Scope_Init(blimp, &(*obj)->scope) != BLIMP_OK) {
+            --batch->uninitialized;
+            return Blimp_Reraise(blimp);
+        }
     }
 
-    // If that failed, try to allocate from the active batch.
-    ObjectBatch *batch = blimp->objects.batches;
-    if (batch->uninitialized >= blimp->objects.batch_size) {
-        // If the batch is saturated, allocate a new batch.
-        TRY(Malloc(
-            blimp,
-            sizeof(ObjectBatch) + sizeof(Object)*blimp->objects.batch_size,
-            &batch
-        ));
-        batch->uninitialized = 0;
-        batch->next = blimp->objects.batches;
-        blimp->objects.batches = batch;
-    }
-    assert(batch->uninitialized < blimp->objects.batch_size);
-
-    // Grab the next uninitialized object from the batch and initialize it.
-    *obj = &batch->objects[batch->uninitialized++];
-    if (Scope_Init(blimp, &(*obj)->scope) != BLIMP_OK) {
-        --batch->uninitialized;
-        return Blimp_Reraise(blimp);
+    if (parent) {
+        assert(parent->refcount > 0);
+        ++parent->children;
     }
 
     (*obj)->parent = parent;
     (*obj)->refcount = 1;
+    (*obj)->children = 0;
     return BLIMP_OK;
 }
 
@@ -511,7 +511,7 @@ void BlimpObject_Release(Object *obj)
     Blimp *blimp = GetBlimp(obj);
 
     assert(obj->refcount > 0);
-    if (--obj->refcount == 0) {
+    if (--obj->refcount == 0 && obj->children == 0) {
         // Release our references to all of the objects in this object's scope.
         for (ScopeIterator entry = Scope_Begin(&obj->scope);
              entry != Scope_End(&obj->scope);

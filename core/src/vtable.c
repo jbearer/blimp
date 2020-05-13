@@ -66,6 +66,7 @@ Status VTable_Init(Blimp *blimp, VTable *vtable)
     TRY(Blimp_GetSymbol(blimp, ":=", &set));
     TRY(Blimp_GetSymbol(blimp, ".eval", &eval));
 
+    vtable->methods.capacity = 0;
     TRY(HashMap_Init(
         blimp, &vtable->methods,
         sizeof(SymbolPair), sizeof(BoundMethod),
@@ -74,7 +75,7 @@ Status VTable_Init(Blimp *blimp, VTable *vtable)
     ));
 
     // Bind the primitive method symbol .get.
-    if (VTable_Bind(vtable, symbol, get, (Method)BlimpMethod_PrimitiveGet, NULL)
+    if (VTable_Bind(vtable, symbol, get, BlimpMethod_PrimitiveGet, NULL)
             != BLIMP_OK)
     {
         VTable_Destroy(vtable);
@@ -82,7 +83,7 @@ Status VTable_Init(Blimp *blimp, VTable *vtable)
     }
 
     // Bind the primitive method symbol :=.
-    if (VTable_Bind(vtable, symbol, set, (Method)BlimpMethod_PrimitiveSet, NULL)
+    if (VTable_Bind(vtable, symbol, set, BlimpMethod_PrimitiveSet, NULL)
             != BLIMP_OK)
     {
         VTable_Destroy(vtable);
@@ -94,7 +95,7 @@ Status VTable_Init(Blimp *blimp, VTable *vtable)
             vtable,
             vtable->wildcard,
             eval,
-            (Method)BlimpMethod_PrimitiveEval,
+            BlimpMethod_PrimitiveEval,
             NULL
         )!= BLIMP_OK)
     {

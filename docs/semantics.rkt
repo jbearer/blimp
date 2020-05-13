@@ -469,8 +469,9 @@
             ; The message must have a body.
       (resolves-to M_3 |{symbol}| x_msg primitive-set)
 
-      (steps-to M_3 r e_bod M_4 v_bod)
-            ; Evaluate the body of the message to find the new value of the symbol.
+      (steps-to M_3 r_msg e_bod M_4 v_bod)
+            ; Evaluate the body of the message to find the new value of the symbol. We evaluate the
+            ; body in the context of the message, as if we were sending .eval to the message.
       (set M_4 r x_rcv v_bod M_5)
             ; Set the new value.
     -------------------------------------------------------------------------

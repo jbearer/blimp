@@ -11,6 +11,7 @@ struct BlimpObject {
     BlimpObject *parent;
     Scope scope;
     size_t refcount;
+    size_t children;
 
     // Type-specific data.
     enum {
