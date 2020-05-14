@@ -324,6 +324,8 @@ int main(int argc, char *const *argv)
         return EXIT_FAILURE;
     }
 
+    Blimp_Check(Module_Init(blimp, &options));
+
     if (i == argc) {
         return ReplMain(blimp, &options);
     } else if (i + 1 == argc) {
