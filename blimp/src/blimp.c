@@ -8,6 +8,8 @@
 #include <readline/readline.h>
 
 #include "blimp.h"
+#include "module.h"
+#include "options.h"
 
 #define VERSION_MAJOR 0
 #define VERSION_MINOR 1
@@ -39,17 +41,16 @@ static void PrintUsage(FILE *f, int argc, char *const *argv)
     fprintf(f, "\n");
     fprintf(f, "    --object-pool-batch-size\n");
     fprintf(f, "\n");
+    fprintf(f, "    --history-file FILE\n");
+    fprintf(f, "        Load and save interactive history to and from FILE.\n");
+    fprintf(f, "        The default is `~/.blimp_history'.\n");
+    fprintf(f, "\n");
     fprintf(f, "    -h, --help\n");
     fprintf(f, "        Show this help and exit\n");
     fprintf(f, "\n");
     fprintf(f, "    -v, --version\n");
     fprintf(f, "        Print version information\n");
 }
-
-typedef enum {
-    ACTION_EVAL,
-    ACTION_DUMP,
-} Action;
 
 static bool DoAction(Blimp *blimp, const BlimpExpr *expr, Action action)
 {
@@ -93,6 +94,21 @@ static char *Readline(const char *prompt)
         add_history(line);
     }
     return line;
+}
+
+static void ReadHistory(const Options *options)
+{
+    using_history();
+    if (options->history_file) {
+        read_history(options->history_file);
+    }
+}
+
+static void WriteHistory(const Options *options)
+{
+    if (options->history_file) {
+        append_history(history_length, options->history_file);
+    }
 }
 
 #else
@@ -144,13 +160,21 @@ static char *Readline(const char *prompt)
     return line;
 }
 
+static void ReadHistory(const Options *options)
+{
+    (void)options;
+}
+
+static void WriteHistory(const Options *options)
+{
+    (void)options;
+}
+
 #endif
 
-static int ReplMain(Blimp *blimp, Action action)
+static int ReplMain(Blimp *blimp, const Options *options)
 {
-#ifdef HAVE_READLINE
-    using_history();
-#endif
+    ReadHistory(options);
 
     PrintVersion(stdout);
 
@@ -166,7 +190,7 @@ static int ReplMain(Blimp *blimp, Action action)
             goto err_parse;
         }
 
-        if (!DoAction(blimp, expr, action)) {
+        if (!DoAction(blimp, expr, options->action)) {
             Blimp_DumpLastError(blimp, stdout);
             goto err_action;
         }
@@ -181,10 +205,12 @@ err_empty_line:
     putchar('\n');
         // Write a newline so the user's terminal prompt doesn't appear on
         // the same line as the last bl:mp prompt.
+
+    WriteHistory(options);
     return EXIT_SUCCESS;
 }
 
-static int EvalMain(Blimp *blimp, Action action, const char *path)
+static int EvalMain(Blimp *blimp, const char *path, const Options *options)
 {
     BlimpExpr *expr;
     if (Blimp_ParseFile(blimp, path, &expr) != BLIMP_OK) {
@@ -193,7 +219,7 @@ static int EvalMain(Blimp *blimp, Action action, const char *path)
     }
 
     int ret = EXIT_SUCCESS;
-    if (!DoAction(blimp, expr, action)) {
+    if (!DoAction(blimp, expr, options->action)) {
         Blimp_DumpLastError(blimp, stderr);
         ret = EXIT_FAILURE;
     }
@@ -202,6 +228,7 @@ static int EvalMain(Blimp *blimp, Action action, const char *path)
 }
 
 typedef enum {
+    FLAG_IMPORT_PATH        = 'I',
     FLAG_ACTION             = 'a',
     FLAG_HELP               = 'h',
     FLAG_VERSION            = 'v',
@@ -214,29 +241,45 @@ typedef enum {
         // all the flags have unique values.
 
     FLAG_OBJECT_POOL_BATCH_SIZE,
+    FLAG_HISTORY_FILE,
 } Flag;
 
 int main(int argc, char *const *argv)
 {
-    struct option options[] = {
+    struct option flags[] = {
+        {"import-path",             required_argument,  NULL, FLAG_IMPORT_PATH},
         {"action",                  required_argument,  NULL, FLAG_ACTION},
         {"object-pool-batch-size",  required_argument,  NULL, FLAG_OBJECT_POOL_BATCH_SIZE},
+        {"history-file",            required_argument,  NULL, FLAG_HISTORY_FILE},
         {"help",                    no_argument,        NULL, FLAG_HELP},
         {"version",                 no_argument,        NULL, FLAG_VERSION},
         {0, 0, 0, 0},
     };
 
-    BlimpOptions blimp_options = DEFAULT_BLIMP_OPTIONS;
-    Action action = ACTION_EVAL;
+    Options options;
+    DefaultOptions(&options);
 
     int option, i = 1;
-    while ((option = getopt_long(argc, argv, "hv", options, &i)) != -1) {
+    while ((option = getopt_long(argc, argv, "hv", flags, &i)) != -1) {
         switch (option) {
+            case FLAG_IMPORT_PATH:
+                ++options.import_path_len;
+                options.import_path = realloc(
+                    options.import_path,
+                    options.import_path_len*sizeof(char *)
+                );
+                if (options.import_path == NULL) {
+                    perror("could not allocate import path");
+                    return EXIT_FAILURE;
+                }
+                options.import_path[options.import_path_len-1] = optarg;
+                break;
+
             case FLAG_ACTION:
                 if (strcmp(optarg, "eval") == 0) {
-                    action = ACTION_EVAL;
+                    options.action = ACTION_EVAL;
                 } else if (strcmp(optarg, "dump") == 0) {
-                    action = ACTION_DUMP;
+                    options.action = ACTION_DUMP;
                 } else {
                     fprintf(stderr, "action: invalid argument\n");
                     PrintUsage(stderr, argc, argv);
@@ -246,7 +289,7 @@ int main(int argc, char *const *argv)
 
             case FLAG_OBJECT_POOL_BATCH_SIZE: {
                 char *invalid;
-                blimp_options.object_pool_batch_size = strtol(
+                options.blimp_options.object_pool_batch_size = strtol(
                     optarg, &invalid, 0);
                 if (!*optarg || *invalid) {
                     fprintf(stderr,
@@ -255,6 +298,10 @@ int main(int argc, char *const *argv)
                     return EXIT_FAILURE;
                 }
                 break;
+            }
+
+            case FLAG_HISTORY_FILE: {
+                options.history_file = optarg;
             }
 
             case FLAG_HELP:
@@ -271,16 +318,16 @@ int main(int argc, char *const *argv)
         }
     }
 
-    Blimp *blimp = Blimp_New(&blimp_options);
+    Blimp *blimp = Blimp_New(&options.blimp_options);
     if (blimp == NULL) {
         fprintf(stderr, "bl:mp: unable to initialize interpreter\n");
         return EXIT_FAILURE;
     }
 
     if (i == argc) {
-        return ReplMain(blimp, action);
+        return ReplMain(blimp, &options);
     } else if (i + 1 == argc) {
-        return EvalMain(blimp, action, argv[i]);
+        return EvalMain(blimp, argv[i], &options);
     } else {
         PrintUsage(stderr, argc, argv);
         return EXIT_FAILURE;

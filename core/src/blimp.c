@@ -3,7 +3,7 @@
 #include "internal/symbol.h"
 #include "internal/vtable.h"
 
-BlimpOptions DEFAULT_BLIMP_OPTIONS = {
+const BlimpOptions DEFAULT_BLIMP_OPTIONS = {
     .object_pool_batch_size = (1ull<<20), // 1MB
 };
 

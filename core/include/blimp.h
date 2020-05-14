@@ -40,7 +40,7 @@ typedef struct {
         ///  The default is 1MB.
 } BlimpOptions;
 
-extern BlimpOptions DEFAULT_BLIMP_OPTIONS;
+extern const BlimpOptions DEFAULT_BLIMP_OPTIONS;
 
 /**
  * \brief Create a new `bl:mp` interpreter.
