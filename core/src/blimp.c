@@ -330,3 +330,8 @@ Status Blimp_EvalSymbol(
     BlimpObject_Release(obj);
     return ret;
 }
+
+BlimpGCStatistics Blimp_GetGCStatistics(Blimp *blimp)
+{
+    return ObjectPool_GetStats(&blimp->objects, blimp->global);
+}

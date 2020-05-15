@@ -422,6 +422,74 @@ void ObjectPool_Destroy(Blimp *blimp, ObjectPool *pool)
     }
 }
 
+static void MarkReachable(Object *root)
+{
+    // Mark reachable objects using a depth-first traversal starting from root.
+    Object *stack = NULL;
+
+    // Push the initial object onto the stack.
+    root->reached = true;
+    root->next = stack;
+    stack = root;
+    while (stack)
+        // Invariant: every object on the stack has been marked `reached`. This
+        // is slightly different than many depth-first search algorithms, which
+        // mark an object reached only when it is popped off the stack. By
+        // checking if an object has already been reached before pushing it on
+        // the stack, we ensure that each object appears on the stack at most
+        // once, which is important because each object only has a single next
+        // pointer for the intrusive stack.
+    {
+        // Pop the next object off the stack and visit it.
+        Object *obj = stack;
+        stack = stack->next;
+
+        assert(obj->type != OBJ_FREE);
+            // We shouldn't be able to reach any free objects.
+        assert(obj->reached);
+            // Everything on the stack has been reached.
+
+        // Push this object's children onto the stack.
+        for (ScopeIterator it = Scope_Begin(&obj->scope);
+             it != Scope_End(&obj->scope);
+             it = Scope_Next(&obj->scope, it))
+        {
+            Object *child = Scope_GetValue(&obj->scope, it);
+            if (!child->reached) {
+                child->reached = true;
+                child->next = stack;
+                stack = child;
+            }
+        }
+    }
+}
+
+BlimpGCStatistics ObjectPool_GetStats(ObjectPool *pool, Object *root)
+{
+    BlimpGCStatistics stats = {0};
+
+    MarkReachable(root);
+
+    // Reset all the reached bits. As we go, count up the total number of
+    // allocated objects, the total number of reachable objects, and the total
+    // number of objects that have ever been initialized (which is the high
+    // water mark for allocated objects).
+    for (ObjectBatch *batch = pool->batches; batch; batch = batch->next) {
+        stats.max_allocated += batch->uninitialized;
+        for (size_t i = 0; i < batch->uninitialized; ++i) {
+            batch->objects[i].reached = false;
+            if (batch->objects[i].type != OBJ_FREE) {
+                ++stats.allocated;
+            }
+            if (batch->objects[i].reached) {
+                ++stats.reachable;
+            }
+        }
+    }
+
+    return stats;
+}
+
 static Status New(Blimp *blimp, Object *parent, Object **obj)
 {
     // Try to allocate from the free list.
@@ -455,6 +523,7 @@ static Status New(Blimp *blimp, Object *parent, Object **obj)
             --batch->uninitialized;
             return Blimp_Reraise(blimp);
         }
+        (*obj)->reached = false;
     }
 
     if (parent) {

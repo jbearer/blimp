@@ -638,6 +638,36 @@ BlimpStatus BlimpObject_Eval(BlimpObject *obj, BlimpObject **ret);
 
 /**
  * @}
+ *
+ * \defgroup Garbage Collection
+ *
+ * All objects managed by a bl:mp interpreter are garbage collected, meaning
+ * they are automatically cleaned up when they are no longer reachable from
+ * managed references (that is, they have reference count 0) or from other
+ * reachable objects.
+ *
+ * For the most part, this happens transparently, without input from the user.
+ * However, there is an API that can lend some visibility into the garbage
+ * collector.
+ *
+ * @{
+ */
+
+typedef struct {
+    size_t allocated;
+        ///< The total number of objects allocated right now.
+    size_t reachable;
+        ///< The total number of currently allocated objects which are reachable
+        ///  scope of the global object.
+    size_t max_allocated;
+        ///< The largest number of objects which were ever allocated at one
+        ///  time.
+} BlimpGCStatistics;
+
+BlimpGCStatistics Blimp_GetGCStatistics(Blimp *blimp);
+
+/**
+ * @}
  * @}
  *
  * \defgroup vtable The V-Table
