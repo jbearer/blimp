@@ -1,0 +1,5 @@
+bind foo bar a;
+{foo|.}{bar|.}{!expect|a};
+bind foo bar b;
+{foo|.}{bar|.}{!expect|b};
+.

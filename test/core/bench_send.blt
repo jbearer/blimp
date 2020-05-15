@@ -1,0 +1,93 @@
+#: --skip-racket --blimp-timeout 0.5
+
+# Message send benchmark. Sends a trivial message 1 million times.
+
+bind foo.bar .;
+
+go10{:=|{do|
+    {foo|.}{.bar|.};
+    {foo|.}{.bar|.};
+    {foo|.}{.bar|.};
+    {foo|.}{.bar|.};
+    {foo|.}{.bar|.};
+    {foo|.}{.bar|.};
+    {foo|.}{.bar|.};
+    {foo|.}{.bar|.};
+    {foo|.}{.bar|.};
+    {foo|.}{.bar|.};
+    .
+}};
+
+go100{:=|{do|
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    .
+}};
+
+go1000{:=|{do|
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    .
+}};
+
+go10000{:=|{do|
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    .
+}};
+
+go100000{:=|{do|
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    .
+}};
+
+go1000000{:=|{do|
+    go100000{.get|.}{.eval|.};
+    go100000{.get|.}{.eval|.};
+    go100000{.get|.}{.eval|.};
+    go100000{.get|.}{.eval|.};
+    go100000{.get|.}{.eval|.};
+    go100000{.get|.}{.eval|.};
+    go100000{.get|.}{.eval|.};
+    go100000{.get|.}{.eval|.};
+    go100000{.get|.}{.eval|.};
+    go100000{.get|.}{.eval|.};
+    .
+}};
+
+go1000000{.get|.}{.eval|.};
+
+.

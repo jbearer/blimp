@@ -7,6 +7,11 @@ target_compile_options(blimp-test PRIVATE
 target_include_directories(blimp-test PRIVATE src)
 target_link_libraries(blimp-test blimp)
 
+if (NOT TEST_PERF_FACTOR)
+    set(TEST_PERF_FACTOR 1)
+endif()
+target_compile_options(blimp-test PRIVATE -DDEFAULT_PERF_FACTOR=${TEST_PERF_FACTOR})
+
 find_program(RACKET racket)
 
 set(BLIMP_TEST_FLAGS --verbose=test)

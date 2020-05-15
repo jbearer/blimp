@@ -29,6 +29,7 @@
 
 typedef enum {
     TEST_PASSED,
+    TEST_PERF_REGRESSION,
     TEST_FAILED,
     TEST_SKIPPED,
     NUM_RESULT_TYPES,
@@ -76,11 +77,35 @@ static void FailTest(Test *test, const char *reason)
     test->result = TEST_FAILED;
 }
 
-static void PassTest(Test *test, size_t elapsed_ms)
+static void PassTest(Test *test, size_t racket_ms, size_t blimp_ms)
 {
+    float expected_ms = test->options.perf_factor*test->options.blimp_timeout;
+
+    // Check for performance regressions.
+    if (test->options.use_blimp && blimp_ms > expected_ms)
+    {
+        printf(ANSI_YELLOW "performance regression!" ANSI_RESET
+               " %s: performance regression: %.3f > %.3f\n",
+               test->name,
+               (float)blimp_ms/1000, expected_ms/1000);
+        test->result = TEST_PERF_REGRESSION;
+        return;
+    }
+
     if (test->options.verbosity >= VERB_TEST) {
-        printf(ANSI_GREEN "passed!" ANSI_RESET " %s (%.3fs)\n",
-            test->name, (float)elapsed_ms / 1000);
+        printf(ANSI_GREEN "passed!" ANSI_RESET " %s", test->name);
+
+        // Print timing information.
+        if (test->options.use_blimp && test->options.use_racket) {
+            printf(" (%.3fs racket, %.3fs bl:mp)",
+                (float)racket_ms / 1000, (float)blimp_ms / 1000);
+        } else if (test->options.use_blimp) {
+            printf(" (%.3fs)", (float)blimp_ms / 1000);
+        } else if (test->options.use_racket) {
+            printf(" (%.3fs)", (float)racket_ms / 1000);
+        }
+
+        printf("\n");
     }
     test->result = TEST_PASSED;
 }
@@ -88,8 +113,7 @@ static void PassTest(Test *test, size_t elapsed_ms)
 #define SkipTest(test, reason, ...) \
     do { \
         if (test->options.verbosity >= VERB_TEST) { \
-            printf(ANSI_YELLOW "skipped!" ANSI_RESET " %s: " reason "\n", \
-                test->name, ##__VA_ARGS__); \
+            printf("skipped! %s: " reason "\n", test->name, ##__VA_ARGS__); \
         } \
         test->result = TEST_SKIPPED; \
     } while (0)
@@ -104,22 +128,24 @@ static void PassTest(Test *test, size_t elapsed_ms)
 //      that is not checked.
 //  ...: arguments used to format `header`
 #define PrintResults(header, results, num_tests, ...) \
-    printf(header ": %s%zu%s passed / %s%zu%s failed / %s%zu%s skipped / %zu total\n", \
+    printf(header ": %s%zu%s passed / %s%zu%s failed / %s%zu%s performance / %zu skipped / %zu total\n", \
         ##__VA_ARGS__, \
- \
+\
         results[TEST_PASSED] ? ANSI_GREEN : "", \
         results[TEST_PASSED], \
         results[TEST_PASSED] ? ANSI_RESET : "", \
- \
+\
         results[TEST_FAILED] ? ANSI_RED : "", \
         results[TEST_FAILED], \
         results[TEST_FAILED] ? ANSI_RESET : "", \
- \
-        results[TEST_SKIPPED] ? ANSI_YELLOW : "", \
+\
+        results[TEST_PERF_REGRESSION] ? ANSI_YELLOW : "", \
+        results[TEST_PERF_REGRESSION], \
+        results[TEST_PERF_REGRESSION] ? ANSI_RESET : "", \
+\
         results[TEST_SKIPPED], \
-        results[TEST_SKIPPED] ? ANSI_RESET : "", \
- \
-         num_tests \
+\
+        num_tests \
     )
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -143,6 +169,9 @@ static void RunTest(Test *test)
     BlimpExpr *expr;
     if (Blimp_Parse(test->blimp, test->stream, &expr) != BLIMP_OK) {
         FailTest(test, "failed to parse");
+        if (test->options.verbosity >= VERB_FAILURES) {
+            Blimp_DumpLastError(test->blimp, stdout);
+        }
         goto cleanup;
     }
 
@@ -152,7 +181,9 @@ static void RunTest(Test *test)
         Blimp_DumpExpr(command, expr);
         fprintf(command, " M v))");
         char *output = Racket_CommitCommand(
-            test->racket, test->options.racket_timeout);
+            test->racket,
+            test->options.perf_factor*test->options.racket_timeout
+        );
         if (!output) {
             FailTest(test, "Racket error: expected output");
             goto cleanup_parsed;
@@ -171,6 +202,12 @@ static void RunTest(Test *test)
         free(output);
     }
 
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    size_t racket_ns = (end  .tv_sec*1000000000 + end  .tv_nsec) -
+                       (start.tv_sec*1000000000 + start.tv_nsec);
+
+    clock_gettime(CLOCK_MONOTONIC, &start);
+
     BlimpObject *result = NULL;
     if (test->options.use_blimp) {
         if (Blimp_Eval(
@@ -186,10 +223,9 @@ static void RunTest(Test *test)
     }
 
     clock_gettime(CLOCK_MONOTONIC, &end);
-
-    size_t elapsed_ns = (end  .tv_sec*1000000000 + end  .tv_nsec) -
-                        (start.tv_sec*1000000000 + start.tv_nsec);
-    PassTest(test, elapsed_ns/1000000);
+    size_t blimp_ns = (end  .tv_sec*1000000000 + end  .tv_nsec) -
+                      (start.tv_sec*1000000000 + start.tv_nsec);
+    PassTest(test, racket_ns/1000000, blimp_ns/1000000);
 
     if (result) BlimpObject_Release(result);
 cleanup_parsed:
@@ -268,15 +304,50 @@ static void PrintUsage(FILE *f, int argc, char **argv)
     fprintf(f, "    --skip-blimp\n");
     fprintf(f, "        Do not run bl:mp evaluation tests.\n");
     fprintf(f, "\n");
+    fprintf(f, "    --blimp-timeout SECONDS\n");
+    fprintf(f, "        Consider a test failed if it takes more than SECONDS to evaluate\n");
+    fprintf(f, "        in the bl:mp interpreter. SECONDS may be an integer or floating\n");
+    fprintf(f, "        point literal. The default is 5.\n");
+    fprintf(f, "\n");
     fprintf(f, "    --racket-timeout SECONDS\n");
     fprintf(f, "        Consider a test failed if it takes more than SECONDS to evaluate\n");
     fprintf(f, "        in the Redex semantic model. SECONDS may be an integer or floating\n");
     fprintf(f, "        point literal. The default is 5.\n");
     fprintf(f, "\n");
+    fprintf(f, "    --perf-factor FACTOR\n");
+    fprintf(f, "        Multiply timeouts by FACTOR. For example, if a test has a blimp-timeout\n");
+    fprintf(f, "        of 1s, but perf-factor is 1.5, then the test will only fail if it takes\n");
+    fprintf(f, "        more than 1.5 seconds to execute.\n");
+    fprintf(f, "\n");
+    fprintf(f, "        This can be used to account for variations in the underlying performance\n");
+    fprintf(f, "        of the system where the tests are running. For example, if the test\n");
+    fprintf(f, "        timeouts were calibrated on a 2GHz machine, but you want to run them on\n");
+    fprintf(f, "        a 1GHz machine, you might use --perf-factor=2. Or, if you want to run\n");
+    fprintf(f, "        the tests in a Debug configuration when they were calibrated for an\n");
+    fprintf(f, "        optimized configuration, you can use an appropriate perf-factor.\n");
+    fprintf(f, "\n");
+    fprintf(f, "        The recommended way to use this is to determine the appropriate\n");
+    fprintf(f, "        perf-factor for your setup (hardware and build configuration) using a\n");
+    fprintf(f, "        known-good bl:mp build. Then persist this factor using\n");
+    fprintf(f, "            cmake -DTEST_PERF_FACTOR=whatever ..\n");
+    fprintf(f, "        in the build directory. Repeat for each build configuration.\n");
+    fprintf(f, "\n");
+    fprintf(f, "        All tests should be calibrated against the same perf-factor. If you\n");
+    fprintf(f, "        needed to set a perf-factor for your setup, you should take this into\n");
+    fprintf(f, "        account when annotating a new benchmark with --blimp-timeout or when\n");
+    fprintf(f, "        updating an existing one. For example, if your perf-factor is 1.5 and\n");
+    fprintf(f, "        a benchmark runs in 3s with your setup, you should annotate it with\n");
+    fprintf(f, "        --blimp-timeout=2.\n");
+    fprintf(f, "\n");
+    fprintf(f, "        FACTOR may be a positive integer or floating point literal. The default\n");
+    fprintf(f, "        is 1, unless it is overridden by setting the CMake variable\n");
+    fprintf(f, "        TEST_PERF_FACTOR.\n");
+    fprintf(f, "\n");
     fprintf(f, "    -v, --verbose [LEVEL]\n");
     fprintf(f, "        Show verbose output at LEVEL. LEVEL may be one of the following\n");
     fprintf(f, "        (each named verbosity level implies the level below it):\n");
     fprintf(f, "         * debug: show output useful for debugging the test runner\n");
+    fprintf(f, "         * stats: show detailed statistics during benchmark tests\n");
     fprintf(f, "         * test: show output for each test run\n");
     fprintf(f, "         * failures: show output only for tests which fail\n");
     fprintf(f, "         * group: show output for each group of tests\n");
@@ -316,6 +387,8 @@ typedef enum {
     FLAG_SKIP_RACKET,
     FLAG_SKIP_BLIMP,
     FLAG_RACKET_TIMEOUT,
+    FLAG_BLIMP_TIMEOUT,
+    FLAG_PERF_FACTOR,
 } Flag;
 
 const Options default_options = {
@@ -324,6 +397,10 @@ const Options default_options = {
     .use_racket     = true,
     .use_blimp      = true,
     .racket_timeout = 5000,
+    .blimp_timeout  = 5000,
+    .perf_factor    = DEFAULT_PERF_FACTOR,
+        // This default is defined by CMake, so that it can be overridden
+        // for each build configuration.
 };
 
 // Parse the options in the given command line, and store the result in the
@@ -349,6 +426,8 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
         {"skip-racket",    no_argument,       NULL, FLAG_SKIP_RACKET },
         {"skip-blimp",     no_argument,       NULL, FLAG_SKIP_BLIMP },
         {"racket-timeout", required_argument, NULL, FLAG_RACKET_TIMEOUT },
+        {"blimp-timeout",  required_argument, NULL, FLAG_BLIMP_TIMEOUT },
+        {"perf-factor",    required_argument, NULL, FLAG_PERF_FACTOR },
         {"verbose",        optional_argument, NULL, FLAG_VERBOSE },
         {"help",           no_argument,       NULL, FLAG_HELP },
         {0, 0, 0, 0},
@@ -388,6 +467,35 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
                 break;
             }
 
+            case FLAG_BLIMP_TIMEOUT: {
+                char *invalid;
+                float seconds = strtof(optarg, &invalid);
+                if (*invalid) {
+                    fprintf(stderr,
+                        "blimp-timeout: argument must be a number\n");
+                    PrintUsage(stderr, argc, argv);
+                    *status = EXIT_FAILURE;
+                    return true;
+                }
+                options->blimp_timeout = seconds*1000;
+
+                break;
+            }
+
+            case FLAG_PERF_FACTOR: {
+                char *invalid;
+                float factor = strtof(optarg, &invalid);
+                if (*invalid) {
+                    fprintf(stderr, "perf-factor: argument must be a number\n");
+                    PrintUsage(stderr, argc, argv);
+                    *status = EXIT_FAILURE;
+                    return true;
+                }
+                options->perf_factor = factor;
+
+                break;
+            }
+
             case FLAG_VERBOSE:
                 if (optarg == NULL) {
                     options->verbosity = VERB_GROUP;
@@ -411,6 +519,8 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
                 // Try to parse the argument as the name of a verbosity level.
                 if (strcmp(optarg, "debug") == 0) {
                     options->verbosity = VERB_DEBUG;
+                } else if (strcmp(optarg, "stats") == 0) {
+                    options->verbosity = VERB_STATS;
                 } else if (strcmp(optarg, "test") == 0) {
                     options->verbosity = VERB_TEST;
                 } else if (strcmp(optarg, "failures") == 0) {
@@ -530,7 +640,7 @@ static Suite *FindTests(const Options *options)
             Test *test = malloc(sizeof(Test));
             test->name = strdup(test_de->d_name);
             test->options = group->options;
-            test->blimp = TestBlimp_New(NULL);
+            test->blimp = TestBlimp_New(&test->options);
             FILE *test_file = fdopen(
                 openat(dirfd(group_dir), test_de->d_name, O_RDONLY), "r");
             Blimp_Check(Blimp_OpenFileStream(
