@@ -25,7 +25,7 @@
 // single expression in a sequence. We also add an additional production to
 // allow parenthesized expressions.
 //
-//  <expr> ::= <stmt> ';' <expr>
+//  <expr> ::= <expr> ';' <stmt>
 //          |  <stmt>
 //
 //  <stmt> ::= <stmt> <term>
@@ -38,9 +38,14 @@
 //
 // With this extended grammar, it is possible to see that:
 //  * Precedence order is "bind", "send", "sequence"
-//  * Send is left-associative (this is required by bl:mp semantics)
-//  * Sequence is right-associative (this is arbitrary, as ; is semantically
-//    associativity, but right-associativity is easier to parse)
+//  * Send is left-associative. This is required by bl:mp semantics.
+//  * Sequence is left-associative. This is arbitrary, as ; is semantically
+//    associativity. Left-associativity is easier to parse in an iterative way.
+//    If we did the naive right-associative recursive descent parsing here, we
+//    could overflow the stack when parsing long programs. Note that stack
+//    overflow is only really a concern from the <expr> non-terminal, because
+//    most programs consist of many fairly small <stmt>s and <term>s strung
+//    together with ';' into a very large <expr>.
 //
 // The implementation of the parser is divided into three sub-components:
 //  * I/O streams
@@ -59,12 +64,15 @@
 //
 // The parser is, for the most part, straight-forward. It requests tokens from
 // the lexer one at a time and converts the token stream into an Expr using a
-// recursive-descent algorithm. There is, however, one production that requires
+// recursive-descent algorithm. There are, however, two production that require
 // special handling: the left recursion in the <stmt> production for "send"
 // (<stmt> <term>) cannot be handled by naive recursive-descent. We handle this
 // case with an ad hoc algorithm which parses as many <term>s as it can from
-// left to right, folding them into a "send" <expr> as it goes.
+// left to right, folding them into a "send" <expr> as it goes. We handle the
+// left-recursion in <expr> similarly, parsing as many <expr>s as we can and
+// folding them into a ";" <expr> as we go.
 //
+
 #include <assert.h>
 #include <ctype.h>
 #include <errno.h>
@@ -561,40 +569,46 @@ static Status ParseExpr(Lexer *lex, Expr **expr)
 {
     // The <expr> non-terminal consists of two productions:
     //
-    //  <expr> ::= <stmt> ';' <expr>
+    //  <expr> ::= <expr> ';' <stmt>
     //          |  <stmt>
     //
-    // Either way, we parse a statement first.
-    Expr *fst;
-    TRY(ParseStmt(lex, &fst));
+    // The second production is simple: we just delegate to ParseStmt. The first
+    // production is the tricky left-recursive case. We handle this production
+    // by parsing statements one at a time, left-to-right, and folding them into
+    // an expression as we go. In either case, though, we must first parse at
+    // least one statement.
+    TRY(ParseStmt(lex, expr));
 
-    // Now we look for either a semicolon (first production). If we don't get
-    // it, we just stop parsing (second production).
-    Token tok;
-    TRY(Lexer_Peek(lex, &tok));
-    switch (tok.type) {
-        case TOK_SEMI: {
-            TRY(Lexer_Consume(lex, tok.type));
+    // Now we look ahead to see if the next token is a semicolon. If it is, we
+    // parse another statement and add it to the sequence expression we're
+    // building up. We keep doing this until we hit something other than a
+    // semicolon.
+    while (true) {
+        Token tok;
+        TRY(Lexer_Peek(lex, &tok));
 
-            // This is a sequence expression. Parse the right-hand side.
-            Expr *snd;
-            TRY(ParseExpr(lex, &snd));
-
-            // Construct a new expression representing the sequence `fst ; snd`.
-            TRY(Malloc(lex->blimp, sizeof(Expr), expr));
-            (*expr)->tag = EXPR_SEQ;
-            (*expr)->refcount = 1;
-            (*expr)->range = (SourceRange) { fst->range.start, snd->range.end };
-            (*expr)->seq.fst = fst;
-            (*expr)->seq.snd = snd;
-
+        if (tok.type != TOK_SEMI) {
             return BLIMP_OK;
         }
 
-        default:
-            // This is just an expression by itself, return it.
-            *expr = fst;
-            return BLIMP_OK;
+        TRY(Lexer_Consume(lex, tok.type));
+            // Consume the peeked token, comitting to the ';' production.
+
+        Expr *fst = *expr;
+            // Save the current expression in `fst`, which will be the left-hand
+            // side of the new sequence expression we're about to build.
+
+        Expr *snd;
+        TRY(ParseStmt(lex, &snd));
+            // Parse the next statement in the sequence.
+
+        // Construct a new expression representing the sequence `fst ; snd`.
+        TRY(Malloc(lex->blimp, sizeof(Expr), expr));
+        (*expr)->tag = EXPR_SEQ;
+        (*expr)->refcount = 1;
+        (*expr)->range = (SourceRange) { fst->range.start, snd->range.end };
+        (*expr)->seq.fst = fst;
+        (*expr)->seq.snd = snd;
     }
 }
 
