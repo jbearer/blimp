@@ -3,10 +3,6 @@
 #include "internal/symbol.h"
 #include "internal/vtable.h"
 
-const BlimpOptions DEFAULT_BLIMP_OPTIONS = {
-    .object_pool_batch_size = (1ull<<20), // 1MB
-};
-
 Blimp *Blimp_New(const BlimpOptions *options)
 {
     if (options == NULL) {

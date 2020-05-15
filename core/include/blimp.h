@@ -42,6 +42,28 @@ typedef struct {
 
 extern const BlimpOptions DEFAULT_BLIMP_OPTIONS;
 
+extern const char *BLIMP_OPTIONS_USAGE;
+    ///< A string describing the valid option strings and the settings they
+    ///  control. This is essentially a usage string for Blimp_ParseOption().
+
+/**
+ * \brief Parse the option specified by a string.
+ *
+ * If the option string is valid, `options` is updated with the settings
+ * specified by the string, and the return value is `NULL`. If the string is not
+ * a valid option string, the result is a pointer to a statically allocated
+ * error message string, and `options` is unchanged.
+ *
+ * Option strings can take one of two forms:
+ *  * For boolean options, the name of the option with underscores replaced by
+ *    hyphens enables the option. For example, "option-name" enables
+ *    `option_name`. A "no-" prefix disable the option. So "no-option-name"
+ *    disables "option_name".
+ *  * For scalar option, a value must be given, separated from the name of the
+ *    option by "=". For example, "option-name=42" sets `option_name` to 42.
+ */
+const char *Blimp_ParseOption(const char *option, BlimpOptions *options);
+
 /**
  * \brief Create a new `bl:mp` interpreter.
  *

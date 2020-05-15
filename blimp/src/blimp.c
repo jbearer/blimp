@@ -33,13 +33,15 @@ static void PrintUsage(FILE *f, int argc, char *const *argv)
     fprintf(f, "    Evaluate the bl:mp program contained in FILE.\n");
     fprintf(f, "\n");
     fprintf(f, "Options:\n");
+    fprintf(f, "    -f [no-]OPTION[=VALUE]\n");
+    fprintf(f, "        Specify values for tunable interpreter properties. See\n");
+    fprintf(f, "        below for a list of interpreter options.\n");
+    fprintf(f, "\n");
     fprintf(f, "    -a, --action\n");
     fprintf(f, "        Set the action to perform on the input program:\n");
     fprintf(f, "            * eval: evaluate the program and print the result\n");
     fprintf(f, "            * dump: dump the parsed input expression\n");
     fprintf(f, "        The default is `eval'.\n");
-    fprintf(f, "\n");
-    fprintf(f, "    --object-pool-batch-size\n");
     fprintf(f, "\n");
     fprintf(f, "    --history-file FILE\n");
     fprintf(f, "        Load and save interactive history to and from FILE.\n");
@@ -50,6 +52,9 @@ static void PrintUsage(FILE *f, int argc, char *const *argv)
     fprintf(f, "\n");
     fprintf(f, "    -v, --version\n");
     fprintf(f, "        Print version information\n");
+    fprintf(f, "\n");
+    fprintf(f, "Interpreter options:\n");
+    fprintf(f, "%s\n", BLIMP_OPTIONS_USAGE);
 }
 
 static bool DoAction(Blimp *blimp, const BlimpExpr *expr, Action action)
@@ -228,6 +233,7 @@ static int EvalMain(Blimp *blimp, const char *path, const Options *options)
 }
 
 typedef enum {
+    FLAG_BLIMP_OPTION       = 'f',
     FLAG_IMPORT_PATH        = 'I',
     FLAG_ACTION             = 'a',
     FLAG_HELP               = 'h',
@@ -240,7 +246,6 @@ typedef enum {
         // greater than the value of the sentinel, which should guarantee that
         // all the flags have unique values.
 
-    FLAG_OBJECT_POOL_BATCH_SIZE,
     FLAG_HISTORY_FILE,
 } Flag;
 
@@ -249,7 +254,6 @@ int main(int argc, char *const *argv)
     struct option flags[] = {
         {"import-path",             required_argument,  NULL, FLAG_IMPORT_PATH},
         {"action",                  required_argument,  NULL, FLAG_ACTION},
-        {"object-pool-batch-size",  required_argument,  NULL, FLAG_OBJECT_POOL_BATCH_SIZE},
         {"history-file",            required_argument,  NULL, FLAG_HISTORY_FILE},
         {"help",                    no_argument,        NULL, FLAG_HELP},
         {"version",                 no_argument,        NULL, FLAG_VERSION},
@@ -260,8 +264,19 @@ int main(int argc, char *const *argv)
     DefaultOptions(&options);
 
     int option, i = 1;
-    while ((option = getopt_long(argc, argv, "hv", flags, &i)) != -1) {
+    while ((option = getopt_long(argc, argv, "f:hv", flags, &i)) != -1) {
         switch (option) {
+            case FLAG_BLIMP_OPTION: {
+                const char *error = Blimp_ParseOption(
+                    optarg, &options.blimp_options);
+                if (error) {
+                    fprintf(stderr, "%s\n", error);
+                    return EXIT_FAILURE;
+                }
+
+                break;
+            }
+
             case FLAG_IMPORT_PATH:
                 ++options.import_path_len;
                 options.import_path = realloc(
@@ -286,19 +301,6 @@ int main(int argc, char *const *argv)
                     return EXIT_FAILURE;
                 }
                 break;
-
-            case FLAG_OBJECT_POOL_BATCH_SIZE: {
-                char *invalid;
-                options.blimp_options.object_pool_batch_size = strtol(
-                    optarg, &invalid, 0);
-                if (!*optarg || *invalid) {
-                    fprintf(stderr,
-                        "object-pool-batch-size: argument must be an integer\n");
-                    PrintUsage(stderr, argc, argv);
-                    return EXIT_FAILURE;
-                }
-                break;
-            }
 
             case FLAG_HISTORY_FILE: {
                 options.history_file = optarg;
@@ -326,9 +328,9 @@ int main(int argc, char *const *argv)
 
     Blimp_Check(Module_Init(blimp, &options));
 
-    if (i == argc) {
+    if (optind == argc) {
         return ReplMain(blimp, &options);
-    } else if (i + 1 == argc) {
+    } else if (optind + 1 == argc) {
         return EvalMain(blimp, argv[i], &options);
     } else {
         PrintUsage(stderr, argc, argv);
