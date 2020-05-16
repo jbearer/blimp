@@ -11,7 +11,8 @@
 #define TEST_BLIMP_H
 
 #include <blimp.h>
+#include "options.h"
 
-Blimp *TestBlimp_New(const BlimpOptions *options);
+Blimp *TestBlimp_New(const Options *options);
 
 #endif

@@ -1,0 +1,118 @@
+#: --skip-racket --blimp-timeout 1.5
+
+# Tests garbage collection of cycles which get broken by the user. Creates 100k
+# 10-element cycles, and then breaks each cycle.
+
+bind node.set_next (
+    next{:=|that{.get|.}{.eval|.}}
+);
+
+go1{:=|{do|
+    # Create 10 nodes.
+    1{:=|{node|.}};
+    2{:=|{node|.}};
+    3{:=|{node|.}};
+    4{:=|{node|.}};
+    5{:=|{node|.}};
+    6{:=|{node|.}};
+    7{:=|{node|.}};
+    8{:=|{node|.}};
+    9{:=|{node|.}};
+    10{:=|{node|.}};
+
+    # Link them into a cycle.
+    1{.get|.}{.set_next|2{.get|.}};
+    2{.get|.}{.set_next|3{.get|.}};
+    3{.get|.}{.set_next|4{.get|.}};
+    4{.get|.}{.set_next|5{.get|.}};
+    5{.get|.}{.set_next|6{.get|.}};
+    6{.get|.}{.set_next|7{.get|.}};
+    7{.get|.}{.set_next|8{.get|.}};
+    8{.get|.}{.set_next|9{.get|.}};
+    9{.get|.}{.set_next|10{.get|.}};
+    10{.get|.}{.set_next|1{.get|.}};
+
+    # Break the cycle.
+    10{.get|.}{.set_next|{nil|.}};
+
+    .
+}};
+
+go10{:=|{do|
+    go1{.get|.}{.eval|.};
+    go1{.get|.}{.eval|.};
+    go1{.get|.}{.eval|.};
+    go1{.get|.}{.eval|.};
+    go1{.get|.}{.eval|.};
+    go1{.get|.}{.eval|.};
+    go1{.get|.}{.eval|.};
+    go1{.get|.}{.eval|.};
+    go1{.get|.}{.eval|.};
+    go1{.get|.}{.eval|.};
+    .
+}};
+
+go100{:=|{do|
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    .
+}};
+
+go1000{:=|{do|
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    .
+}};
+
+go10000{:=|{do|
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    .
+}};
+
+go100000{:=|{do|
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    .
+}};
+
+go100000{.get|.}{.eval|.};
+
+{gc|.}{!print_stats|.};
+
+{gc|.}{!allocated|.}{!expect|{gc|.}{!reachable|.}};
+    # Since eventually all cycles are broken, reference counting should clean up
+    # perfectly. The only allocated objects should be reachable ones.
+.

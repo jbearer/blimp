@@ -112,7 +112,7 @@ static void PassTest(Test *test, size_t racket_ms, size_t blimp_ms)
 
 #define SkipTest(test, reason, ...) \
     do { \
-        if (test->options.verbosity >= VERB_TEST) { \
+        if (test->options.verbosity >= VERB_SKIPPED) { \
             printf("skipped! %s: " reason "\n", test->name, ##__VA_ARGS__); \
         } \
         test->result = TEST_SKIPPED; \
@@ -348,6 +348,7 @@ static void PrintUsage(FILE *f, int argc, char **argv)
     fprintf(f, "        (each named verbosity level implies the level below it):\n");
     fprintf(f, "         * debug: show output useful for debugging the test runner\n");
     fprintf(f, "         * stats: show detailed statistics during benchmark tests\n");
+    fprintf(f, "         * skipped: show tests which are skipped due to filtering\n");
     fprintf(f, "         * test: show output for each test run\n");
     fprintf(f, "         * failures: show output only for tests which fail\n");
     fprintf(f, "         * group: show output for each group of tests\n");
@@ -521,6 +522,8 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
                     options->verbosity = VERB_DEBUG;
                 } else if (strcmp(optarg, "stats") == 0) {
                     options->verbosity = VERB_STATS;
+                } else if (strcmp(optarg, "skipped") == 0) {
+                    options->verbosity = VERB_SKIPPED;
                 } else if (strcmp(optarg, "test") == 0) {
                     options->verbosity = VERB_TEST;
                 } else if (strcmp(optarg, "failures") == 0) {

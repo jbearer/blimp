@@ -10,6 +10,7 @@ typedef enum {
     VERB_GROUP,
     VERB_FAILURES,
     VERB_TEST,
+    VERB_SKIPPED,
     VERB_STATS,
     VERB_DEBUG,
     MAX_VERBOSITY,

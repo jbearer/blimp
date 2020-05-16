@@ -477,13 +477,13 @@ BlimpGCStatistics ObjectPool_GetStats(ObjectPool *pool, Object *root)
     for (ObjectBatch *batch = pool->batches; batch; batch = batch->next) {
         stats.max_allocated += batch->uninitialized;
         for (size_t i = 0; i < batch->uninitialized; ++i) {
-            batch->objects[i].reached = false;
             if (batch->objects[i].type != OBJ_FREE) {
                 ++stats.allocated;
             }
             if (batch->objects[i].reached) {
                 ++stats.reachable;
             }
+            batch->objects[i].reached = false;
         }
     }
 

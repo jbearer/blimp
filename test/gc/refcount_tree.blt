@@ -1,0 +1,141 @@
+#: --skip-racket --blimp-timeout 1.1
+
+# Tests garbage collection of trees, one of the most well-behaved data
+# structures, since every node is referenced exactly once, by its parent.
+
+bind tree.init (
+    this{.get|.}{.eval|.};
+    this{.get|.}
+);
+
+# Depth-first traversal, just so that we actually use the trees we make.
+bind nil.dfs .;
+bind tree.dfs (
+    left{.get|.}{.dfs|.};
+    right{.get|.}{.dfs|.};
+    value{.get|.}
+);
+
+make_one_tree{:=|{do|
+    # We'll build the following tree:
+    #                   a
+    #                  / \
+    #                 b   c
+    #                /
+    #               d
+    # starting from the leaves and building up.
+
+    # Level 0
+    d {:=|{tree|
+        value{:=|d};
+        left{:=|{nil|.}};
+        right{:=|{nil|.}}
+    }{.init|.}};
+
+    # Level 1
+    b {:=|{tree|
+        value{:=|b};
+        left{:=|d{.get|.}};
+        right{:=|{nil|.}}
+    }{.init|.}};
+    c {:=|{tree|
+        value{:=|c};
+        left{:=|{nil|.}};
+        right{:=|{nil|.}}
+    }{.init|.}};
+
+    # Level 2 (root)
+    a {:=|{tree|
+        value{:=|a};
+        left{:=|b{.get|.}};
+        right{:=|c{.get|.}}
+    }{.init|.}};
+
+    a{.get|.}{.dfs|.}
+}};
+
+make_ten_trees{:=|{do|
+    make_one_tree{.get|.}{.eval|.};
+    make_one_tree{.get|.}{.eval|.};
+    make_one_tree{.get|.}{.eval|.};
+    make_one_tree{.get|.}{.eval|.};
+    make_one_tree{.get|.}{.eval|.};
+    make_one_tree{.get|.}{.eval|.};
+    make_one_tree{.get|.}{.eval|.};
+    make_one_tree{.get|.}{.eval|.};
+    make_one_tree{.get|.}{.eval|.};
+    make_one_tree{.get|.}{.eval|.};
+    .
+}};
+
+make_one_hundred_trees{:=|{do|
+    make_ten_trees{.get|.}{.eval|.};
+    make_ten_trees{.get|.}{.eval|.};
+    make_ten_trees{.get|.}{.eval|.};
+    make_ten_trees{.get|.}{.eval|.};
+    make_ten_trees{.get|.}{.eval|.};
+    make_ten_trees{.get|.}{.eval|.};
+    make_ten_trees{.get|.}{.eval|.};
+    make_ten_trees{.get|.}{.eval|.};
+    make_ten_trees{.get|.}{.eval|.};
+    make_ten_trees{.get|.}{.eval|.};
+    .
+}};
+
+make_one_thousand_trees{:=|{do|
+    make_one_hundred_trees{.get|.}{.eval|.};
+    make_one_hundred_trees{.get|.}{.eval|.};
+    make_one_hundred_trees{.get|.}{.eval|.};
+    make_one_hundred_trees{.get|.}{.eval|.};
+    make_one_hundred_trees{.get|.}{.eval|.};
+    make_one_hundred_trees{.get|.}{.eval|.};
+    make_one_hundred_trees{.get|.}{.eval|.};
+    make_one_hundred_trees{.get|.}{.eval|.};
+    make_one_hundred_trees{.get|.}{.eval|.};
+    make_one_hundred_trees{.get|.}{.eval|.};
+    .
+}};
+
+make_ten_thousand_trees{:=|{do|
+    make_one_thousand_trees{.get|.}{.eval|.};
+    make_one_thousand_trees{.get|.}{.eval|.};
+    make_one_thousand_trees{.get|.}{.eval|.};
+    make_one_thousand_trees{.get|.}{.eval|.};
+    make_one_thousand_trees{.get|.}{.eval|.};
+    make_one_thousand_trees{.get|.}{.eval|.};
+    make_one_thousand_trees{.get|.}{.eval|.};
+    make_one_thousand_trees{.get|.}{.eval|.};
+    make_one_thousand_trees{.get|.}{.eval|.};
+    make_one_thousand_trees{.get|.}{.eval|.};
+    .
+}};
+
+make_one_hundred_thousand_trees{:=|{do|
+    make_ten_thousand_trees{.get|.}{.eval|.};
+    make_ten_thousand_trees{.get|.}{.eval|.};
+    make_ten_thousand_trees{.get|.}{.eval|.};
+    make_ten_thousand_trees{.get|.}{.eval|.};
+    make_ten_thousand_trees{.get|.}{.eval|.};
+    make_ten_thousand_trees{.get|.}{.eval|.};
+    make_ten_thousand_trees{.get|.}{.eval|.};
+    make_ten_thousand_trees{.get|.}{.eval|.};
+    make_ten_thousand_trees{.get|.}{.eval|.};
+    make_ten_thousand_trees{.get|.}{.eval|.};
+    .
+}};
+
+make_one_hundred_thousand_trees{.get|.}{.eval|.};
+
+{gc|.}{!print_stats|.};
+
+{gc|.}{!allocated|.}{!expect|{gc|.}{!reachable|.}};
+    # Since this benchmark only creates trees, reference counting should clean
+    # up perfectly. The only allocated objects should be reachable ones.
+{gc|.}{!allocated|.}{!expect_percent|{5|{gc|.}{!high_water_mark|.}}};
+    # Furthermore, we should have been freeing each tree as we built it, so the
+    # amount allocated now (one tree's worth) should account for almost all of
+    # the high water mark. We'll say 95% to leave wiggle room for constant
+    # overhead, such as the make_*_trees names which take up a constant amount
+    # of space in the global scope.
+.
+

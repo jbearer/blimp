@@ -1,0 +1,106 @@
+#: --skip-racket --blimp-timeout 0.9
+
+# Tests garbage collection of self-cycles. Creates 1 million objects, each of
+# which has two references to itself: the special `this` reference, and a user-
+# created `self` reference.
+
+bind test.go1 (
+    self{:=|this{.get|.}}
+);
+
+go10{:=|{do|
+    {test|.}{.go1|.};
+    {test|.}{.go1|.};
+    {test|.}{.go1|.};
+    {test|.}{.go1|.};
+    {test|.}{.go1|.};
+    {test|.}{.go1|.};
+    {test|.}{.go1|.};
+    {test|.}{.go1|.};
+    {test|.}{.go1|.};
+    {test|.}{.go1|.};
+    .
+}};
+
+go100{:=|{do|
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    .
+}};
+
+go1000{:=|{do|
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    .
+}};
+
+go10000{:=|{do|
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    .
+}};
+
+go100000{:=|{do|
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    .
+}};
+
+go1000000{:=|{do|
+    go100000{.get|.}{.eval|.};
+    go100000{.get|.}{.eval|.};
+    go100000{.get|.}{.eval|.};
+    go100000{.get|.}{.eval|.};
+    go100000{.get|.}{.eval|.};
+    go100000{.get|.}{.eval|.};
+    go100000{.get|.}{.eval|.};
+    go100000{.get|.}{.eval|.};
+    go100000{.get|.}{.eval|.};
+    go100000{.get|.}{.eval|.};
+    .
+}};
+
+go1000000{.get|.}{.eval|.};
+
+{gc|.}{!collect|.};
+{gc|.}{!print_stats|.};
+
+{gc|.}{!allocated|.}{!expect|{gc|.}{!reachable|.}};
+    # Reference counting with entanglement is supposed to be able to perfectly
+    # clean up self-cycles. The only allocated objects should be reachable ones.
+{gc|.}{!reachable|.}{!expect|7};
+    # Furthermore, if we cleaned everything up properly, the only reachable
+    # objects should be the global object and the six go* functions we bound
+.

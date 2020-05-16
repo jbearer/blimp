@@ -1,0 +1,122 @@
+#: --skip-racket --blimp-timeout 0.5
+
+# Tests garbage collection of local variables; that is, objects which are
+# referenced by a parent object (or a parent of a parent, etc.). These seem easy
+# to collect, since the references are all fairly local and acyclic. However,
+# these kinds of references create cycles with the internal parent pointers,
+# making collection a bit tricky.
+
+bind set symbol (
+    this{.get|.}{.eval|.}{:=|that{.get|.}}
+);
+
+bind locals.create_locals_in_method (
+    method_direct_local{:=|uninitialized};
+    {set|method_direct_local} bar;
+    method_nested_local{:=|foo};
+    .
+);
+
+go1{:=|{do|
+    scope {:=| {locals|
+        direct_local{:=|uninitialized};
+        {set|direct_local} bar;
+            # Create a local variable which is an immediate child of this block.
+        nested_local{:=|foo};
+            # Create a local variable which is a descendant, but not an
+            # immediate child, of the owning object: foo is a child of the :=
+            # block, which is a child of this object.
+        .
+    }};
+    scope{.get|.}{.eval|.};
+    scope{.get|.}{.create_locals_in_method|.};
+
+    scope{:=|.};
+        # Get rid of our reference to `scope`, which should free its locals.
+    .
+}};
+
+go10{:=|{do|
+    go1{.get|.}{.eval|.};
+    go1{.get|.}{.eval|.};
+    go1{.get|.}{.eval|.};
+    go1{.get|.}{.eval|.};
+    go1{.get|.}{.eval|.};
+    go1{.get|.}{.eval|.};
+    go1{.get|.}{.eval|.};
+    go1{.get|.}{.eval|.};
+    go1{.get|.}{.eval|.};
+    go1{.get|.}{.eval|.};
+    .
+}};
+
+go100{:=|{do|
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    go10{.get|.}{.eval|.};
+    .
+}};
+
+go1000{:=|{do|
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    go100{.get|.}{.eval|.};
+    .
+}};
+
+go10000{:=|{do|
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    go1000{.get|.}{.eval|.};
+    .
+}};
+
+go100000{:=|{do|
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    go10000{.get|.}{.eval|.};
+    .
+}};
+
+go100000{.get|.}{.eval|.};
+
+{gc|.}{!print_stats|.};
+
+{gc|.}{!allocated|.}{!expect|{gc|.}{!reachable|.}};
+    # Since this benchmark only creates local variables with no cycles,
+    # reference counting should clean up perfectly. The only allocated objects
+    # should be reachable ones.
+{gc|.}{!reachable|.}{!expect|8};
+    # Furthermore, if we cleaned everything up properly, the only reachable
+    # objects should be the global object, the six go* functions we bound, and
+    # the `scope` local which is bound in the last object bound to `go1`, which
+    # should just point to `.`.
+.
