@@ -1,4 +1,4 @@
-#: --skip-racket --blimp-timeout 0.9
+#: --skip-racket --blimp-timeout 0.9 -fno-gc-tracing
 
 # Tests garbage collection of self-cycles. Creates 1 million objects, each of
 # which has two references to itself: the special `this` reference, and a user-

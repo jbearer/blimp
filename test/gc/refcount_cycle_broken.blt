@@ -1,4 +1,4 @@
-#: --skip-racket --blimp-timeout 1.5
+#: --skip-racket --blimp-timeout 1.5 -fno-gc-tracing
 
 # Tests garbage collection of cycles which get broken by the user. Creates 100k
 # 10-element cycles, and then breaks each cycle.

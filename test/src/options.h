@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdlib.h>
 
+#include <blimp.h>
+
 typedef enum {
     VERB_NONE,
     VERB_SUITE,
@@ -24,6 +26,7 @@ typedef struct {
     size_t racket_timeout;  // ms
     size_t blimp_timeout;   // ms
     float perf_factor;
+    BlimpOptions blimp_options;
 } Options;
 
 #endif

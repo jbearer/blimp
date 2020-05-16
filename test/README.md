@@ -16,6 +16,7 @@ The `bl:mp` test runner, `blimp-test`, interprets "`bl:mp` test" files, denoted 
 |  `gc`   | `!allocated`    |     _    | Returns a symbol representing the number of currently allocated objects.
 |  `gc`   | `!reachable`    |     _    | Returns a symbol representing the number of objects which are reachable from the global object.
 |  `gc`   | `!high_water_mark` |     _    | Returns a symbol representing the maximum number of objects which were ever allocated simultaneously.
+|  `gc`   | `!expect_clean` |    _     | Checks that all allocated objects are reachable.
 |  `gc`   | `!collect`     |     _     | Triggers a garbage collection sweep.
 
 The semantics of this extended `bl:mp` language are documented in `test-semantics.rkt`, which extends the `bl:mp-machine` semantics from `docs/semantics.rkt` to interpret these two additional primitives.
@@ -31,4 +32,4 @@ The `blimp-test` runner can automatically discover tests in immediate subdirecto
 ## test options
 The `blimp-test` runner has a number of command line arguments which can be used to control how the tests are executed. For example, `--filter` controls which tests are run, `--skip-racket` controls whether to run the tests through the Racket semantic model, and so on. Use `blimp-test --help` for a complete list.
 
-Individual tests can also override the options passed via the command line using a special pragma: if the first line of a `.blt` file starts with `#:`, the test runner will interpret the remainder of that line as options which should override the global options just for that test. For example, to disable the Racket semantics for a particular test, add the line `#: --skip-racket` at the start of the test file. Or, to disable a test, you can add a filter that you know does not match the name of the test. For example: `#: -f"skipped: pending feature XYZ"`.
+Individual tests can also override the options passed via the command line using a special pragma: if the first line of a `.blt` file starts with `#:`, the test runner will interpret the remainder of that line as options which should override the global options just for that test. For example, to disable the Racket semantics for a particular test, add the line `#: --skip-racket` at the start of the test file. Or, to disable a test, you can add a filter that you know does not match the name of the test. For example: `#: -F"skipped: pending feature XYZ"`.

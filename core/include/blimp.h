@@ -22,22 +22,67 @@
 typedef struct Blimp Blimp;
 
 typedef struct {
-    size_t object_pool_batch_size;
-        ///< When allocating new \ref objects, this option controls the number
-        ///  of objects allocated at once, to be initialized on demand later.
-        ///  Specifically, `object_pool_batch_size` is the number of bytes worth
-        ///  of objects allocated at a time.
-        ///
-        ///  Tuning this paramter adjusts the tradeoff between excess memory
-        ///  usage (when `object_pool_batch_size` is larger than necessary) and
-        ///  high allocation latency (when `object_pool_batch_size` is small).
-        ///  Since most `bl:mp` programs allocate and free many short-lived
-        ///  objects rapidly, overall performance is very sensitive to
-        ///  allocation latency. If you're interested in tuning performance, you
-        ///  should try to set this parameter as large as your memory
-        ///  constraints will allow.
-        ///
-        ///  The default is 1MB.
+    /**
+     * \brief
+     *      When allocating new \ref objects, this option controls the number
+     *      of objects allocated at once, to be initialized on demand later.
+     *
+     * Specifically, `gc_batch_size` is the number of bytes worth of
+     * objects allocated at a time.
+     *
+     * Tuning this paramter adjusts the tradeoff between excess memory
+     * usage (when `gc_batch_size` is larger than necessary) and high
+     * allocation latency (when `gc_batch_size` is small). Since most
+     * `bl:mp` programs allocate and free many short-lived objects
+     * rapidly, overall performance is very sensitive to allocation
+     * latency. If you're interested in tuning performance, you should try
+     * to set this parameter as large as your memory constraints will
+     * allow.
+     *
+     * The default is 1MB.
+     */
+    size_t gc_batch_size;
+
+    /**
+     * \brief
+     *      This option controls whether automatic tracing garbage collection
+     *      is enabled.
+     *
+     * Only tracing garbage collection can reliably free memory allocated to
+     * reference cycles which are no longer reachable.
+     *
+     * If this option is set, the tracing garbage collector will run
+     * periodically when a new object is needed and no previously freed objects
+     * are available. `gc_batches_per_trace` can be used to configure how often
+     * the system uses garbage collection to find free objects (which can be
+     * very expensive) versus how often it allocates new batches when it needs a
+     * free object (which is comparatively less expensive, but can result in
+     * greater high water marks for memory usage).
+     *
+     * If this option is not set, the system will not attempt to free reference
+     * cycles. It will continue allocating new batches of objects when free
+     * objects are not available until the underlying allocator runs out of
+     * memory.
+     *
+     * This option is enabled by default.
+     */
+    bool gc_tracing;
+
+    /**
+     * \brief
+     *      This option controls how often the tracing garbage collector runs,
+     *      if it is enabled.
+     *
+     * If this option is set to a positive value and `gc_tracing` is enabled,
+     * we will allocate `gc_batches_per_trace` batches of objects between each
+     * run of the tracing garbage collector. We will only run the collector if
+     * we need a new object, there are no free objects available, and we have
+     * allocated `gc_batches_per_trace` batches since the last GC sweep.
+     * Otherwise, we will allocate a new batch without running the tracing GC.
+     *
+     * The default is 1.
+     */
+    size_t gc_batches_per_trace;
 } BlimpOptions;
 
 extern const BlimpOptions DEFAULT_BLIMP_OPTIONS;
@@ -657,14 +702,19 @@ typedef struct {
     size_t allocated;
         ///< The total number of objects allocated right now.
     size_t reachable;
-        ///< The total number of currently allocated objects which are reachable
-        ///  scope of the global object.
+        ///< The number of currently allocated objects which are reachable from
+        ///  a live object (that is, one with a nonzero reference count).
     size_t max_allocated;
         ///< The largest number of objects which were ever allocated at one
         ///  time.
 } BlimpGCStatistics;
 
 BlimpGCStatistics Blimp_GetGCStatistics(Blimp *blimp);
+
+/**
+ * \brief Force a garbage collection sweep.
+ */
+void Blimp_CollectGarbage(Blimp *blimp);
 
 /**
  * @}

@@ -1,4 +1,4 @@
-#: --skip-racket --blimp-timeout 3.6
+#: --skip-racket --blimp-timeout 3.6 -fno-gc-tracing
 
 # This test implements a version of Tarjan's union-find data structure for
 # disjoint set operations. The data structure is a forest of inverted trees,

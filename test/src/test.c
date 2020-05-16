@@ -283,7 +283,7 @@ static bool RunSuite(Suite *suite)
 //  1. The help string in PrintUsage
 //  2. The Flag enum
 //  3. The Options struct in options.h
-//  4. The `default_options` global constant
+//  4. DefaultOptions
 //  5. The `cli_options` array in ParseOptions
 //  6. The switch statement in ParseOptions
 //
@@ -295,7 +295,7 @@ static void PrintUsage(FILE *f, int argc, char **argv)
     fprintf(f, "Usage: %s [options]\n", argv[0]);
     fprintf(f, "Options:\n");
     fprintf(f, "\n");
-    fprintf(f, "    -f, --filter STRING\n");
+    fprintf(f, "    -F, --filter STRING\n");
     fprintf(f, "        Run only tests whose name begins with STRING (case-insensitive).\n");
     fprintf(f, "\n");
     fprintf(f, "    --skip-racket\n");
@@ -343,6 +343,10 @@ static void PrintUsage(FILE *f, int argc, char **argv)
     fprintf(f, "        is 1, unless it is overridden by setting the CMake variable\n");
     fprintf(f, "        TEST_PERF_FACTOR.\n");
     fprintf(f, "\n");
+    fprintf(f, "    -f [no-]OPTION[=VALUE]\n");
+    fprintf(f, "        Specify values for tunable interpreter properties. See below for a list\n");
+    fprintf(f, "        of interpreter options.\n");
+    fprintf(f, "\n");
     fprintf(f, "    -v, --verbose [LEVEL]\n");
     fprintf(f, "        Show verbose output at LEVEL. LEVEL may be one of the following\n");
     fprintf(f, "        (each named verbosity level implies the level below it):\n");
@@ -361,6 +365,9 @@ static void PrintUsage(FILE *f, int argc, char **argv)
     fprintf(f, "\n");
     fprintf(f, "    -h, --help\n");
     fprintf(f, "        Show this help and exit.\n");
+    fprintf(f, "\n");
+    fprintf(f, "Interpreter options:\n");
+    fprintf(f, "%s\n", BLIMP_OPTIONS_USAGE);
 }
 
 // Symbolic identifiers for command-line options.
@@ -374,7 +381,8 @@ static void PrintUsage(FILE *f, int argc, char **argv)
 // will automatically choose a unique name. Long options with no corresponding
 // short option should be registered after FLAG_NO_SHORT_OPTION.
 typedef enum {
-    FLAG_FILTER             = 'f',
+    FLAG_FILTER             = 'F',
+    FLAG_BLIMP_OPTION       = 'f',
     FLAG_VERBOSE            = 'v',
     FLAG_HELP               = 'h',
 
@@ -392,17 +400,21 @@ typedef enum {
     FLAG_PERF_FACTOR,
 } Flag;
 
-const Options default_options = {
-    .verbosity      = VERB_GROUP,
-    .filter         = "",
-    .use_racket     = true,
-    .use_blimp      = true,
-    .racket_timeout = 5000,
-    .blimp_timeout  = 5000,
-    .perf_factor    = DEFAULT_PERF_FACTOR,
-        // This default is defined by CMake, so that it can be overridden
-        // for each build configuration.
-};
+static Options DefaultOptions(void)
+{
+    return (Options) {
+        .verbosity      = VERB_GROUP,
+        .filter         = "",
+        .use_racket     = true,
+        .use_blimp      = true,
+        .racket_timeout = 5000,
+        .blimp_timeout  = 5000,
+        .perf_factor    = DEFAULT_PERF_FACTOR,
+            // This default is defined by CMake, so that it can be overridden
+            // for each build configuration.
+        .blimp_options  = DEFAULT_BLIMP_OPTIONS,
+    };
+}
 
 // Parse the options in the given command line, and store the result in the
 // `options` structure. `options` is an in-out parameter: if a given option is
@@ -439,7 +451,7 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
         // parse test-specific options) we need to reset this global variable
         // each time.
     int option, i = 1;
-    while ((option = getopt_long(argc, argv, "f:v::h", cli_options, &i)) != -1) {
+    while ((option = getopt_long(argc, argv, "F:f:v::h", cli_options, &i)) != -1) {
         switch (option) {
             case FLAG_FILTER:
                 options->filter = optarg;
@@ -493,6 +505,17 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
                     return true;
                 }
                 options->perf_factor = factor;
+
+                break;
+            }
+
+            case FLAG_BLIMP_OPTION: {
+                const char *error = Blimp_ParseOption(
+                    optarg, &options->blimp_options);
+                if (error) {
+                    fprintf(stderr, "%s\n", error);
+                    return EXIT_FAILURE;
+                }
 
                 break;
             }
@@ -643,11 +666,8 @@ static Suite *FindTests(const Options *options)
             Test *test = malloc(sizeof(Test));
             test->name = strdup(test_de->d_name);
             test->options = group->options;
-            test->blimp = TestBlimp_New(&test->options);
             FILE *test_file = fdopen(
                 openat(dirfd(group_dir), test_de->d_name, O_RDONLY), "r");
-            Blimp_Check(Blimp_OpenFileStream(
-                test->blimp, test_de->d_name, test_file, &test->stream));
             test->racket = &suite->racket;
 
             // Override group options with test-specific options.
@@ -694,6 +714,11 @@ static Suite *FindTests(const Options *options)
             }
             rewind(test_file);
 
+            // Create a bl:mp interpreter for the test.
+            test->blimp = TestBlimp_New(&test->options);
+            Blimp_Check(Blimp_OpenFileStream(
+                test->blimp, test_de->d_name, test_file, &test->stream));
+
             // Add it to our list of tests.
             if (group->num_tests >= tests_capacity) {
                 tests_capacity = tests_capacity*2 + 1;
@@ -730,7 +755,7 @@ static Suite *FindTests(const Options *options)
 
 int main(int argc, char **argv)
 {
-    Options options = default_options;
+    Options options = DefaultOptions();
     int status;
     bool should_exit = ParseOptions(argc, argv, &options, &status);
     if (should_exit) {

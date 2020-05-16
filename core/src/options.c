@@ -1,11 +1,13 @@
 #include "internal/blimp.h"
 
 const BlimpOptions DEFAULT_BLIMP_OPTIONS = {
-    .object_pool_batch_size = (1ull<<20), // 1MB
+    .gc_batch_size        = (1ull<<20), // 1MB
+    .gc_tracing           = true,
+    .gc_batches_per_trace = 1,
 };
 
 const char *BLIMP_OPTIONS_USAGE =
-    "    object-pool-batch-size=SIZE\n"
+    "    gc-batch-size=SIZE\n"
     "        When allocating new objects, this option controls the number of\n"
     "        objects allocated at once, to be initialized on demand later.\n"
     "        Specifically, SIZE is the number of bytes worth of objects\n"
@@ -26,7 +28,60 @@ const char *BLIMP_OPTIONS_USAGE =
     "           * nMB\n"
     "           * nGB\n"
     "        The default is 1MB.\n"
+    "\n"
+    "    [no-]gc-tracing\n"
+    "        Enable or disable tracing garbage collection.\n"
+    "\n"
+    "        Only tracing garbage collection can reliably free memory\n"
+    "        allocated to reference cycles which are no longer reachable.\n"
+    "\n"
+    "        If this option is set, the tracing garbage collector will run\n"
+    "        periodically when a new object is needed and no previously freed\n"
+    "        objects are available. `gc_batches_per_trace` can be used to\n"
+    "        configure how often the system uses garbage collection to find\n"
+    "        free objects (which can bevery expensive) versus how often it\n"
+    "        allocates new batches when it needs a free object (which is\n"
+    "        comparatively less expensive, but can result in greater high\n"
+    "        water marks for memory usage).\n"
+    "\n"
+    "       If this option is not set, the system will not attempt to free\n"
+    "       reference cycles. It will continue allocating new batches of\n"
+    "       objects when free objects are not available until the underlying\n"
+    "       allocator runs out of memory.\n"
+    "\n"
+    "       Tracing garbage collection is enabled by default.\n"
+    "\n"
+    "    gc-batches-per-trace=N\n"
+    "        This option controls how often the tracing garbage collector\n"
+    "        runs, if it is enabled.\n"
+    "\n"
+    "        The system will allocate N batches of objects between each run\n"
+    "        of the tracing garbage collector. The collector will only run if\n"
+    "        a new object is needed, there are no free objects available, and\n"
+    "        we have  allocated N batches since the last GC sweep. Otherwise,\n"
+    "        we will allocate a new batch without running the tracing GC.\n"
+    "\n"
+    "        The default is 1.\n"
 ;
+
+static const char *ParseUInt(const char *value, size_t *result)
+{
+    if (!*value) {
+        return "option requires an argument";
+    }
+
+    char *invalid;
+    long n = strtol(value, &invalid, 0);
+    if (*invalid) {
+        return "option requires a numeric argument";
+    }
+    if (n < 0) {
+        return "argument must not be negative";
+    }
+
+    *result = n;
+    return NULL;
+}
 
 static const char *ParseBytes(const char *value, size_t *result)
 {
@@ -89,8 +144,13 @@ const char *Blimp_ParseOption(const char *str, BlimpOptions *options)
     }
 
     // Option-specific handling.
-    if (strncmp("object-pool-batch-size", option, option_len) == 0) {
-        return ParseBytes(value, &options->object_pool_batch_size);
+    if        (strncmp("gc-batch-size", option, option_len) == 0) {
+        return ParseBytes(value, &options->gc_batch_size);
+    } else if (strncmp("gc-tracing", option, option_len) == 0) {
+        options->gc_tracing = !negate;
+        return NULL;
+    } else if (strncmp("gc-batches-per-trace", option, option_len) == 0) {
+        return ParseUInt(value, &options->gc_batches_per_trace);
     } else {
         return "unknown option";
     }

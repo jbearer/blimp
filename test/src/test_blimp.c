@@ -1,14 +1,20 @@
 #include "options.h"
 #include "test_blimp.h"
 
-static bool ParseUIntSymbol(const BlimpSymbol *sym, size_t *result)
+static inline void VoidReturn(Blimp *blimp, BlimpObject **result)
+{
+    BlimpObject_Borrow(Blimp_GlobalObject(blimp));
+    *result = Blimp_GlobalObject(blimp);
+}
+
+static inline bool ParseUIntSymbol(const BlimpSymbol *sym, size_t *result)
 {
     char *invalid_char;
     *result = strtol(BlimpSymbol_GetName(sym), &invalid_char, 0);
     return !*invalid_char;
 }
 
-static BlimpStatus MakeUIntSymbol(
+static inline BlimpStatus MakeUIntSymbol(
     Blimp *blimp, size_t n, const BlimpSymbol **sym)
 {
     char buf[32];
@@ -142,8 +148,7 @@ static BlimpStatus ExpectError(
         return Blimp_ErrorMsg(blimp, BLIMP_ERROR, "expected error");
     }
 
-    BlimpObject_Borrow(receiver);
-    *result = receiver;
+    VoidReturn(blimp, result);
     return BLIMP_OK;
 }
 
@@ -210,6 +215,32 @@ static BlimpStatus GC_HighWaterMark(
     return BlimpObject_NewSymbol(blimp, scope, sym, result);
 }
 
+static BlimpStatus GC_ExpectClean(
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject *receiver,
+    BlimpObject *message,
+    void *data,
+    BlimpObject **result)
+{
+    (void)scope;
+    (void)receiver;
+    (void)message;
+    (void)data;
+
+    BlimpGCStatistics stats = Blimp_GetGCStatistics(blimp);
+
+    // All allocated objects should be reachable.
+    if (stats.reachable != stats.allocated) {
+        return Blimp_ErrorMsg(blimp, BLIMP_ERROR,
+            "expected a clean heap, but found %zu unreachable objects",
+            stats.allocated - stats.reachable);
+    }
+
+    VoidReturn(blimp, result);
+    return BLIMP_OK;
+}
+
 static BlimpStatus GC_Collect(
     Blimp *blimp,
     BlimpObject *scope,
@@ -222,10 +253,11 @@ static BlimpStatus GC_Collect(
     (void)receiver;
     (void)message;
     (void)data;
-    (void)result;
 
-    return Blimp_ErrorMsg(
-        blimp, BLIMP_ERROR, "garbage collection is not yet implemented");
+    Blimp_CollectGarbage(blimp);
+
+    VoidReturn(blimp, result);
+    return BLIMP_OK;
 }
 
 static BlimpStatus GC_PrintStats(
@@ -237,12 +269,12 @@ static BlimpStatus GC_PrintStats(
     BlimpObject **result)
 {
     (void)scope;
+    (void)receiver;
     (void)message;
 
     const Options *options = data;
 
-    BlimpObject_Borrow(receiver);
-    *result = receiver;
+    VoidReturn(blimp, result);
 
     if (options->verbosity < VERB_STATS) {
         return BLIMP_OK;
@@ -258,7 +290,7 @@ static BlimpStatus GC_PrintStats(
 
 Blimp *TestBlimp_New(const Options *options)
 {
-    Blimp *blimp = Blimp_New(NULL);
+    Blimp *blimp = Blimp_New(&options->blimp_options);
     if (blimp == NULL) {
         return blimp;
     }
@@ -271,6 +303,7 @@ Blimp *TestBlimp_New(const Options *options)
         { "gc",     "!reachable",       GC_Reachable,     NULL },
         { "gc",     "!high_water_mark", GC_HighWaterMark, NULL },
         { "gc",     "!collect",         GC_Collect,       NULL },
+        { "gc",     "!expect_clean",    GC_ExpectClean,   NULL },
         { "gc",     "!print_stats",     GC_PrintStats,    (void *)options },
         { 0, 0, 0, 0}
     };

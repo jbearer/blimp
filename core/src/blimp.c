@@ -333,5 +333,10 @@ Status Blimp_EvalSymbol(
 
 BlimpGCStatistics Blimp_GetGCStatistics(Blimp *blimp)
 {
-    return ObjectPool_GetStats(&blimp->objects, blimp->global);
+    return ObjectPool_GetStats(&blimp->objects);
+}
+
+void Blimp_CollectGarbage(Blimp *blimp)
+{
+    ObjectPool_CollectGarbage(&blimp->objects);
 }

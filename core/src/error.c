@@ -158,6 +158,22 @@ static void PrintSourceRange(FILE *f, const SourceRange *range)
     }
 }
 
+static const char *GenericErrorCodeMessage(BlimpErrorCode code)
+{
+    switch (code) {
+        case BLIMP_INVALID_CHARACTER: return "invalid character";
+        case BLIMP_UNEXPECTED_TOKEN:  return "unexpected token";
+        case BLIMP_NO_SUCH_SYMBOL:    return "no such symbol";
+        case BLIMP_NO_SUCH_METHOD:    return "no such method";
+        case BLIMP_MUST_BE_BLOCK:     return "expected block";
+        case BLIMP_MUST_BE_SYMBOL:    return "expected symbol";
+        case BLIMP_INVALID_EXPR:      return "invalid expression";
+        case BLIMP_OUT_OF_MEMORY:     return "out of memory";
+        case BLIMP_IO_ERROR:          return "I/O error";
+        default:                      return "unknown error";
+    }
+}
+
 static Status VError(
     Blimp *blimp,
     const SourceRange *range,
@@ -175,7 +191,11 @@ static Status VError(
     if (fmt) {
         vsnprintf(blimp->last_error.message, ERR_MSG_LEN, fmt, args);
     } else {
-        blimp->last_error.message[0] = '\0';
+        strncpy(
+            blimp->last_error.message,
+            GenericErrorCodeMessage(code),
+            ERR_MSG_LEN
+        );
     }
 
     return &blimp->last_error;
