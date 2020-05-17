@@ -3179,6 +3179,10 @@ go100{:=|{do|
 go100{.get|.}{.eval|.};
 
 
+go1{:=|.};
+    # Clear our reference to `go1`, which has a very large scope. This renders
+    # the few thousand mappings in that scope unreachable.
+
 {gc|.}{!print_stats|.};
 
 {gc|.}{!allocated|.}{!expect|{gc|.}{!reachable|.}};

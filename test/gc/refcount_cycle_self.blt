@@ -96,10 +96,7 @@ go1000000{.get|.}{.eval|.};
 
 {gc|.}{!print_stats|.};
 
-{gc|.}{!allocated|.}{!expect|{gc|.}{!reachable|.}};
+{gc|.}{!expect_clean|.};
     # Reference counting with entanglement is supposed to be able to perfectly
     # clean up self-cycles. The only allocated objects should be reachable ones.
-{gc|.}{!reachable|.}{!expect|7};
-    # Furthermore, if we cleaned everything up properly, the only reachable
-    # objects should be the global object and the six go* functions we bound
 .

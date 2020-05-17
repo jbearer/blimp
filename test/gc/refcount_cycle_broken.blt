@@ -112,7 +112,7 @@ go100000{.get|.}{.eval|.};
 
 {gc|.}{!print_stats|.};
 
-{gc|.}{!allocated|.}{!expect|{gc|.}{!reachable|.}};
+{gc|.}{!expect_clean|.};
     # Since eventually all cycles are broken, reference counting should clean up
     # perfectly. The only allocated objects should be reachable ones.
 .

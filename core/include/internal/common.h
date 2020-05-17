@@ -1,8 +1,6 @@
 #ifndef BLIMP_COMMON_H
 #define BLIMP_COMMON_H
 
-#include <assert.h>
-
 #include "../blimp.h"
 
 #define PRIVATE __attribute__((visibility("hidden")))

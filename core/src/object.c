@@ -3,6 +3,8 @@
 #include "internal/hash_map.h"
 #include "internal/symbol.h"
 
+bool Reachable(ObjectPool *pool, Object *obj);
+
 ////////////////////////////////////////////////////////////////////////////////
 // Scopes: just a wrapper around a hash map mapping symbols to objects
 //
@@ -291,14 +293,25 @@ void ObjectPool_Destroy(Blimp *blimp, ObjectPool *pool)
 
 static void FreeObject(Object *obj);
 
-static inline Object *InternalBorrow(Object *obj)
+static inline Object *InternalBorrow(Object *owner, Object *obj)
 {
-    ++obj->internal_refcount;
+    // Only increment the referece count if the object is different from the
+    // owner. There's no need to count references-to-self, because it is
+    // impossible for an object to be destroyed before itself is destroyed.
+    if (obj != owner) {
+        ++obj->internal_refcount;
+    }
     return obj;
 }
 
-static inline void InternalRelease(Object *obj)
+static inline void InternalRelease(Object *owner, Object *obj)
 {
+    if (obj == owner) {
+        // If `obj == owner`, we didn't acquire a reference in InternalBorrow(),
+        // so there's nothing to release.
+        return;
+    }
+
     if (obj->internal_refcount == 0) {
         // It's possible that we have a reference to an object with an internal
         // refcount of 0 if that object has already been freed by the garbage
@@ -384,7 +397,7 @@ static Status NewObject(Blimp *blimp, Object *parent, Object **obj)
     }
 
     if (parent) {
-        InternalBorrow(parent);
+        InternalBorrow(*obj, parent);
     }
 
     (*obj)->parent = parent;
@@ -405,12 +418,13 @@ static void FreeObject(Object *obj)
          entry != Scope_End(&obj->scope);
          entry = Scope_Next(&obj->scope, entry))
     {
-        InternalRelease(Scope_GetValue(&obj->scope, entry));
+        Object *child = Scope_GetValue(&obj->scope, entry);
+        InternalRelease(obj, child);
     }
 
     // Release our reference to our parent.
     if (obj->parent) {
-        InternalRelease(obj->parent);
+        InternalRelease(obj, obj->parent);
     }
 
     // Release our reference to the code expression if this is a block.
@@ -468,6 +482,8 @@ static void MarkReachable(ObjectPool *pool)
              it = Scope_Next(&obj->scope, it))
         {
             Object *child = Scope_GetValue(&obj->scope, it);
+            assert(child->type != OBJ_FREE);
+
             if (!child->reached) {
                 child->reached = true;
                 child->next = stack;
@@ -477,6 +493,7 @@ static void MarkReachable(ObjectPool *pool)
 
         // Push this object's parent onto the stack.
         if (obj->parent && !obj->parent->reached) {
+            assert(obj->parent->type != OBJ_FREE);
             obj->parent->reached = true;
             obj->parent->next = stack;
             stack = obj->parent;
@@ -584,12 +601,15 @@ void BlimpObject_Release(Object *obj)
 // Object API
 //
 
-static Object **Lookup(const Object *obj, const Symbol *sym)
+static Object **Lookup(Object *obj, const Symbol *sym, Object **owner)
 {
-    const Object *curr = obj;
+    Object *curr = obj;
     while (curr) {
         Object **ret = Scope_Lookup(&curr->scope, sym);
         if (ret) {
+            if (owner) {
+                *owner = curr;
+            }
             return ret;
         } else {
             curr = curr->parent;
@@ -665,7 +685,7 @@ Status BlimpObject_ParseSymbol(const Object *obj, const Symbol **sym)
 
 Status BlimpObject_Get(const Object *obj, const Symbol *sym, Object **ret)
 {
-    Object **value = Lookup(obj, sym);
+    Object **value = Lookup((Object *)obj, sym, NULL);
     if (value) {
         *ret = *value;
         return BLIMP_OK;
@@ -680,24 +700,29 @@ Status BlimpObject_Get(const Object *obj, const Symbol *sym, Object **ret)
 Status BlimpObject_Set(Object *obj, const Symbol *sym, Object *val)
 {
     assert(val);
-    InternalBorrow(val);
-        // Acquire a reference to the new value, since we're about to store it
-        // persistently. This reference will be released when the new value is
-        // replaced with a newer value, or when the object itself is destroyed.
 
     // If the symbol is already in scope, update the existing value.
-    Object **existing_value = Lookup(obj, sym);
+    Object *owner;
+    Object **existing_value = Lookup(obj, sym, &owner);
     if (existing_value) {
-        InternalRelease(*existing_value);
-            // This scope owned a reference to the existing value. After this
-            // operation, the old value will no longer be reachable through this
-            // scope, so we have to release our reference.
+        InternalBorrow(owner, val);
+            // Borrow the new value on behalf of the existing owner of the scope
+            // entry.
 
+        Object *to_free = *existing_value;
         *existing_value = val;
+        if (to_free != owner) {
+            InternalRelease(owner, to_free);
+                // This scope owned a reference to the existing value. After
+                // this operation, the old value will no longer be reachable
+                // through this scope, so we have to release our reference.
+        }
+
         return BLIMP_OK;
     }
 
     // Otherwise, add it to the innermost scope.
+    InternalBorrow(obj, val);
     TRY(Scope_Update(&obj->scope, sym, val));
     return BLIMP_OK;
 }
