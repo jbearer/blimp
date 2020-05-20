@@ -241,6 +241,33 @@ static BlimpStatus GC_ExpectClean(
     return BLIMP_OK;
 }
 
+static BlimpStatus GC_CheckCollect(
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject *receiver,
+    BlimpObject *message,
+    void *data,
+    BlimpObject **result)
+{
+    (void)scope;
+    (void)receiver;
+    (void)message;
+    (void)data;
+
+    Blimp_CollectGarbage(blimp);
+    BlimpGCStatistics stats = Blimp_GetGCStatistics(blimp);
+
+    // All allocated objects should be reachable.
+    if (stats.reachable != stats.allocated) {
+        return Blimp_ErrorMsg(blimp, BLIMP_ERROR,
+            "expected a clean heap, but found %zu unreachable objects",
+            stats.allocated - stats.reachable);
+    }
+
+    VoidReturn(blimp, result);
+    return BLIMP_OK;
+}
+
 static BlimpStatus GC_Collect(
     Blimp *blimp,
     BlimpObject *scope,
@@ -304,6 +331,7 @@ Blimp *TestBlimp_New(const Options *options)
         { "gc",     "!high_water_mark", GC_HighWaterMark, NULL },
         { "gc",     "!collect",         GC_Collect,       NULL },
         { "gc",     "!expect_clean",    GC_ExpectClean,   NULL },
+        { "gc",     "!check_collect",   GC_CheckCollect,  NULL },
         { "gc",     "!print_stats",     GC_PrintStats,    (void *)options },
         { 0, 0, 0, 0}
     };

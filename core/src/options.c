@@ -4,6 +4,7 @@ const BlimpOptions DEFAULT_BLIMP_OPTIONS = {
     .gc_batch_size        = (1ull<<20), // 1MB
     .gc_tracing           = true,
     .gc_batches_per_trace = 1,
+    .gc_refcount          = true,
 };
 
 const char *BLIMP_OPTIONS_USAGE =
@@ -62,6 +63,25 @@ const char *BLIMP_OPTIONS_USAGE =
     "        we will allocate a new batch without running the tracing GC.\n"
     "\n"
     "        The default is 1.\n"
+    "\n"
+    "    [no-]gc-refcount\n"
+    "        Enable or disable internal reference counting.\n"
+    "\n"
+    "        Reference counting for managed references is always enabled,\n"
+    "        because the tracing garbage collector uses it to determine which\n"
+    "        objects the user of the API is currently using, and which\n"
+    "        objects are reachable from those.\n"
+    "\n"
+    "        This option affects reference counting for internal references:\n"
+    "        references between objects through their scopes and parents. If\n"
+    "        internal reference counting is enabled, the system will\n"
+    "        sometimes be able to free objects without invoking the tracing\n"
+    "        garbage collector by determining that an object is not only\n"
+    "        unreferenced by the user, but it is also unreferenced by any\n"
+    "        other object. This can improve performance in certain\n"
+    "        applications.\n"
+    "        \n"
+    "        This option is enabled by default.\n"
 ;
 
 static const char *ParseUInt(const char *value, size_t *result)
@@ -151,6 +171,9 @@ const char *Blimp_ParseOption(const char *str, BlimpOptions *options)
         return NULL;
     } else if (strncmp("gc-batches-per-trace", option, option_len) == 0) {
         return ParseUInt(value, &options->gc_batches_per_trace);
+    } else if (strncmp("gc-refcount", option, option_len) == 0) {
+        options->gc_refcount = !negate;
+        return NULL;
     } else {
         return "unknown option";
     }

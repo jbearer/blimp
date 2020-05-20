@@ -1,4 +1,4 @@
-#: --skip-racket --blimp-timeout 0.6
+#: --skip-racket --blimp-timeout 0.7
 
 # Block creation benchmark. Benchmarks the creation of 1 million blocks, some
 # of which have a non-empty scope and some of which do not.

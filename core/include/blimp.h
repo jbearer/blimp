@@ -83,6 +83,26 @@ typedef struct {
      * The default is 1.
      */
     size_t gc_batches_per_trace;
+
+    /**
+     * \brief
+     *      This option controls whether internal reference counting is enabled.
+     *
+     * Reference counting for managed references is always enabled, because the
+     * tracing garbage collector uses it to determine which objects the user of
+     * the API is currently using, and which objects are reachable from those.
+     *
+     * This option affects reference counting for _internal_ references:
+     * references between objects through their scopes and parents. If internal
+     * reference counting is enabled, the system will sometimes be able to free
+     * objects without invoking the tracing garbage collector by determining
+     * that an object is not only unreferenced by the user, but it is also
+     * unreferenced by any other object. This can improve performance in certain
+     * applications.
+     *
+     * This option is enabled by default.
+     */
+    bool gc_refcount;
 } BlimpOptions;
 
 extern const BlimpOptions DEFAULT_BLIMP_OPTIONS;

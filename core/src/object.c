@@ -293,19 +293,32 @@ void ObjectPool_Destroy(Blimp *blimp, ObjectPool *pool)
 
 static void FreeObject(Object *obj);
 
-static inline Object *InternalBorrow(Object *owner, Object *obj)
+static inline Blimp *GetBlimp(const Object *obj)
 {
+    return HashMap_GetBlimp(&obj->scope);
+}
+
+static inline void InternalBorrow(Object *owner, Object *obj)
+{
+    if (!GetBlimp(obj)->options.gc_refcount) {
+        return;
+    }
+
     // Only increment the referece count if the object is different from the
     // owner. There's no need to count references-to-self, because it is
     // impossible for an object to be destroyed before itself is destroyed.
     if (obj != owner) {
         ++obj->internal_refcount;
     }
-    return obj;
+    return;
 }
 
 static inline void InternalRelease(Object *owner, Object *obj)
 {
+    if (!GetBlimp(obj)->options.gc_refcount) {
+        return;
+    }
+
     if (obj == owner) {
         // If `obj == owner`, we didn't acquire a reference in InternalBorrow(),
         // so there's nothing to release.
@@ -325,11 +338,6 @@ static inline void InternalRelease(Object *owner, Object *obj)
     if (--obj->internal_refcount == 0 && obj->transient_refcount == 0) {
         FreeObject(obj);
     }
-}
-
-static inline Blimp *GetBlimp(const Object *obj)
-{
-    return HashMap_GetBlimp(&obj->scope);
 }
 
 static Status NewObject(Blimp *blimp, Object *parent, Object **obj)
@@ -592,7 +600,10 @@ void BlimpObject_Release(Object *obj)
 {
     assert(obj->transient_refcount);
 
-    if (--obj->transient_refcount == 0 && obj->internal_refcount == 0) {
+    if (--obj->transient_refcount == 0 &&
+        obj->internal_refcount == 0 &&
+        GetBlimp(obj)->options.gc_refcount)
+    {
         FreeObject(obj);
     }
 }

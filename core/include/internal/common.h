@@ -23,6 +23,8 @@ typedef BlimpMethod Method;
     // The default definition of `assert` in the release build doesn't evaluate
     // it's argument at all, which leads to annoying unused variable warnings
     // that don't show up in the debug build.
+#else
+# include <assert.h>
 #endif
 
 #endif

@@ -17,6 +17,7 @@ The `bl:mp` test runner, `blimp-test`, interprets "`bl:mp` test" files, denoted 
 |  `gc`   | `!reachable`    |     _    | Returns a symbol representing the number of objects which are reachable from the global object.
 |  `gc`   | `!high_water_mark` |     _    | Returns a symbol representing the maximum number of objects which were ever allocated simultaneously.
 |  `gc`   | `!expect_clean` |    _     | Checks that all allocated objects are reachable.
+|  `gc`   | `!check_collect` |   _     | Triggers a garbage collection sweep and then checks that all allocated objects are reachable.
 |  `gc`   | `!collect`     |     _     | Triggers a garbage collection sweep.
 
 The semantics of this extended `bl:mp` language are documented in `test-semantics.rkt`, which extends the `bl:mp-machine` semantics from `docs/semantics.rkt` to interpret these two additional primitives.
