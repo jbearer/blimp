@@ -152,15 +152,35 @@ static void PassTest(Test *test, size_t racket_ms, size_t blimp_ms)
 // Running tests
 //
 
+static bool FindString(
+    const char *string, const char **strings, size_t num_strings)
+{
+    for (size_t i = 0; i < num_strings; ++i) {
+        if (strcmp(string, strings[i]) == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static void RunTest(Test *test)
 {
+    // Skip this test if specific tests were selected and this one was not.
+    if (test->options.tests &&
+        !FindString(test->name, test->options.tests, test->options.num_tests))
+    {
+        SkipTest(test, "not selected");
+        return;
+    }
+
     // Skip this test if it gets filtered out.
     if (strncasecmp(
             test->name, test->options.filter, strlen(test->options.filter))
         != 0)
     {
         SkipTest(test, "does not match filter `%s'", test->options.filter);
-        goto cleanup;
+        return;
     }
 
     struct timespec start, end;
@@ -172,7 +192,7 @@ static void RunTest(Test *test)
         if (test->options.verbosity >= VERB_FAILURES) {
             Blimp_DumpLastError(test->blimp, stdout);
         }
-        goto cleanup;
+        return;
     }
 
     if (test->options.use_racket) {
@@ -230,13 +250,17 @@ static void RunTest(Test *test)
     if (result) BlimpObject_Release(result);
 cleanup_parsed:
     Blimp_FreeExpr(expr);
-cleanup:
-    Blimp_Delete(test->blimp);
 }
-
 
 static void RunGroup(Group *group)
 {
+    // We will skip every test in the group if specific groups were selected to
+    // run, but this one was not selected.
+    bool skipped =
+        group->options.groups &&
+        !FindString(
+            group->name, group->options.groups, group->options.num_groups);
+
     memset(group->results, 0, sizeof(group->results));
 
     if (group->options.verbosity >= VERB_FAILURES) {
@@ -245,8 +269,14 @@ static void RunGroup(Group *group)
     }
 
     for (size_t i = 0; i < group->num_tests; ++i) {
-        RunTest(group->tests[i]);
-        ++group->results[group->tests[i]->result];
+        Test *test = group->tests[i];
+        if (skipped) {
+            SkipTest(test, "group not selected");
+        } else {
+            RunTest(test);
+        }
+        Blimp_Delete(test->blimp);
+        ++group->results[test->result];
     }
 
     if (group->options.verbosity >= VERB_GROUP) {
@@ -294,6 +324,14 @@ static void PrintUsage(FILE *f, int argc, char **argv)
 
     fprintf(f, "Usage: %s [options]\n", argv[0]);
     fprintf(f, "Options:\n");
+    fprintf(f, "\n");
+    fprintf(f, "    -t, --test NAME\n");
+    fprintf(f, "        Only run the test NAME. This option can be passed more than once\n");
+    fprintf(f, "        to select multiple tests.\n");
+    fprintf(f, "\n");
+    fprintf(f, "    -g, --group NAME\n");
+    fprintf(f, "        Only run the test group NAME. This option can be passed more than\n");
+    fprintf(f, "        once to select multiple groups.\n");
     fprintf(f, "\n");
     fprintf(f, "    -F, --filter STRING\n");
     fprintf(f, "        Run only tests whose name begins with STRING (case-insensitive).\n");
@@ -381,6 +419,8 @@ static void PrintUsage(FILE *f, int argc, char **argv)
 // will automatically choose a unique name. Long options with no corresponding
 // short option should be registered after FLAG_NO_SHORT_OPTION.
 typedef enum {
+    FLAG_GROUP              = 'g',
+    FLAG_TEST               = 't',
     FLAG_FILTER             = 'F',
     FLAG_BLIMP_OPTION       = 'f',
     FLAG_VERBOSE            = 'v',
@@ -404,6 +444,10 @@ static Options DefaultOptions(void)
 {
     return (Options) {
         .verbosity      = VERB_GROUP,
+        .tests          = NULL,
+        .num_tests      = 0,
+        .groups         = NULL,
+        .num_groups     = 0,
         .filter         = "",
         .use_racket     = true,
         .use_blimp      = true,
@@ -435,6 +479,8 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
     }
 
     struct option cli_options[] = {
+        {"test",           required_argument, NULL, FLAG_TEST },
+        {"group",          required_argument, NULL, FLAG_GROUP },
         {"filter",         required_argument, NULL, FLAG_FILTER },
         {"skip-racket",    no_argument,       NULL, FLAG_SKIP_RACKET },
         {"skip-blimp",     no_argument,       NULL, FLAG_SKIP_BLIMP },
@@ -451,8 +497,34 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
         // parse test-specific options) we need to reset this global variable
         // each time.
     int option, i = 1;
-    while ((option = getopt_long(argc, argv, "F:f:v::h", cli_options, &i)) != -1) {
+    while ((option = getopt_long(argc, argv, "t:g:F:f:v::h", cli_options, &i)) != -1) {
         switch (option) {
+            case FLAG_TEST:
+                ++options->num_tests;
+                options->tests = realloc(
+                    options->tests, options->num_tests*sizeof(char *));
+                if (options->tests == NULL) {
+                    fprintf(stderr, "out of memory");
+                    *status = EXIT_FAILURE;
+                    return true;
+                }
+                options->tests[options->num_tests-1] = optarg;
+
+                break;
+
+            case FLAG_GROUP:
+                ++options->num_groups;
+                options->groups = realloc(
+                    options->groups, options->num_groups*sizeof(char *));
+                if (options->groups == NULL) {
+                    fprintf(stderr, "out of memory");
+                    *status = EXIT_FAILURE;
+                    return true;
+                }
+                options->groups[options->num_groups-1] = optarg;
+
+                break;
+
             case FLAG_FILTER:
                 options->filter = optarg;
                 break;

@@ -20,6 +20,10 @@ typedef enum {
 
 typedef struct {
     Verbosity verbosity;
+    const char **tests;
+    size_t num_tests;
+    const char **groups;
+    size_t num_groups;
     const char *filter;
     bool use_racket;
     bool use_blimp;
