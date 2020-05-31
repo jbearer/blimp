@@ -5,6 +5,7 @@ const BlimpOptions DEFAULT_BLIMP_OPTIONS = {
     .gc_tracing           = true,
     .gc_batches_per_trace = 1,
     .gc_refcount          = true,
+    .gc_cycle_detection   = true,
 };
 
 const char *BLIMP_OPTIONS_USAGE =
@@ -80,6 +81,42 @@ const char *BLIMP_OPTIONS_USAGE =
     "        unreferenced by the user, but it is also unreferenced by any\n"
     "        other object. This can improve performance in certain\n"
     "        applications.\n"
+    "        \n"
+    "        This option is enabled by default.\n"
+    "\n"
+    "    [no-]gc-cycle-detection\n"
+    "        Enable or disable enhanced reference counting.\n"
+    "\n"
+    "        Standard internal reference counting (gc_refcount) is able to\n"
+    "        free unreachable objects which are not referenced by other\n"
+    "        objects in a cycle, without invoking the tracing garbage\n"
+    "        collector. Enhanced reference counting extends this capability\n"
+    "        with limited cycle detection.\n"
+    "\n"
+    "        Specifically, cycles formed by a single scope reference and one\n"
+    "        or more parent references can be detected and collected without\n"
+    "        using the tracing garbage collector.\n"
+    "\n"
+    "        This allows the system to collect certain very common data\n"
+    "        structure patterns using reference counting. For example,\n"
+    "        consider the case of a simple local variable:\n"
+    "\n"
+    "             {outer_scope|\n"
+    "                 local{:=|value}\n"
+    "             }\n"
+    "\n"
+    "        The `outer_scope` object clearly has a reference to `value`\n"
+    "        through `local` in its scope. But `value` has a reference to\n"
+    "        the `:=` object, which is its parent. And that object has a\n"
+    "        reference to the `outer_scope` object, creating a cycle.\n"
+    "        `gc_refcount` on its own would not be able to free any of the\n"
+    "        objects involved in this cycle; we would need`gc_tracing` to do\n"
+    "        so. But with `gc_cycle_detection` enabled, we will detect that\n"
+    "        these objects form a cycle, and we will free the whole group of\n"
+    "        objects as soon as all references to objects in the cycle\n"
+    "        originate from within the cycle; that is, as soon as there are\n"
+    "        no references from outside the cycle to any of the objects in\n"
+    "        it.\n"
     "        \n"
     "        This option is enabled by default.\n"
 ;
@@ -173,6 +210,9 @@ const char *Blimp_ParseOption(const char *str, BlimpOptions *options)
         return ParseUInt(value, &options->gc_batches_per_trace);
     } else if (strncmp("gc-refcount", option, option_len) == 0) {
         options->gc_refcount = !negate;
+        return NULL;
+    } else if (strncmp("gc-cycle-detection", option, option_len) == 0) {
+        options->gc_cycle_detection = !negate;
         return NULL;
     } else {
         return "unknown option";

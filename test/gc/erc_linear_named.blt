@@ -1,0 +1,12 @@
+#: --skip-racket -fno-gc-refcount -fno-gc-tracing
+
+scope{:=|{do|
+    x{:=|y}
+}};
+
+scope{.get|.}{.eval|.};
+scope{:=|.};
+
+{gc|.}{!expect_clean|.};
+
+.

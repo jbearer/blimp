@@ -3,7 +3,10 @@
 #include "internal/hash_map.h"
 #include "internal/symbol.h"
 
-bool Reachable(ObjectPool *pool, Object *obj);
+static inline Blimp *GetBlimp(const Object *obj)
+{
+    return HashMap_GetBlimp(&obj->scope);
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 // Scopes: just a wrapper around a hash map mapping symbols to objects
@@ -36,9 +39,9 @@ static inline Object **Scope_Lookup(const Scope *scope, const Symbol *sym)
     return HashMap_Find(scope, &sym);
 }
 
-static inline Status Scope_Update(Scope *scope, const Symbol *sym, Object *obj)
+static inline Status Scope_Update(Scope *scope, const Symbol *sym, Object *val)
 {
-    return HashMap_Update(scope, &sym, &obj);
+    return HashMap_Update(scope, &sym, &val);
 }
 
 typedef HashMapEntry *ScopeIterator;
@@ -202,34 +205,76 @@ static inline Object *Scope_GetValue(Scope *scope, ScopeIterator it)
 // us when an object can safely be deallocated. Therefore, we need some form of
 // garbage collection.
 //
-// The current implementation uses reference counting as a simplistic form of
-// garbage collection. Every allocated object has a nonzero reference count. The
-// reference count is incremented every time the object is stored in a scope.
-// This is the only internal place where we create persistent references to
-// objects. The reference count is decremented whenever an object in a scope is
-// replaced by a different object. There is also an API for manipulating
-// reference counts (BlimpObject_Borrow and BlimpObject_Release) so users of
-// libblimpcore can manage their own references.
+// In fact, we have three independent garbage collection algorithms, each of
+// which can collect different kind of garbage at varying performance cost.
+// Roughly from lowest-overhead and least effective to most expensive and most
+// effective, they are:
+//  * Reference counting (gc-refcount)
+//      Collects objects as soon as they are no longer referenced by other
+//      objects or API users. Cannot collect circular references.
+//  * Enhanced reference counting (gc-cycle-detection)
+//      Collects certain "clumps" of objects which may all mutually reference
+//      each other in a cyclic fashion, as soon as there are no more references
+//      to the clump from outside the clump. Cycle detection is currently
+//      limited to `parent` pointers: ERC can only collect clumps where removing
+//      all the parent pointers would leave an acyclic data structure.
+//  * Mark-sweep (gc-tracing)
+//      Collects all unreachable objects, periodically when more memory is
+//      needed, by sweeping the entire heap looking for unreachable objects.
 //
-// Whenever the reference count on an object becomes 0, we return that object to
-// the object pool using the deallocation algorithm described above. We also
-// decrement the reference counts of all of the objects stored in the deleted
-// object's scope, since they are no longer reachable through that scope. We may
-// end up destroying some of those objects recursively, if their reference
-// counts are now 0.
+// Each of these garbage collection algorithms is described in detail below.
 //
-// The reference count on an object is actually subdivided into two counts:
-//  * `transient_refcount` counts external, unmanaged references obtained by
-//    BlimpObject_Borrow().
-//  * `internal_refcount` counts managed references between objects, including
-//    scope references and parent pointers.
+////////////////////////////////////////////////////////////////////////////////
+// Garbage collection: reference counting
+//
+// Every allocated object has two reference counts:
+//  1. The internal reference count, which counts references between objects
+//     within the heap. These are references through scopes and parent
+//     references.
+//  2. The transient reference count, which tracks how many temporary variables
+//     in client code reference that object. For example, while a message send
+//     is being processed by Blimp_Eval(), the Blimp_Eval() scope owns a
+//     transient reference to the message and the receiver.
+//
+// The only reason to split the reference counts into two categories is to
+// facilitate tracing garbage collection (described below): an object is
+// considered _referenced_ if either reference count is nonzero, but an object
+// is considered _reachable_ only if its transient reference count is nonzero,
+// or if it is referenced by a reachable object.
+//
+// For the purposes of reference counting itself, it is useful to think of a
+// single conceptual reference count for each object, which is represented by
+// the sum of its internal reference count and its transient reference count.
+// The object can be deallocated by reference counting if and only if its
+// unified reference count goes to 0. This unified reference count is referred
+// to in the remainder of this section.
+//
+// The reference count for an object must at all times accurately reflect the
+// number of references to that object. Thus, whenever a new reference to an
+// object is created (for example, an object is stored in the scope of another
+// object) the reference count of the object being referenced must be
+// incremented. InternalBorrow() performs this operation for internal
+// references. For transient references, it is the user's responsibility to call
+// BlimpObject_Borrow(), which increments the object's transient reference
+// count.
+//
+// Whenever a reference to an object dies (for example, an object which was
+// referenced in the scope of another object is replaced) its reference count
+// must be decremented. The decrement is performed by InternalRelease() or
+// BlimpObject_Release(). If, after decrementing the reference count of an
+// object, that object's reference count is now 0, then the object is freed, and
+// any references it has to other objects are released. This may in turn lead to
+// other objects being freed.
 //
 // Using reference counting for garbage collection has some advantages:
 //  * It is easy to implement and understand.
 //  * It is low-overhead, allowing high throughput.
 //  * It is less prone to long, unpredictable pauses than tracing GC, allowing
 //    low latency.
-//  * It is easy to expose an API with just two functions.
+//  * It is responsive, freeing objects immediately after they are no longer in
+//    use.
+//  * It is a convenient way to expose an object ownership API, using the
+//    functions BlimpObject_Borrow() and BlimpObject_Release().
 //
 // On top of these advantages, reference counting should be sufficient for many
 // kinds of programs to run without exhausting the heap. However, in the general
@@ -237,11 +282,505 @@ static inline Object *Scope_GetValue(Scope *scope, ScopeIterator it)
 // because it cannot detect cycles in the heap. Programs that create circular
 // references and then leak them may run out of memory after some time.
 //
-// To fix this, we have a tracing garbage collector to supplement reference
-// counting. The tracing GC is a very simple mark-sweep algorithm which frees
-// all objects not reachable from a root. A "root" is defined as any object with
-// a nonzero transient reference count; those are the objects that the program
-// on top of us is currently using, including the global object.
+////////////////////////////////////////////////////////////////////////////////
+// Garbage collection: enhanced reference counting
+//
+// While basic reference counting sounds good (and it is, for certain kinds of
+// problems) it is of limited use in bl:mp because of implicit cycles: every
+// bl:mp object has a reference to its parent object which lasts for the
+// duration of the child object. These implicit parent references can form
+// cycles with otherwise-acyclic explicit references created by the user. We
+// would like to be able to detect these kinds of "simple" cyces (cycles which
+// are only circular because of parent references) using something less heavy-
+// weight than tracing GC.
+//
+// Enhanced reference counting, or ERC, attempts to collect many cases of simple
+// cycles. Before describing how the algorithm works, let's look at a very
+// simple, yet very common, motivating example: a humble local variable. Here's
+// some bl:mp code:
+//
+//      {scope|
+//          x{:=|y}
+//      }{.eval|.}
+//
+// After evaluating this piece of code, it is quite clear that the `scope`
+// object has a reference to a symbol object `y`. That is, after all, the sole
+// observable effect of this program. Less obvious is that the object `y` has a
+// reference to the would-be temporary `:=` object, via its parent pointer.
+// Likewise, that `:=` object has a reference to the `scope` object via _its_
+// parent pointer, so the chain of references looks like this:
+//
+//                             ---------
+//                             |       |
+//                        .<---| scope |
+//                        |    |   1   |
+//                        |    ----^----
+//                        |        |
+//                        |        | parent
+//                        |        |
+//                        |    ---------
+//                        |    |       |
+//    scope (through `x`) |    |  :=   |
+//                        |    |   1   |
+//                        |    ----^----
+//                        |        |
+//                        |        | parent
+//                        |        |
+//                        |    ---------
+//                        V    |       |
+//                        .---->   y   |
+//                             |   1   |
+//                             ----^----
+//
+//
+// Each object has been annotated with its reference count. Note that even
+// though every object has a nonzero reference count of 1, all of the references
+// are internal to this group of objects; none of the objects are reachable
+// externally. Therefore, we could in theory free all of these objects together,
+// knowing that any reference to an object being freed originates from another
+// object in the group which is being freed at the same time.
+//
+// This is the key observation of ERC: if two objects are part of the same
+// reference cycle, then if either object is ever freed, the other object must
+// be freed at the same time. Therefore, both of these objects can share the
+// same reference count, and that reference count does not have to account for
+// references between the two objects.
+//
+// If two objects are part of the same cycle, we say that they are "entangled",
+// because, analagous to quantumly entangled particles, if one object is freed,
+// the other most also be freed simultaneously. A group of entangled objects
+// which must all be freed at the same time is called a "clump". Every clump has
+// a "representative", which is an object in the clump storing information about
+// the clump as a whole.
+//
+// The most important piece of information kept by the representative is the
+// clump reference count, which counts the number of references to all objects
+// in the clump from objects outside of the clump. Whenever a reference is
+// created between two objects which are not in the same clump, the reference
+// count of the clump containing the newly referenced object is incremented.
+// Whenever such a reference is lost, the clump reference count is decremented.
+// If the clump reference count reaches 0, we free every object in the clump at
+// once, even if the individual objects have a nonzero reference count, because
+// we know all references to objects in the clump originate from other objects
+// in the clump.
+//
+// In order to be able to free all objects in the clump, each clump maintains a
+// list of all of the objects inside it. This is a doubly linked circular list.
+// It is circular so that we have easy access to the last element in the clump
+// given the first element. This makes appending two such lists efficient, which
+// is important when entangling clumps (see below). The list is doubly linked so
+// that we can efficiently remove elements. This happens when an object in a
+// clump is freed by a different, more precise GC algorithm (such as mark-sweep)
+// which has determined that it can free that object without freeing the rest of
+// the clump. In that case, since the clump is still live, we need to remove the
+// dead object from somewhere in the middle of its list. Note that we can be
+// sure that no `entangled` pointer points to objects being freed from within a
+// clump, because if it did, a parent pointer would also point to that object,
+// and so it would still be reachable (see the clump invariants below). So we
+// only need to worry about the list of objects in the clump becoming stale.
+//
+// Since ERC is mainly interested in detecting simple cycles, clump formation is
+// oriented around the inverted tree formed by parent pointers. Each clump
+// represents a contiguous fragment of the tree. For example, the boxed clump:
+//
+//                  *                                                         //
+//        --------/-  \                                                       //
+//        |     *  |   *                                                      //
+//        |    / \ |                                                          //
+//        |   *   *|                                                          //
+//        |  /     |                                                          //
+//        | *      |                                                          //
+//        ----------                                                          //
+//
+// is allowed, because it consists of an entire subtree. This clump:
+//
+//                 *                                                          //
+//         ------/-- \                                                        //
+//         |    *  |  *                                                       //
+//         |   / \ |                                                          //
+//         |  *   *|                                                          //
+//         --/------                                                          //
+//          *                                                                 //
+//
+// is also allowed. Even though it doesn't contain an entire subtree, it
+// contains a contiguous fragment of the tree.
+//
+// This clump:
+//
+//             -----------
+//             |    *    |
+//             |  /   \  |
+//             | *     * |
+//             -/-\-------
+//             *   *
+//         ---/-
+//         | * |
+//         -----
+//
+// is not allowed, because it is not contiguous.
+//
+// We can summarize the constraints on the clump with a few invariants:
+//  * The clump representative is reachable from every object in the clump by
+//    following `entangled` pointers (that is, the clump is structured
+//    internally like an inverted tree).
+//  * For every `entangled` pointer from A to B, B is also reachable from A by
+//    following one or more `parent` pointers (that is, entanglement
+//    relationships have the same shape as parent relationships). Importantly,
+//    this guarantees that B will not be freed while A is still alive by some
+//    other GC algorithm, since the parent pointers are reference counted.
+//  * For every `entangled` pointer from A to B, every object C such that C is
+//    reachable from A and B is reachable from C via parent pointers, C is in
+//    the same clump as A and B (the contiguous tree fragment invariant).
+//
+// Technically, every object is entangled from the moment it is created with
+// itself; it is the representative of a clump of size 1. We call these clumps
+// "trivial", since they don't really behave any differently from individual
+// objects. The interesting stuff happens when we entangle two existing clumps
+// to form a larger, non-trivial clump. This happens whenever we detect that a
+// cycle is being formed.
+//
+// Since ERC is mainly interested in detecting simple cycles (like the local
+// variable example above) the cycle detection algorithm is very simple:
+// whenever an edge is added between objects, check if the source object is
+// reachable from the destination object via parent pointers. If it is, the new
+// edge completes a simple cycle, so entangle the source and destination
+// objects.
+//
+// The only sure way know if one object is reachable from another via parent
+// pointers is to follow parent pointers until reaching either the target object
+// or NULL. However, there is a heuristic which can be used to eliminate this
+// possibly expensive traversal in most cases. Each object contains a Bloom
+// filter representing the set of objects which it can reach via parent
+// pointers. This set is static over the duration of the object's lifetime, so
+// can easily be represented using a Bloom filter. Before traversing parent
+// pointers, we first check if the target object is in the source object's Bloom
+// filter (a simple bitwise and operation). If it is, then the target might be
+// reachable from the source via parent pointers, and we need to do the
+// traversal to be sure. But if it is not, then the target is definitely not
+// reachable, so we don't need to do the traversal.
+//
+// The cycle detection tells us when to entangle two clumps. The last missing
+// piece of the ERC algorithm is _how_ to entangle two clumps. Suppose we have
+// the following object structure:
+//
+//    -----
+//    | A |
+//    --^--
+//      |
+//    -----
+//    | B |
+//    --^--
+//      |
+//    -----
+//    | C |
+//    -----
+//
+// where the edges between objects are parent pointers. Note that A, B, and C
+// may each be the representative of a large existing clump, or they may be
+// singleton clumps. As long as we are careful to always deal with
+// representatives, it doesn't matter, so other members of existing clumps have
+// been omitted from the diagram.
+//
+// Let's say we want to entangle C with A, and they are not already entangled.
+// We first check C's parent pointer. It is B, not A, and by the contiguous
+// fragment invariant, we already know we will need to entangle B with A before
+// we can entangle C. We check if B is already entangled with A. Since it is not
+// we proceed to entangle B with A recursively.
+//
+// We check B's parent pointer. It is A, and so we've reached the base case of
+// the recursion. To entangle these to clumps, we point B's `entangled` pointer
+// at A, which immediately makes B a member of clump A. We also need to update
+// the clump reference count. To do this, we add the old clump reference count
+// of B to the clump reference count of A, and subtract 1. The addition accounts
+// for external references to the objects which were in B's clump, and which are
+// now in A. The subtraction accounts for the parent pointer of B, which was a
+// pointer from outside of clump A into clump A, and thus was counted, but which
+// is now internal to the clump, and thus should no longer be counted.
+//
+// After entangling B with A, we pop one frame off the stack of recursion. We
+// are once again trying to entangle C with A. We see that C's parent pointer is
+// B, and B is entangled with A, so all we have to do is entangle C with B. We
+// do that using the same algorithm for entangling an object with its parent
+// that we used to entangle B with A.
+//
+// It is useful at this point to walk through a few concrete examples of the
+// ERC algorithm in action, to see more clearly how it works and as evidence
+// that it is actually able to free some simple cycles.
+//
+// ERC Example 1: Linear tree
+//
+// Let's first consider the simple case where the parent tree has no branches.
+// We'll consider a data structure like the A-B-C chain above, where we have
+// transient references to A and C and we are creating a scope reference from
+// A to C:
+//
+//              |                       |
+//              |                       | transient
+//              |                       |
+//              |                   ----V----
+//              |                   |       |
+//              |                   |   A   |
+//              |                   |  2,2  |
+//              |                   ----^----
+//              |                       |
+//              |                       | parent
+//              |                       |
+//    transient |                   ---------
+//              |                   |       |
+//              |                   |   B   |
+//              |                   |  1,1  |
+//              |                   ----^----
+//              |                       |
+//              |                       | parent
+//              |                       |
+//              |                   ---------
+//              |                   |       |
+//              |                   |   C   |
+//              |                   |  1,1  |
+//              |                   ----^----
+//              |                       |
+//              ------------------------.
+//
+//
+// Each object has been annotated with its reference count, and each clump
+// representative has been annotated with its clump reference count (initially,
+// all of the objects are in trivial clumps, so they all have a clump reference
+// count which is the same as their reference count).
+//
+//
+// Now we add a scope edge reference from A to C:
+//
+//              |                       |
+//              |                       | transient
+//              |                       |
+//              |                   ----V----
+//              |                   |       |
+//              |              .<---|   A   <-----------.
+//              |              |    |  2,2  |           ^
+//              |              |    ----^----           |
+//              |              |        |               |
+//              |              |        | parent        |
+//              |              |        |               |
+//    transient |              |    ---------           |
+//              |              |    |       |           |
+//              |    scope     |    |   B   |-----------^ entangled
+//              |              |    |   1   |           |
+//              |              |    ----^----           |
+//              |              |        |               |
+//              |              |        | parent        |
+//              |              |        |               |
+//              |              |    ---------           |
+//              |              V    |       |           |
+//              |              .---->   C   |---------->.
+//              |                   |   2   |
+//              |                   ----^----
+//              |                       |
+//              ------------------------.
+//
+//
+// When we create the scope edge from A to C, we determine using C's Bloom
+// filter that A could be a predecessor of C (in this case, it actually is). So
+// we attempt to entangle C with A. C's parent is B, not A, so first we entangle
+// B with A. We increment A's clump reference count by that of B (which is 1),
+// and we decrement it by 1 to account for the fact that the parent reference
+// from B to A is now internal to the clump. Thus, the clump reference count of
+// A remains 2. We then do the same to entangle C with A, and again the clump
+// reference count of A does not change. Now A, B, and C are all entangled, and
+// we have correctly identified that there are only two external references to
+// this clump.
+//
+//
+// Now let's look at what happens when we lose our external references to this
+// data structure. The first transient pointer goes away:
+//
+//                                      |
+//                                      | transient
+//                                      |
+//                                  ----V----
+//                                  |       |
+//                             .<---|   A   <-----------.
+//                             |    |  2,1  |           ^
+//                             |    ----^----           |
+//                             |        |               |
+//                             |        | parent (r)    |
+//                             |        |               |
+//                             |    ---------           |
+//                             |    |       |           |
+//                   scope (e) |    |   B   |-----------^ entangled
+//                             |    |   1   |           |
+//                             |    ----^----           |
+//                             |        |               |
+//                             |        | parent (r)    |
+//                             |        |               |
+//                             |    ---------           |
+//                             V    |       |           |
+//                             .---->   C   |---------->.
+//                                  |   1   |
+//                                  ---------
+//
+// We've deceremented the reference count of C, as well as that of its
+// entanglement group, currently represented by A.
+//
+// Second transient pointer goes away:
+//
+//                                  ---------
+//                                  |       |
+//                             .<---|   A   <-----------.
+//                             |    |  1,0  |           ^
+//                             |    ----^----           |
+//                             |        |               |
+//                             |        | parent (r)    |
+//                             |        |               |
+//                             |    ---------           |
+//                             |    |       |           |
+//                   scope (e) |    |   B   |-----------^ entangled
+//                             |    |   1   |           |
+//                             |    ----^----           |
+//                             |        |               |
+//                             |        | parent (r)    |
+//                             |        |               |
+//                             |    ---------           |
+//                             V    |       |           |
+//                             .---->   C   |---------->.
+//                                  |   1   |
+//                                  ---------
+//
+// We've decremented the reference count of A, a well as the reference count of
+// the entanglement group. Notice that none of the objects have a reference
+// count of 0: they all of one internal reference to them (either a scope
+// reference or a parent reference). However, the reference count of the group
+// _is_ 0, which indicates that all the references to objects in the group are
+// from other objects in the group. Therefore, we can safely free the entire
+// entanglement group.
+//
+// Now let's look at a slightly more complicated example, where the data
+// structure is a tree with parallel branches. This example will require us to
+// merge nontrivial clumps.
+//
+//              |                    |                   |
+//              |                    | transient         |
+//              |                    |                   |
+//              |                ----V----               |
+//              |                |       |               |
+//              |                |   A   |               |
+//              |                |  2,2  |               |
+//              |                ----^----               |
+//              |                    |                   |
+//              |                    | parent            |
+//    transient |                    |                   | transient
+//              |                ---------               |
+//              |                |       |               |
+//              |                |   B   |               |
+//              |                |  2,2  |               |
+//              |                ---,-.---               |
+//              |       parent    ,`   `.   parent       |
+//              |               ,`       `.              |
+//              |             ,`           `.            |
+//              |         ---------     ---------        |
+//              |         |       |     |       |        |
+//              ---------->   C   |     |   D   <---------
+//                        |  1,1  |     |  1,1  |
+//                        ---------     ---------
+//
+// We create a scope edge from A to C:
+//
+//              |                    |                   |
+//              |                    | transient         |
+//              |                    |                   |
+//              |                ----V----               |
+//              |                |       |               |
+//              |   ,------------|   A   |               |
+//              |  |             |  2,3  |               |
+//              |  |             ----^----               |
+//              |  |                 |                   |
+//              |  |                 | parent            |
+//    transient |  |                 |                   | transient
+//              |  |             ---------               |
+//              |  | scope       |       |               |
+//              |  |             |   B   |               |
+//              |  |             |   2   |               |
+//              |  |             ---,-.---               |
+//              |  |    parent    ,`   `.   parent       |
+//              |  |            ,`       `.              |
+//              |  |          ,`           `.            |
+//              |  |      ---------     ---------        |
+//              |  `------>       |     |       |        |
+//              |         |   C   |     |   D   <---------
+//              `--------->   2   |     |  1,1  |
+//                        ---------     ---------
+//
+// This increments the refcount of C. It also causes C, B, and A to become
+// entangled. The refcount of the entanglement group is 3: the two transient
+// references to A and C, and the parent reference from D to B. The new scope
+// reference, and the parent references  from C to B and from B to A, are not
+// counted, because they are internal to the group. So far, this is just like
+// the previous example, except the reference count for the clump is one higher,
+// since the parent pointer from D to B is an additional external reference.
+//
+// Next, we create a scope edge from A to D:
+//
+//              |                    |                   |
+//              |                    | transient         |
+//              |                    |                   |
+//              |                ----V----               |
+//              |                |       |               |
+//              |   ,------------|   A   |------------.  |
+//              |  |             |  2,3  |            |  |
+//              |  |             ----^----            |  |
+//              |  |                 |                |  |
+//              |  |                 | parent         |  |
+//    transient |  |                 |                |  | transient
+//              |  |             ---------            |  |
+//              |  | scope       |       |      scope |  |
+//              |  |             |   B   |            |  |
+//              |  |             |   2   |            |  |
+//              |  |             ---,-.---            |  |
+//              |  |    parent    ,`   `.   parent    |  |
+//              |  |            ,`       `.           |  |
+//              |  |          ,`           `.         |  |
+//              |  |      ---------     ---------     |  |
+//              |  `------>       |     |       <-----.  |
+//              |         |   C   |     |   D   |        |
+//              `--------->   2   |     |   2   <---------
+//                        ---------     ---------
+//
+// This increments the refcount of D. It also causes D to become entangled with
+// A (via B, which is already entangled with A). This causes the group refcount
+// to be decremented once (for the parent pointer from D to B, since this
+// reference was counted but has now become internal to the group) and
+// incremented once (for the old groupo refcount of D) leaving the group
+// refcount unchanged overall.
+//
+// The group refcount of 3 now accurately reflects the number of external
+// references to the group: we have three transient references, and all other
+// references are internal. Since the group refcount is accurate, we can see
+// that releasing the three transient references should cause the entire group
+// to be freed.
+//
+////////////////////////////////////////////////////////////////////////////////
+// Garbage collection: mark-sweep
+//
+// While reference counting and ERC have their advantages for the kinds of
+// garbage which they are able to collect, the fact is that there are many kinds
+// of data structures which those techniques cannot collect, and so many real
+// programs will eventually need some form of garbage collection which is
+// capable of relibably freeing all of their unused objects, in order to avoid
+// memory leaks.
+//
+// The good news is that this most relivable GC algorithm does not have to be
+// particularly efficient. Since reference counting and ERC are continuously
+// freeing many common kinds of garbge, the rate at which uncollected garbage
+// accumulates in many programs will be far slower than it would be in a system
+// that only used a tracing garbage collector. Every so often when we do run
+// the general garbage collector, we can afford to sweep the entire heap looking
+// for garbage, and that's exactly what the tracing garbage collector does.
+//
+// The tracing GC is a very simple mark-sweep algorithm which frees all objects
+// not reachable from a root. A "root" is defined as any object with a nonzero
+// transient reference count; those are the objects that the program on top of
+// us is currently using. Note that the global object is always a root, because
+// the interpreter itself owns a transient reference to this object, which lasts
+// for the entire lifetime of the interpreter.
 //
 // To collect garbage, we first sweep the entire heap searching for roots. Once
 // we find the roots, we make a depth-first traversal of the heap starting from
@@ -293,158 +832,445 @@ void ObjectPool_Destroy(Blimp *blimp, ObjectPool *pool)
 
 static void FreeObject(Object *obj);
 
-static inline Blimp *GetBlimp(const Object *obj)
+////////////////////////////////////////////////////////////////////////////////
+// Reference counting
+//
+
+static inline void RC_BorrowScopeReference(Object *from, Object *to)
 {
-    return HashMap_GetBlimp(&obj->scope);
-}
-
-static inline void InternalBorrow(Object *owner, Object *obj)
-{
-    if (!GetBlimp(obj)->options.gc_refcount) {
-        return;
-    }
-
-    // Only increment the referece count if the object is different from the
-    // owner. There's no need to count references-to-self, because it is
-    // impossible for an object to be destroyed before itself is destroyed.
-    if (obj != owner) {
-        ++obj->internal_refcount;
-    }
-    return;
-}
-
-static inline void InternalRelease(Object *owner, Object *obj)
-{
-    if (!GetBlimp(obj)->options.gc_refcount) {
-        return;
-    }
-
-    if (obj == owner) {
-        // If `obj == owner`, we didn't acquire a reference in InternalBorrow(),
-        // so there's nothing to release.
-        return;
-    }
-
-    if (obj->internal_refcount == 0) {
-        // It's possible that we have a reference to an object with an internal
-        // refcount of 0 if that object has already been freed by the garbage
-        // collector. In that case, the garbage collector has determined that
-        // `obj` is unreachable, and we are unreachable as well. `obj` has
-        // already been freed, and we are about to be freed, so there's nothing
-        // more to do.
-        return;
-    }
-
-    if (--obj->internal_refcount == 0 && obj->transient_refcount == 0) {
-        FreeObject(obj);
+    if (from != to) {
+        // Only increment the referece count if the destination object is
+        // different from the source object. There's no need to count
+        // references-to-self, because it is impossible for an object to be
+        // destroyed before itself is destroyed.
+        ++to->internal_refcount;
     }
 }
 
-static Status NewObject(Blimp *blimp, Object *parent, Object **obj)
+static inline void RC_ReleaseScopeReference(Object *from, Object *to)
 {
-    // Try to allocate from the free list.
-    if ((*obj = blimp->objects.free_list) != NULL) {
-        assert((*obj)->type == OBJ_FREE);
+    // If `from == to`, we didn't acquire a reference in InternalBorrow(), so
+    // there's nothing to release.
+    if (from != to) {
+        assert(to->internal_refcount > 0);
+        if (--to->internal_refcount == 0 && to->transient_refcount == 0) {
+            FreeObject(to);
+        }
+    }
+}
 
-        blimp->objects.free_list = (*obj)->next;
-            // Pop the object off the free list.
-        Scope_Clear(&(*obj)->scope);
-            // The scope should already be initialized. Just make sure it's
-            // empty.
+static inline void RC_BorrowParent(Object *obj)
+{
+    assert(obj->parent != NULL);
+    assert(obj->parent != obj);
+    ++obj->parent->internal_refcount;
+}
+
+static inline void RC_ReleaseParent(Object *obj)
+{
+    assert(obj->parent != NULL);
+    assert(obj->parent != obj);
+    if (--obj->parent->internal_refcount == 0 &&
+        obj->parent->transient_refcount == 0)
+    {
+        FreeObject(obj->parent);
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Enhanced reference counting
+//
+
+static inline Object *ERC_GetClump(Object *obj);
+static void ERC_FreeClump(Object *clump);
+static inline bool ERC_ShouldEntangle(Object *from, Object *to);
+static bool ERC_Entangle(Object *from, Object *to);
+static void ERC_MergeClumps(Object *root, Object *child);
+
+#define BLOOM_FILTER_NUM_HASHES 4
+    // Number of hash functions, or number of bits set for each object in a 128-
+    // bit Bloom filter. This number was chosen because it has decent empirical
+    // performance on the existing ERC benchmarks. This should be investigated
+    // and tuned more carefully.
+
+// Perform one-time initialization of the ERC data in an object. This function
+// is called once, the first time an object is allocated from a batch.
+// Everything it does must be reusable when the object is reused.
+static void ERC_StaticInit(Object *obj)
+{
+    // Give the object its own bit pattern which will be used to represent this
+    // object in Bloom filters. The bit pattern should be unique with high
+    // probability.
+    //
+    // In theory, what we want here is a good hash of the object. Set one bit in
+    // the object's self_mask for each Bloom filter hash. However, since we
+    // assign each object a bit pattern once and then store that pattern with
+    // the object, we never need to compute a hash from an object, because we
+    // can just look it up. So this function doesn't need to be deterministic;
+    // it just needs to be uniform. In other words, we want the bits we set here
+    // to be pseudo-random.
+    //
+    // The pseudo-random number generator we use here is based on a monotonic
+    // counter. We extract the next number from the sequence by incrementing the
+    // counter and then applying the FNV1a hash function to randomize the bits.
+    // In the future, we should investigate actual PRNG algorithms.
+    static size_t count = 0;
+
+    obj->self_mask = BV128_ZER0;
+        // Initialize the mask to all zeros.
+
+    if (obj->type != OBJ_GLOBAL) {
+        // We don't set any bits for the global object, because nothing is ever
+        // entangled with the global object, so having it test positive in any
+        // Bloom filters would be pointless.
+
+        // Randomly set some number of bits.
+        for (size_t i = 0; i < BLOOM_FILTER_NUM_HASHES; ++i) {
+            // FNV1a hash function.
+            static const size_t offset = 14695981039346656037ull;
+            static const size_t prime  = 1099511628211ull;
+
+            size_t hash = offset;
+            const uint8_t *p = (const uint8_t *)&count;
+            for (size_t byte = 0; byte < sizeof(count); ++byte) {
+                hash = (hash ^ *p++) * prime;
+            }
+
+            // Set the bit corresponding to the current hash.
+            obj->self_mask = bv128_Set(obj->self_mask, hash % 128);
+
+            // Increment the PRNG state.
+            ++count;
+        }
+    }
+}
+
+// Reinitialize the ERC data in an object. Unlike ERC_StaticInit, this function
+// will be called each time the object is reused.
+static void ERC_Init(Object *obj)
+{
+    // Make this object the representative of a trivial clump.
+    obj->entangled = NULL;
+    obj->clump_refcount = 0;
+    obj->clump_next = obj;
+    obj->clump_prev = obj;
+
+    if (obj->parent) {
+        // The objects predecessors set consists of its parent together with its
+        // parent's predecessors. To compute this set, we union (bitwise-or) the
+        // parent's predecessors Bloom filter with the parent's self_mask.
+        obj->predecessors = bv128_Or(
+            obj->parent->predecessors, obj->parent->self_mask);
     } else {
-        // If that failed, try to allocate from the active batch.
-        ObjectBatch *batch = blimp->objects.batches;
-
-        if (
-            // If it's time to do a garbage collection...
-            blimp->options.gc_tracing &&
-            blimp->objects.batches_since_last_gc >=
-                blimp->options.gc_batches_per_trace &&
-
-            // ...and the active batch is saturated...
-            batch->uninitialized >= blimp->objects.batch_size
-        ) {
-            // Collect garbage and try the free list again.
-            ObjectPool_CollectGarbage(&blimp->objects);
-            *obj = blimp->objects.free_list;
-        }
-
-        if (*obj) {
-            // If we got an object from the free list after garbage collecting,
-            // prepare it to be allocated.
-            blimp->objects.free_list = (*obj)->next;
-            Scope_Clear(&(*obj)->scope);
-        } else {
-            // If garbage collection didn't turn up anything, try allocating
-            // from the active batch.
-
-            if (batch->uninitialized >= blimp->objects.batch_size) {
-                // If the batch is saturated, allocate a new batch.
-                TRY(Malloc(
-                    blimp,
-                    sizeof(ObjectBatch) +
-                        sizeof(Object)*blimp->objects.batch_size,
-                    &batch
-                ));
-                batch->uninitialized = 0;
-                batch->next = blimp->objects.batches;
-                blimp->objects.batches = batch;
-                ++blimp->objects.batches_since_last_gc;
-            }
-            assert(batch->uninitialized < blimp->objects.batch_size);
-
-            // Grab the next uninitialized object from the batch and initialize
-            // it.
-            *obj = &batch->objects[batch->uninitialized++];
-            if (Scope_Init(blimp, &(*obj)->scope) != BLIMP_OK) {
-                --batch->uninitialized;
-                return Blimp_Reraise(blimp);
-            }
-            (*obj)->reached = false;
-        }
+        // If the object has no parent, it has no predecessors.
+        obj->predecessors = BV128_ZER0;
     }
-
-    if (parent) {
-        InternalBorrow(*obj, parent);
-    }
-
-    (*obj)->parent = parent;
-    (*obj)->internal_refcount = 0;
-    (*obj)->transient_refcount = 1;
-    return BLIMP_OK;
 }
 
-static void FreeObject(Object *obj)
+static inline void ERC_ExternalBorrow(Object *obj)
+{
+    ++ERC_GetClump(obj)->clump_refcount;
+}
+
+static inline void ERC_ExternalRelease(Object *obj)
+{
+    Object *clump = ERC_GetClump(obj);
+    assert(clump->clump_refcount > 0);
+    if (--clump->clump_refcount == 0) {
+        ERC_FreeClump(clump);
+    }
+}
+
+static inline void ERC_BorrowScopeReference(Object *from, Object *to)
+{
+    Object *from_clump = ERC_GetClump(from);
+    Object *to_clump   = ERC_GetClump(to);
+    if (from_clump == to_clump) {
+        // The objects are already entangled, there's nothing to do.
+        return;
+    }
+
+    // The objects are not yet entangled. Check if `to` could possibly be a
+    // descendant of `from`.
+    if (!ERC_ShouldEntangle(from_clump, to_clump)) {
+        // If it is not, then this reference is not completing a simple cycle,
+        // so there's no need to entangle the objects. Just record that we're
+        // creating a new reference to the clump.
+        ERC_ExternalBorrow(to_clump);
+        return;
+    }
+
+    // If ERC_ShouldEntangle() returned true, then `to` _might_ be a descendant
+    // of from (in which case this reference would be creating a simple cycle),
+    // but it might not be (since the Bloom filter used by ERC_ShouldEntangle
+    // can yield false positives).
+    //
+    // In any case, try to entangle the objects. This will either successfully
+    // entangle them, or discover that `to` is not a descendant of `from` (that
+    // is, ERC_ShouldEntangle gave us a false positive) in which case it will
+    // have no effect on the objects.
+    if (!ERC_Entangle(from_clump, to_clump)) {
+        // If we could not entangle the objects because of a false positive,
+        // then just record the new reference on the existing clump.
+        ERC_ExternalBorrow(to_clump);
+    }
+}
+
+static inline void ERC_ReleaseScopeReference(Object *from, Object *to)
+{
+    Object *from_clump = ERC_GetClump(from);
+    Object *to_clump   = ERC_GetClump(to);
+
+    if (from_clump != to_clump &&
+            // We need to make sure these objects belong to two different
+            // clumps, because if they are entangled then references between
+            // them are not counted in the clump reference count, so we can't
+            // decrement the reference count here.
+        --to_clump->clump_refcount == 0)
+    {
+        ERC_FreeClump(to_clump);
+    }
+}
+
+static inline void ERC_BorrowParent(Object *obj)
+{
+    assert(obj->parent != NULL);
+
+    Object *parent_clump = ERC_GetClump(obj->parent);
+    Object *obj_clump    = ERC_GetClump(obj);
+
+    if (parent_clump != obj_clump) {
+        // We only want to count this reference if the object is not already
+        // entangled with its parent. If they are entangled, then this is an
+        // intra-clump reference, which doesn't count.
+
+        ERC_ExternalBorrow(parent_clump);
+            // Unlike scope references (which might complete a simple cycle)
+            // references to parents aren't treated specially by ERC, because
+            // parent pointers alone always from an acyclic tree. So once we are
+            // sure the object and it's parent aren't entangled, we can just
+            // treat this as an external reference.
+    }
+}
+
+static inline void ERC_ReleaseParent(Object *obj)
+{
+    assert(obj->parent != NULL);
+
+    Object *parent_clump = ERC_GetClump(obj->parent);
+    Object *obj_clump    = ERC_GetClump(obj);
+
+    if (parent_clump != obj_clump) {
+        // When we created this reference, we only counted it if the object
+        // wasn't already entangled with its parent. So we can only release it
+        // under the same condition.
+
+        ERC_ExternalRelease(parent_clump);
+            // Once we know the two objects aren't entangled, parent references
+            // are treated just like external references.
+    }
+}
+
+static inline Object *ERC_GetClump(Object *obj)
+{
+    if (obj->entangled == NULL) {
+        return obj;
+    }
+
+    Object *clump = ERC_GetClump(obj->entangled);
+
+    obj->entangled = clump;
+        // If we had to recursively traverse `entangled` pointers to find the
+        // clump representative, update `obj`s `entangled` pointer to point
+        // directly to the representative, so that the next time we try to get
+        // its clump, it will be fast.
+        //
+        // This is similar to the path compression idea in a union-find data
+        // structure, and should guarantee a small bound on the number of
+        // pointer indirections needed to find the clump representative from any
+        // member of the clump.
+
+    return clump;
+}
+
+static inline bool ERC_ShouldEntangle(Object *from, Object *to)
+{
+    if (from->type == OBJ_GLOBAL) {
+        // Never entangle any object with the global object. Since the global
+        // object is never freed, any object in its clump can never be freed by
+        // ERC. So entangling an object with the global object can never help
+        // us. It's better to just let objects form cycles with the global
+        // object and hope that those cycles are later broken.
+        return false;
+    }
+
+    if (from != to && !bv128_Test(bv128_And(from->self_mask, to->predecessors))) {
+        // If the bits corresponding to `from` are not set in the predecessors
+        // Bloom filter of `to`, then `to` is definitely not a descendant of
+        // `from`, and so this edge is not completing a parent pointer cycle.
+        return false;
+    }
+
+    return true;
+}
+
+static bool ERC_Entangle(Object *from, Object *to)
+{
+    assert(from->entangled == NULL);
+    assert(to->entangled == NULL);
+    assert(from != to);
+
+    if (to->parent == NULL) {
+        // We can only entangle an object with its parent or a parent of its
+        // parent, so if the object has no parent, we can't entangle it.
+        return false;
+    }
+
+    Object *parent = ERC_GetClump(to->parent);
+
+    if (parent == from) {
+        // If the object we're trying to entangle with is our immediate parent,
+        // we can go ahead and merge the two clumps.
+        ERC_MergeClumps(from, to);
+        return true;
+    } else {
+        // Otherwise, we first need to entangle our parent with `from`, so that
+        // when we entangle with `from`, we aren't breaking the contiguous tree
+        // fragment invariant of clumps. We recursively call ERC_Entangle to do
+        // this entanglement.
+        //
+        // Note that since we haven't yet modified either clump, these recursive
+        // calls will walk all the way up the tree from `to` to `from` before
+        // making any modifications. So if one of the recursive calls returns
+        // `false` because `from` turned out not to be reachable (due to a Bloom
+        // filter false positive) then we will be able to return `false` in turn
+        // without having modified the clumps.
+        if (ERC_Entangle(from, parent)) {
+            ERC_MergeClumps(from, to);
+            return true;
+        } else {
+            return false;
+        }
+    }
+}
+
+static void ERC_MergeClumps(Object *root, Object *child)
+{
+    assert(root->entangled == NULL);
+    assert(child->entangled == NULL);
+    assert(root != child);
+
+    // Update refcounts.
+    assert(root->clump_refcount > 0);
+    root->clump_refcount -= 1;
+    root->clump_refcount += child->clump_refcount;
+
+    // Append the lists of objects in the clump.
+    Object *last = child->clump_prev;
+    root->clump_prev->clump_next = child;
+    child->clump_prev = root->clump_prev;
+    root->clump_prev = last;
+    last->clump_next = root;
+
+    // Entangle the child to the root.
+    child->entangled = root;
+}
+
+static inline void ERC_RemoveFromClump(Object *obj)
+{
+    Object *clump = ERC_GetClump(obj);
+
+    if (clump->clump_refcount == 0) {
+        return;
+    }
+
+    obj->clump_next->clump_prev = obj->clump_prev;
+    obj->clump_prev->clump_next = obj->clump_next;
+}
+
+static void ERC_FreeClump(Object *clump)
+{
+    assert(clump->entangled == NULL);
+
+    Object *obj = clump;
+
+    do {
+        assert(obj->transient_refcount == 0);
+
+        Object *next = obj->clump_next;
+        FreeObject(obj);
+        obj = next;
+    } while (obj != clump);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Unified reference counting API
+//
+
+static inline void BorrowScopeReference(Object *from, Object *to)
+{
+    Blimp *blimp = GetBlimp(from);
+
+    if (blimp->options.gc_refcount) {
+        RC_BorrowScopeReference(from, to);
+    }
+    if (blimp->options.gc_cycle_detection) {
+        ERC_BorrowScopeReference(from, to);
+    }
+}
+
+static inline void ReleaseScopeReference(Object *from, Object *to)
+{
+    if (to->type == OBJ_FREE) {
+        // It's possible that we have a reference to a free object if that
+        // object has already been freed by the tracing garbage collector.
+        return;
+    }
+
+    Blimp *blimp = GetBlimp(from);
+
+    if (blimp->options.gc_cycle_detection) {
+        ERC_ReleaseScopeReference(from, to);
+    }
+
+    if (blimp->options.gc_refcount) {
+        RC_ReleaseScopeReference(from, to);
+    }
+}
+
+static inline void BorrowParent(Object *obj)
 {
     Blimp *blimp = GetBlimp(obj);
 
-    assert(obj->transient_refcount == 0);
-    obj->internal_refcount = 0;
-
-    // Release our references to all of the objects in this object's scope.
-    for (ScopeIterator entry = Scope_Begin(&obj->scope);
-         entry != Scope_End(&obj->scope);
-         entry = Scope_Next(&obj->scope, entry))
-    {
-        Object *child = Scope_GetValue(&obj->scope, entry);
-        InternalRelease(obj, child);
+    if (blimp->options.gc_refcount) {
+        RC_BorrowParent(obj);
     }
-
-    // Release our reference to our parent.
-    if (obj->parent) {
-        InternalRelease(obj, obj->parent);
+    if (blimp->options.gc_cycle_detection) {
+        ERC_BorrowParent(obj);
     }
-
-    // Release our reference to the code expression if this is a block.
-    if (obj->type == OBJ_BLOCK) {
-        Blimp_FreeExpr(obj->code);
-    }
-
-    // Push the object onto the free list.
-    obj->type = OBJ_FREE;
-    obj->next = blimp->objects.free_list;
-    blimp->objects.free_list = obj;
 }
+
+static inline void ReleaseParent(Object *obj)
+{
+    if (obj->parent->type == OBJ_FREE) {
+        // It's possible that we have a reference to a free object if that
+        // object has already been freed by the tracing garbage collector.
+        return;
+    }
+
+    Blimp *blimp = GetBlimp(obj);
+
+    if (blimp->options.gc_cycle_detection) {
+        ERC_ReleaseParent(obj);
+    }
+    if (blimp->options.gc_refcount) {
+        RC_ReleaseParent(obj);
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Mark-Sweep Tracing GC
+//
 
 static void MarkReachable(ObjectPool *pool)
 {
@@ -535,7 +1361,9 @@ void ObjectPool_CollectGarbage(ObjectPool *pool)
 
 BlimpGCStatistics ObjectPool_GetStats(ObjectPool *pool)
 {
-    BlimpGCStatistics stats = {0};
+    BlimpGCStatistics stats = {
+        .min_clump = SIZE_MAX
+    };
 
     MarkReachable(pool);
 
@@ -546,17 +1374,163 @@ BlimpGCStatistics ObjectPool_GetStats(ObjectPool *pool)
     for (ObjectBatch *batch = pool->batches; batch; batch = batch->next) {
         stats.max_allocated += batch->uninitialized;
         for (size_t i = 0; i < batch->uninitialized; ++i) {
-            if (batch->objects[i].type != OBJ_FREE) {
+            Object *obj = &batch->objects[i];
+
+            if (obj->type != OBJ_FREE) {
                 ++stats.allocated;
+
+                if (obj->entangled == NULL && obj->clump_next != obj) {
+                    // This is the representative of a nontrivial clump.
+                    ++stats.clumps;
+
+                    // Count up the number of objects in the clump.
+                    size_t clump_size = 0;
+                    Object *curr = obj;
+                    do {
+                        ++clump_size;
+                        curr = curr->clump_next;
+                    } while (curr != obj);
+
+                    stats.entangled += clump_size;
+                    if (clump_size > stats.max_clump) {
+                        stats.max_clump = clump_size;
+                    }
+                    if (clump_size < stats.min_clump) {
+                        stats.min_clump = clump_size;
+                    }
+                }
             }
-            if (batch->objects[i].reached) {
+            if (obj->reached) {
+                assert(obj->type != OBJ_FREE);
                 ++stats.reachable;
             }
-            batch->objects[i].reached = false;
+            obj->reached = false;
         }
     }
 
     return stats;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Object creation and destruction
+//
+
+static Status NewObject(Blimp *blimp, Object *parent, Object **obj)
+{
+    assert(parent == NULL || parent->type != OBJ_FREE);
+
+    // Try to allocate from the free list.
+    if ((*obj = blimp->objects.free_list) != NULL) {
+        assert((*obj)->type == OBJ_FREE);
+
+        blimp->objects.free_list = (*obj)->next;
+            // Pop the object off the free list.
+        Scope_Clear(&(*obj)->scope);
+            // The scope should already be initialized. Just make sure it's
+            // empty.
+    } else {
+        // If that failed, try to allocate from the active batch.
+        ObjectBatch *batch = blimp->objects.batches;
+
+        if (
+            // If it's time to do a garbage collection...
+            blimp->options.gc_tracing &&
+            blimp->objects.batches_since_last_gc >=
+                blimp->options.gc_batches_per_trace &&
+
+            // ...and the active batch is saturated...
+            batch->uninitialized >= blimp->objects.batch_size
+        ) {
+            // Collect garbage and try the free list again.
+            ObjectPool_CollectGarbage(&blimp->objects);
+            *obj = blimp->objects.free_list;
+        }
+
+        if (*obj) {
+            // If we got an object from the free list after garbage collecting,
+            // prepare it to be allocated.
+            blimp->objects.free_list = (*obj)->next;
+            Scope_Clear(&(*obj)->scope);
+        } else {
+            // If garbage collection didn't turn up anything, try allocating
+            // from the active batch.
+
+            if (batch->uninitialized >= blimp->objects.batch_size) {
+                // If the batch is saturated, allocate a new batch.
+                TRY(Malloc(
+                    blimp,
+                    sizeof(ObjectBatch) +
+                        sizeof(Object)*blimp->objects.batch_size,
+                    &batch
+                ));
+                batch->uninitialized = 0;
+                batch->next = blimp->objects.batches;
+                blimp->objects.batches = batch;
+                ++blimp->objects.batches_since_last_gc;
+            }
+            assert(batch->uninitialized < blimp->objects.batch_size);
+
+            // Grab the next uninitialized object from the batch and initialize
+            // it.
+            *obj = &batch->objects[batch->uninitialized++];
+            if (Scope_Init(blimp, &(*obj)->scope) != BLIMP_OK) {
+                --batch->uninitialized;
+                return Blimp_Reraise(blimp);
+            }
+            (*obj)->reached = false;
+            ERC_StaticInit(*obj);
+        }
+    }
+
+    (*obj)->parent = parent;
+    (*obj)->internal_refcount = 0;
+    (*obj)->transient_refcount = 0;
+    ERC_Init(*obj);
+
+    if (parent) {
+        BorrowParent(*obj);
+    }
+
+    BlimpObject_Borrow(*obj);
+        // All objects are created with one transient reference.
+
+    return BLIMP_OK;
+}
+
+static void FreeObject(Object *obj)
+{
+    if (obj->type == OBJ_FREE) {
+        return;
+    }
+
+    assert(obj->transient_refcount == 0);
+    obj->type = OBJ_FREE;
+
+    Blimp *blimp = GetBlimp(obj);
+
+    if (blimp->options.gc_cycle_detection) {
+        ERC_RemoveFromClump(obj);
+    }
+
+    // Release our references to all of the objects in this object's scope.
+    for (ScopeIterator entry = Scope_Begin(&obj->scope);
+         entry != Scope_End(&obj->scope);
+         entry = Scope_Next(&obj->scope, entry))
+    {
+        ReleaseScopeReference(obj, Scope_GetValue(&obj->scope, entry));
+    }
+
+    // Release our reference to our parent.
+    ReleaseParent(obj);
+
+    // Release our reference to the code expression if this is a block.
+    if (obj->type == OBJ_BLOCK) {
+        Blimp_FreeExpr(obj->code);
+    }
+
+    // Push the object onto the free list.
+    obj->next = blimp->objects.free_list;
+    blimp->objects.free_list = obj;
 }
 
 Status BlimpObject_NewBlock(
@@ -588,24 +1562,6 @@ Status BlimpObject_NewGlobal(Blimp *blimp, Object **obj)
     TRY(NewObject(blimp, NULL, obj));
     (*obj)->type = OBJ_GLOBAL;
     return BLIMP_OK;
-}
-
-Object *BlimpObject_Borrow(Object *obj)
-{
-    ++obj->transient_refcount;
-    return obj;
-}
-
-void BlimpObject_Release(Object *obj)
-{
-    assert(obj->transient_refcount);
-
-    if (--obj->transient_refcount == 0 &&
-        obj->internal_refcount == 0 &&
-        GetBlimp(obj)->options.gc_refcount)
-    {
-        FreeObject(obj);
-    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -696,6 +1652,8 @@ Status BlimpObject_ParseSymbol(const Object *obj, const Symbol **sym)
 
 Status BlimpObject_Get(const Object *obj, const Symbol *sym, Object **ret)
 {
+    assert(obj->type != OBJ_FREE);
+
     Object **value = Lookup((Object *)obj, sym, NULL);
     if (value) {
         *ret = *value;
@@ -710,31 +1668,27 @@ Status BlimpObject_Get(const Object *obj, const Symbol *sym, Object **ret)
 
 Status BlimpObject_Set(Object *obj, const Symbol *sym, Object *val)
 {
-    assert(val);
+    assert(obj->type != OBJ_FREE);
+    assert(val->type != OBJ_FREE);
 
     // If the symbol is already in scope, update the existing value.
     Object *owner;
     Object **existing_value = Lookup(obj, sym, &owner);
     if (existing_value) {
-        InternalBorrow(owner, val);
+        ReleaseScopeReference(owner, *existing_value);
+            // This scope owned a reference to the existing value. After this
+            // operation, the old value will no longer be reachable through this
+            // scope, so we have to release our reference.
+        BorrowScopeReference(owner, val);
             // Borrow the new value on behalf of the existing owner of the scope
             // entry.
-
-        Object *to_free = *existing_value;
         *existing_value = val;
-        if (to_free != owner) {
-            InternalRelease(owner, to_free);
-                // This scope owned a reference to the existing value. After
-                // this operation, the old value will no longer be reachable
-                // through this scope, so we have to release our reference.
-        }
-
-        return BLIMP_OK;
+    } else {
+        // Otherwise, add it to the innermost scope.
+        BorrowScopeReference(obj, val);
+        TRY(Scope_Update(&obj->scope, sym, val));
     }
 
-    // Otherwise, add it to the innermost scope.
-    InternalBorrow(obj, val);
-    TRY(Scope_Update(&obj->scope, sym, val));
     return BLIMP_OK;
 }
 
@@ -749,4 +1703,38 @@ Status BlimpObject_Eval(Object *obj, Object **ret)
 
     return Blimp_Eval(GetBlimp(obj), obj->code, obj, ret);
         // Evaluate the code expression in `obj`s scope.
+}
+
+
+Object *BlimpObject_Borrow(Object *obj)
+{
+    Blimp *blimp = GetBlimp(obj);
+
+    ++obj->transient_refcount;
+
+    if (blimp->options.gc_cycle_detection) {
+        ERC_ExternalBorrow(obj);
+    }
+
+    return obj;
+}
+
+void BlimpObject_Release(Object *obj)
+{
+    Blimp *blimp = GetBlimp(obj);
+
+    assert(obj->type != OBJ_FREE);
+    assert(obj->transient_refcount);
+    --obj->transient_refcount;
+
+    if (blimp->options.gc_cycle_detection) {
+        ERC_ExternalRelease(obj);
+    }
+
+    if (obj->transient_refcount == 0 &&
+        obj->internal_refcount == 0 &&
+        blimp->options.gc_refcount)
+    {
+        FreeObject(obj);
+    }
 }

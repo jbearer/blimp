@@ -1,6 +1,7 @@
 #ifndef BLIMP_OBJECT_H
 #define BLIMP_OBJECT_H
 
+#include "internal/bit_vector.h"
 #include "internal/common.h"
 #include "internal/hash_map.h"
 
@@ -8,8 +9,10 @@ typedef HashMap Scope;
 
 struct BlimpObject {
     // General object data.
-    BlimpObject *parent;
+    Object *parent;
     Scope scope;
+
+    // Reference counting.
     size_t transient_refcount;
         // The number of short-lived, local references to this object. This
         // accounts for users of the API who are currently working on this
@@ -34,6 +37,25 @@ struct BlimpObject {
         // will free objects with a nonzero `internal_refcount` if it can
         // determine the object is not reachable from any object with a nonzero
         // `transient_refcount`.
+
+    // Entanglement cycle detection.
+    bv128 predecessors;
+        // Bloom filter of objects reachable from this object by following
+        // parent pointers, not including this object.
+    bv128 self_mask;
+        // Mask corresponding to this object in a Bloom filter.
+    Object *entangled;
+        // The object that this object is entangled with, or NULL if this is
+        // the representative of its clump. If non-NULL, `entangled` is
+        // guaranteed to be a predecessor of this object. The representative of
+        // each clump is reachable from any object in the clump by following
+        // `entangled` pointers.
+    size_t clump_refcount;
+        // Number of external references to this clump. This is only meaningful
+        // for the representative of a clump (`entangled == NULL`).
+    Object *clump_next;
+    Object *clump_prev;
+        // Doubly linked, circular list of all the objects in this clump.
 
     // Reachability analysis.
     bool reached;

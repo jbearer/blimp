@@ -1,10 +1,16 @@
-#: --skip-racket --blimp-timeout 0.5 -fno-gc-tracing
+#: --skip-racket --blimp-timeout 2.75 -fno-gc-tracing
 
 # Tests garbage collection of local variables; that is, objects which are
 # referenced by a parent object (or a parent of a parent, etc.). These seem easy
 # to collect, since the references are all fairly local and acyclic. However,
 # these kinds of references create cycles with the internal parent pointers,
 # making collection a bit tricky.
+#
+# This test is similar to bench_erc_locals_named. However, unlike that test,
+# where the scope with the locals is temporarily referenced by a long-lived
+# object before being released, the scope containing the locals here is
+# completely anonymous. This means that it never becomes entangled with the
+# long-lived object, making it slightly easier to collect.
 
 bind set symbol (
     this{.get|.}{.eval|.}{:=|that{.get|.}}
@@ -17,8 +23,15 @@ bind locals.create_locals_in_method (
     .
 );
 
+bind locals.init (
+    self{:=|this{.get|.}};
+    self{.get|.}{.eval|.};
+    self{.get|.}{.create_locals_in_method|.};
+    .
+);
+
 go1{:=|{do|
-    scope {:=| {locals|
+    {locals|
         direct_local{:=|uninitialized};
         {set|direct_local} bar;
             # Create a local variable which is an immediate child of this block.
@@ -27,12 +40,8 @@ go1{:=|{do|
             # immediate child, of the owning object: foo is a child of the :=
             # block, which is a child of this object.
         .
-    }};
-    scope{.get|.}{.eval|.};
-    scope{.get|.}{.create_locals_in_method|.};
+    }{.init|.};
 
-    scope{:=|.};
-        # Get rid of our reference to `scope`, which should free its locals.
     .
 }};
 
@@ -107,16 +116,11 @@ go100000{:=|{do|
 }};
 
 go100000{.get|.}{.eval|.};
+go100000{.get|.}{.eval|.};
+go100000{.get|.}{.eval|.};
+go100000{.get|.}{.eval|.};
+go100000{.get|.}{.eval|.};
 
 {gc|.}{!print_stats|.};
-
-{gc|.}{!allocated|.}{!expect|{gc|.}{!reachable|.}};
-    # Since this benchmark only creates local variables with no cycles,
-    # reference counting should clean up perfectly. The only allocated objects
-    # should be reachable ones.
-{gc|.}{!reachable|.}{!expect|8};
-    # Furthermore, if we cleaned everything up properly, the only reachable
-    # objects should be the global object, the six go* functions we bound, and
-    # the `scope` local which is bound in the last object bound to `go1`, which
-    # should just point to `.`.
+{gc|.}{!expect_clean|.};
 .

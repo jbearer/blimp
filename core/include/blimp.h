@@ -103,6 +103,42 @@ typedef struct {
      * This option is enabled by default.
      */
     bool gc_refcount;
+
+    /**
+     * \brief
+     *      This option controls whether enhanced reference counting is enabled.
+     *
+     * Standard internal reference counting (`gc_refcount`) is able to free
+     * unreachable objects which are not referenced by other objects in a cycle,
+     * without invoking the tracing garbage collector. Enhanced reference
+     * counting extends this capability with limited cycle detection.
+     *
+     * Specifically, cycles formed by a single scope reference and one or more
+     * parent references can be detected and collected without using the
+     * tracing garbage collector.
+     *
+     * This allows the system to collect certain very common data structure
+     * patterns using reference counting. For example, consider the case of a
+     * simple local variable:
+     *
+     *      {outer_scope|
+     *          local{:=|value}
+     *      }
+     *
+     * The `outer_scope` object clearly has a reference to `value` through
+     * `local` in its scope. But `value` has a reference to the `:=` object,
+     * which is its parent. And that object has a reference to the `outer_scope`
+     * object, creating a cycle. `gc_refcount` on its own would not be able to
+     * free any of the objects involved in this cycle; we would need
+     * `gc_tracing` to do so. But with `gc_cycle_detection` enabled, we will
+     * detect that these objects form a cycle, and we will free the whole group
+     * of objects as soon as all references to objects in the cycle originate
+     * from within the cycle; that is, as soon as there are no references from
+     * outside the cycle to any of the objects in it.
+     *
+     * This option is enabled by default.
+     */
+    bool gc_cycle_detection;
 } BlimpOptions;
 
 extern const BlimpOptions DEFAULT_BLIMP_OPTIONS;
@@ -727,6 +763,15 @@ typedef struct {
     size_t max_allocated;
         ///< The largest number of objects which were ever allocated at one
         ///  time.
+
+    size_t clumps;
+        ///< The number of allocated entanglement clumps.
+    size_t entangled;
+        ///< The number of allocated objects belonging to a clump.
+    size_t max_clump;
+        ///< The number of objects in the largest entanglement clump.
+    size_t min_clump;
+        ///< The number of objects in the smallest entanglement clump.
 } BlimpGCStatistics;
 
 BlimpGCStatistics Blimp_GetGCStatistics(Blimp *blimp);

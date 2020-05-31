@@ -1,0 +1,11 @@
+#: --skip-racket -fno-gc-tracing
+
+bind symbol.foo .;
+
+{scope|
+    x{:=|y{.foo|.}}
+}{.eval|.};
+
+{gc|.}{!expect_clean|.};
+
+.

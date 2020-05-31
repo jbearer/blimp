@@ -312,6 +312,12 @@ static BlimpStatus GC_PrintStats(
     printf("  allocated now:   %zu\n", stats.allocated);
     printf("  reachable:       %zu\n", stats.reachable);
     printf("  high water mark: %zu\n", stats.max_allocated);
+    printf("  # of clumps:     %zu\n", stats.clumps);
+    if (stats.clumps > 0) {
+        printf("  clump avg:       %.1f\n", (float)stats.entangled/stats.clumps);
+        printf("  clump max:       %zu\n", stats.max_clump);
+        printf("  clump min:       %zu\n", stats.min_clump);
+    }
     return BLIMP_OK;
 }
 
