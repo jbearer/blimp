@@ -1,4 +1,4 @@
-#: --skip-racket -fno-gc-tracing
+#: --skip-racket -fno-gc-tracing -fno-gc-refcount
 
 bind symbol.foo .;
 

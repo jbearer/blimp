@@ -318,6 +318,7 @@ static BlimpStatus GC_PrintStats(
         printf("  clump max:       %zu\n", stats.max_clump);
         printf("  clump min:       %zu\n", stats.min_clump);
     }
+    printf("  # of collections: %zu\n", stats.collections);
     return BLIMP_OK;
 }
 

@@ -772,6 +772,9 @@ typedef struct {
         ///< The number of objects in the largest entanglement clump.
     size_t min_clump;
         ///< The number of objects in the smallest entanglement clump.
+
+    size_t collections;
+        ///< The number of times the tracing garbage collector has run.
 } BlimpGCStatistics;
 
 BlimpGCStatistics Blimp_GetGCStatistics(Blimp *blimp);

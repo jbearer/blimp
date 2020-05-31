@@ -1,4 +1,4 @@
-#: --skip-racket --blimp-timeout 2.3 -fno-gc-refcount -fno-gc-cycle-detection
+#: --skip-racket --blimp-timeout 3 -fno-gc-refcount -fno-gc-cycle-detection
 
 # Tests garbage collection of cycles which get broken by the user. Creates 100k
 # 10-element cycles, and then breaks each cycle.

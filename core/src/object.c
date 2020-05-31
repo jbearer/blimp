@@ -822,6 +822,7 @@ Status ObjectPool_Init(Blimp *blimp, ObjectPool *pool)
     pool->batches->next = NULL;
     pool->free_list = NULL;
     pool->batches_since_last_gc = 1;
+    pool->gc_collections = 0;
 
     Random_Init(&pool->random, 42);
 
@@ -1429,6 +1430,7 @@ void ObjectPool_CollectGarbage(ObjectPool *pool)
     }
 
     pool->batches_since_last_gc = 0;
+    ++pool->gc_collections;
 }
 
 BlimpGCStatistics ObjectPool_GetStats(ObjectPool *pool)
@@ -1479,6 +1481,8 @@ BlimpGCStatistics ObjectPool_GetStats(ObjectPool *pool)
             obj->reached = false;
         }
     }
+
+    stats.collections = pool->gc_collections;
 
     return stats;
 }

@@ -16,7 +16,9 @@
 #include <time.h>
 #include <wordexp.h>
 
-#include "blimp.h"
+#include <blimp.h>
+#include <blimp/module.h>
+
 #include "options.h"
 #include "racket.h"
 #include "test_blimp.h"
@@ -53,6 +55,7 @@ typedef struct Group {
     Options options;
     size_t num_tests;
     Test **tests;
+    char *import_path[2];
 
     // Outputs
     size_t results[NUM_RESULT_TYPES];
@@ -273,6 +276,8 @@ static void RunGroup(Group *group)
         if (skipped) {
             SkipTest(test, "group not selected");
         } else {
+            Blimp_Check(BlimpModule_Init(
+                test->blimp, (const char **)group->import_path));
             RunTest(test);
         }
         Blimp_Delete(test->blimp);
@@ -722,6 +727,13 @@ static Suite *FindTests(const Options *options)
         group->tests = NULL;
         group->num_tests = 0;
         group->options = suite->options;
+        group->import_path[0] = calloc(
+            strlen(TEST_DIRECTORY) + 1 + strlen(group_de->d_name) + 1, 1);
+        strcat(group->import_path[0], TEST_DIRECTORY);
+        strcat(group->import_path[0], "/");
+        strcat(group->import_path[0], group_de->d_name);
+        group->import_path[1] = NULL;
+
 
         DIR *group_dir = fdopendir(group_dir_fd);
         struct dirent *test_de;

@@ -1,4 +1,4 @@
-#: --skip-racket --blimp-timeout 2.9 -fno-gc-cycle-detection
+#: --skip-racket --blimp-timeout 5.7 -fno-gc-cycle-detection -fno-gc-refcount
 
 # Tests garbage collection of local variables; that is, objects which are
 # referenced by a parent object (or a parent of a parent, etc.).
@@ -121,5 +121,5 @@ go100000{.get|.}{.eval|.};
 
 {gc|.}{!collect|.};
 {gc|.}{!print_stats|.};
-{gc|.}{!expect_clean|.};
+{gc|.}{!check_collect|.};
 .

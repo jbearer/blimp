@@ -5,9 +5,7 @@
 #include <unistd.h>
 
 #include <blimp.h>
-
-#include "module.h"
-#include "options.h"
+#include <blimp/module.h>
 
 static BlimpStatus ImportMethod(
     Blimp *blimp,
@@ -19,30 +17,30 @@ static BlimpStatus ImportMethod(
 {
     (void) receiver;
 
-    const Options *options = (const Options *)data;
+    const char **path = (const char **)data;
 
     const BlimpSymbol *module;
     if (BlimpObject_ParseSymbol(message, &module) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
 
-    return Module_Import(
-        blimp, BlimpSymbol_GetName(module), context, options, result);
+    return BlimpModule_Import(
+        blimp, BlimpSymbol_GetName(module), context, path, result);
 }
 
-BlimpStatus Module_Init(Blimp *blimp, const Options *options)
+BlimpStatus BlimpModule_Init(Blimp *blimp, const char **path)
 {
     return Blimp_BindVTableFragment(blimp, (BlimpVTableFragment){
-        {"import", "symbol", ImportMethod, (void *)options},
+        {"import", "symbol", ImportMethod, (void *)path},
         {0, 0, 0, 0}
     });
 }
 
-BlimpStatus Module_Import(
+BlimpStatus BlimpModule_Import(
     Blimp *blimp,
     const char *module,
     BlimpObject *context,
-    const Options *options,
+    const char **search_path,
     BlimpObject **result)
 {
     BlimpStatus status = BLIMP_OK;
@@ -54,7 +52,7 @@ BlimpStatus Module_Import(
         status = Blimp_Error(blimp, BLIMP_OUT_OF_MEMORY);
         goto err_malloc;
     }
-    memcpy(path, module, length);
+    memcpy(path, module, length+1);
 
     // Replace dots with slashes.
     char *c;
@@ -69,8 +67,8 @@ BlimpStatus Module_Import(
 
     // Search the path for a file matching `path`.
     FILE *file = NULL;
-    for (size_t i = 0; i < options->import_path_len; ++i) {
-        const char *dir = options->import_path[i];
+    for (const char **path_entry = search_path; *path_entry; ++path_entry) {
+        const char *dir = *path_entry;
 
         int dirfd = open(dir, O_RDONLY|O_DIRECTORY);
         if (dirfd < 0) {

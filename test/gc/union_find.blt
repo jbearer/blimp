@@ -1,0 +1,21 @@
+#: --skip-racket
+
+# This test doesn't actually test garbage collection. It's just a quick sanity
+# check that the union-find module (used in several actual GC tests) is working
+# the way it's supposed to.
+
+{import|.} union_find;
+
+a{:=|{node|a}};
+a{.get|.}{.insert|.};
+b{:=|{node|b}};
+b{.get|.}{.insert|.};
+c{:=|{node|c}};
+c{.get|.}{.insert|.};
+a{.get|.}{.union|b{.get|.}};
+
+a{.get|.}{.equiv|b{.get|.}} {!expect_true|.};
+b{.get|.}{.equiv|a{.get|.}} {!expect_true|.};
+a{.get|.}{.equiv|c{.get|.}} {!expect_false|.};
+
+.

@@ -1,36 +1,10 @@
-#: --skip-racket --blimp-timeout 3.6 -fno-gc-cycle-detection
+#: --skip-racket --blimp-timeout 8.6 -fno-gc-cycle-detection -fno-gc-refcount
 
-# This test implements a version of Tarjan's union-find data structure for
-# disjoint set operations. The data structure is a forest of inverted trees,
-# where each node has a single outgoing edge to its parent, rather than many
-# outgoing edges to its children, like in a normal tree. In other words, a
-# typical union-find is a wide DAG: a directed acyclic graphs where many nodes
-# have many incoming edges. This makes it an excellent data structure to study
-# the limits of reference counting garbage collection.
-#
-# Conceptually, each tree in the forest represents a set, or, equivalently, an
-# equivalence class of nodes. The root of each tree is said to be the
-# representative element of that set. We can efficiently check if two nodes are
-# in the same set by traversing to the roots of their respective trees and
-# checking if they share the same root. Note though that the representative of a
-# set can change when two sets are unioned.
-#
-# The data structure supports four operations:
-#   node.insert:
-#       Add a node into the data structure. It is initially in a singleton set
-#       of which it is the representative.
-#   node.union:
-#       Merge the set containing one node with the set containing another.
-#   node.find:
-#       Find the representative node of the set containing the receiver. The
-#       receiver node must have already been inserted using `node.insert`.
-#   node.equiv:
-#       Test if one node is in the same set as another.
-#
-# After implementing the data structure, we use it to run an intensive GC
-# benchmark. We create a union-find with 1000 nodes, and then we perform 1000
-# random unions on it. This should create a data structure with many large,
-# disjoint sets. We then leak that data structure and repeat this 100 times.
+# This test uses the union-find data structure defined in union_find.bli  to run
+# an intensive GC benchmark. We create a union-find with 1000 nodes, and then we
+# perform 1000 random unions on it. This should create a data structure with
+# many large, disjoint sets. We then leak that data structure and repeat this
+# 100 times.
 #
 # This is the same test as bench_erc_union_find, but it runs with tracing on and
 # enhanced reference counting is disabled. It should be slower than the ERC
@@ -39,112 +13,7 @@
 # bench_erc_union_find, check that bench_erc_union_find is still faster than
 # bench_tracing_union_find.
 
-################################################################################
-# Booleans
-#
-
-bind true.if_false .;
-bind false.if_false (
-    that{.get|.}{.eval|.}{.eval|.}
-);
-
-bind true!expect_true .;
-bind false!expect_true (false{!expect|true});
-
-bind true!expect_false (true{!expect|false});
-bind false!expect_false .;
-
-################################################################################
-# Union-find data structure
-#
-
-bind node.set_parent (
-    parent{:=|that{.get|.}{.eval|.}}
-);
-
-bind node.get_parent (
-    parent{.get|.}
-);
-
-bind node.set_is_test (
-    is_test{:=|that{.get|.}{.eval|.}}
-);
-
-bind node.get_is_test (
-    is_test{.get|.}
-);
-
-bind node.is ({do|
-    self{:=|this{.get|.}};
-    other{:=|that{.get|.}{.eval|.}};
-
-    self{.get|.}{.set_is_test|{false|.}};
-    other{.get|.}{.set_is_test|{true|.}};
-    self{.get|.}{.get_is_test|.}
-}{.eval|.});
-
-bind node.insert ({do|
-    this{.get|.}{.set_parent|{nil|.}}
-}{.eval|.});
-
-bind nil.find_with_default ({do|
-    that{.get|.}{.eval|.}
-}{.eval|.});
-
-bind node.find_with_default ({do|
-    self{:=|this{.get|.}};
-    root{:=|parent{.get|.}{.find_with_default|self{.get|.}}};
-
-    root{.get|.}{.is|self{.get|.}}{.if_false|{do|
-        # Path compression
-        parent{:=|root{.get|.}}
-    }};
-
-    root{.get|.}
-}{.eval|.});
-
-bind node.find ({do|
-    this{.get|.}{.find_with_default|.}
-}{.eval|.});
-
-bind node.union ({do|
-    self{:=|this{.get|.}};
-    arg{:=|that{.get|.}{.eval|.}};
-
-    this_root{:=|self{.get|.}{.find|.}};
-    that_root{:=|arg{.get|.}{.find|.}};
-
-    this_root{.get|.}{.is|that_root{.get|.}}{.if_false|{do|
-        this_root{.get|.}{.set_parent|that_root{.get|.}}
-    }};
-
-    .
-}{.eval|.});
-
-bind node.equiv ({do|
-    self{:=|this{.get|.}};
-    other{:=|that{.get|.}{.eval|.}};
-
-    self{.get|.}{.find|.}{.is|other{.get|.}{.find|.}}
-}{.eval|.});
-
-################################################################################
-# Tests
-#
-
-# Briefly sanity check that the data structure is working the way we expect.
-a{:=|{node|a}};
-a{.get|.}{.insert|.};
-b{:=|{node|b}};
-b{.get|.}{.insert|.};
-c{:=|{node|c}};
-c{.get|.}{.insert|.};
-a{.get|.}{.union|b{.get|.}};
-
-a{.get|.}{.equiv|b{.get|.}} {!expect_true|.};
-b{.get|.}{.equiv|a{.get|.}} {!expect_true|.};
-a{.get|.}{.equiv|c{.get|.}} {!expect_false|.};
-
+{import|.} union_find;
 
 go1{:=|{do|
     # Create 1000 nodes.
@@ -3192,6 +3061,6 @@ go1{:=|.};
 
 {gc|.}{!collect|.};
 {gc|.}{!print_stats|.};
-{gc|.}{!expect_clean|.};
+{gc|.}{!check_collect|.};
 
 .

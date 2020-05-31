@@ -7,8 +7,9 @@
 #include <readline/history.h>
 #include <readline/readline.h>
 
-#include "blimp.h"
-#include "module.h"
+#include <blimp.h>
+#include <blimp/module.h>
+
 #include "options.h"
 
 #define VERSION_MAJOR 0
@@ -278,16 +279,16 @@ int main(int argc, char *const *argv)
             }
 
             case FLAG_IMPORT_PATH:
-                ++options.import_path_len;
                 options.import_path = realloc(
                     options.import_path,
-                    options.import_path_len*sizeof(char *)
+                    (options.import_path_len + 1)*sizeof(char *)
                 );
                 if (options.import_path == NULL) {
                     perror("could not allocate import path");
                     return EXIT_FAILURE;
                 }
                 options.import_path[options.import_path_len-1] = optarg;
+                options.import_path[options.import_path_len]   = NULL;
                 break;
 
             case FLAG_ACTION:
@@ -326,7 +327,7 @@ int main(int argc, char *const *argv)
         return EXIT_FAILURE;
     }
 
-    Blimp_Check(Module_Init(blimp, &options));
+    Blimp_Check(BlimpModule_Init(blimp, options.import_path));
 
     if (optind == argc) {
         return ReplMain(blimp, &options);

@@ -108,6 +108,7 @@ typedef struct {
     Object *free_list;
     const Symbol *symbol_tag;
     size_t batches_since_last_gc;
+    size_t gc_collections;
     Random random;
 } ObjectPool;
 

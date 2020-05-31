@@ -6,6 +6,7 @@ target_compile_options(blimp-test PRIVATE
     -DTEST_DIRECTORY="${CMAKE_CURRENT_SOURCE_DIR}")
 target_include_directories(blimp-test PRIVATE src)
 target_link_libraries(blimp-test blimp)
+target_link_libraries(blimp-test blimpmodule)
 
 if (NOT TEST_PERF_FACTOR)
     set(TEST_PERF_FACTOR 1)

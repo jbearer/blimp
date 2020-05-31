@@ -11,6 +11,7 @@ endif()
 
 enable_testing()
 add_subdirectory(core)
+add_subdirectory(system)
 add_subdirectory(blimp)
 add_subdirectory(docs)
 add_subdirectory(test)
