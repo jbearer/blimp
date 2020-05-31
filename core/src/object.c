@@ -23,7 +23,7 @@ static inline Status Scope_Init(Blimp *blimp, Scope *scope)
 
     return HashMap_Init(
         blimp, scope,
-        sizeof(Symbol *), sizeof(Object *),
+        sizeof(Symbol *), sizeof(Ref *),
         (EqFunc)SymbolEq, (HashFunc)SymbolHash,
         &options);
 }
@@ -34,14 +34,19 @@ static inline void Scope_Clear(Scope *scope)
 }
 
 // Get a reference to the value of `sym` in the given scope, or `NULL`.
-static inline Object **Scope_Lookup(const Scope *scope, const Symbol *sym)
+static inline Ref *Scope_Lookup(const Scope *scope, const Symbol *sym)
 {
-    return HashMap_Find(scope, &sym);
+    Ref **ref = HashMap_Find(scope, &sym);
+    if (ref == NULL) {
+        return NULL;
+    } else {
+        return *ref;
+    }
 }
 
-static inline Status Scope_Update(Scope *scope, const Symbol *sym, Object *val)
+static inline Status Scope_Update(Scope *scope, const Symbol *sym, Ref *ref)
 {
-    return HashMap_Update(scope, &sym, &val);
+    return HashMap_Update(scope, &sym, &ref);
 }
 
 typedef HashMapEntry *ScopeIterator;
@@ -61,9 +66,9 @@ static inline ScopeIterator Scope_End(Scope *scope)
     return HashMap_End(scope);
 }
 
-static inline Object *Scope_GetValue(Scope *scope, ScopeIterator it)
+static inline Ref *Scope_GetValue(Scope *scope, ScopeIterator it)
 {
-    return *(Object **)HashMap_GetValue(scope, it);
+    return *(Ref **)HashMap_GetValue(scope, it);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -817,6 +822,9 @@ Status ObjectPool_Init(Blimp *blimp, ObjectPool *pool)
     pool->batches->next = NULL;
     pool->free_list = NULL;
     pool->batches_since_last_gc = 1;
+
+    Random_Init(&pool->random, 42);
+
     return BLIMP_OK;
 }
 
@@ -836,25 +844,27 @@ static void FreeObject(Object *obj);
 // Reference counting
 //
 
-static inline void RC_BorrowScopeReference(Object *from, Object *to)
+static inline void RC_BorrowRef(Object *from, Ref *ref)
 {
-    if (from != to) {
+    if (from != ref->to) {
         // Only increment the referece count if the destination object is
         // different from the source object. There's no need to count
         // references-to-self, because it is impossible for an object to be
         // destroyed before itself is destroyed.
-        ++to->internal_refcount;
+        ++ref->to->internal_refcount;
     }
 }
 
-static inline void RC_ReleaseScopeReference(Object *from, Object *to)
+static inline void RC_ReleaseRef(Object *from, Ref *ref)
 {
     // If `from == to`, we didn't acquire a reference in InternalBorrow(), so
     // there's nothing to release.
-    if (from != to) {
-        assert(to->internal_refcount > 0);
-        if (--to->internal_refcount == 0 && to->transient_refcount == 0) {
-            FreeObject(to);
+    if (from != ref->to) {
+        assert(ref->to->internal_refcount > 0);
+        if (--ref->to->internal_refcount == 0 &&
+            ref->to->transient_refcount == 0)
+        {
+            FreeObject(ref->to);
         }
     }
 }
@@ -883,8 +893,7 @@ static inline void RC_ReleaseParent(Object *obj)
 
 static inline Object *ERC_GetClump(Object *obj);
 static void ERC_FreeClump(Object *clump);
-static inline bool ERC_ShouldEntangle(Object *from, Object *to);
-static bool ERC_Entangle(Object *from, Object *to);
+static inline bool ERC_Entangle(Object *from, Object *to);
 static void ERC_MergeClumps(Object *root, Object *child);
 
 #define BLOOM_FILTER_NUM_HASHES 4
@@ -896,7 +905,7 @@ static void ERC_MergeClumps(Object *root, Object *child);
 // Perform one-time initialization of the ERC data in an object. This function
 // is called once, the first time an object is allocated from a batch.
 // Everything it does must be reusable when the object is reused.
-static void ERC_StaticInit(Object *obj)
+static void ERC_StaticInit(ObjectPool *pool, Object *obj)
 {
     // Give the object its own bit pattern which will be used to represent this
     // object in Bloom filters. The bit pattern should be unique with high
@@ -909,12 +918,6 @@ static void ERC_StaticInit(Object *obj)
     // can just look it up. So this function doesn't need to be deterministic;
     // it just needs to be uniform. In other words, we want the bits we set here
     // to be pseudo-random.
-    //
-    // The pseudo-random number generator we use here is based on a monotonic
-    // counter. We extract the next number from the sequence by incrementing the
-    // counter and then applying the FNV1a hash function to randomize the bits.
-    // In the future, we should investigate actual PRNG algorithms.
-    static size_t count = 0;
 
     obj->self_mask = BV128_ZER0;
         // Initialize the mask to all zeros.
@@ -926,21 +929,8 @@ static void ERC_StaticInit(Object *obj)
 
         // Randomly set some number of bits.
         for (size_t i = 0; i < BLOOM_FILTER_NUM_HASHES; ++i) {
-            // FNV1a hash function.
-            static const size_t offset = 14695981039346656037ull;
-            static const size_t prime  = 1099511628211ull;
-
-            size_t hash = offset;
-            const uint8_t *p = (const uint8_t *)&count;
-            for (size_t byte = 0; byte < sizeof(count); ++byte) {
-                hash = (hash ^ *p++) * prime;
-            }
-
-            // Set the bit corresponding to the current hash.
-            obj->self_mask = bv128_Set(obj->self_mask, hash % 128);
-
-            // Increment the PRNG state.
-            ++count;
+            obj->self_mask = bv128_Set(
+                obj->self_mask, Random_NextWord(&pool->random) % 128);
         }
     }
 }
@@ -954,6 +944,7 @@ static void ERC_Init(Object *obj)
     obj->clump_refcount = 0;
     obj->clump_next = obj;
     obj->clump_prev = obj;
+    obj->clump_references = NULL;
 
     if (obj->parent) {
         // The objects predecessors set consists of its parent together with its
@@ -981,54 +972,65 @@ static inline void ERC_ExternalRelease(Object *obj)
     }
 }
 
-static inline void ERC_BorrowScopeReference(Object *from, Object *to)
+static inline void ERC_BorrowRef(Object *from, Ref *ref)
 {
     Object *from_clump = ERC_GetClump(from);
-    Object *to_clump   = ERC_GetClump(to);
+    Object *to_clump   = ERC_GetClump(ref->to);
     if (from_clump == to_clump) {
         // The objects are already entangled, there's nothing to do.
         return;
     }
 
-    // The objects are not yet entangled. Check if `to` could possibly be a
-    // descendant of `from`.
-    if (!ERC_ShouldEntangle(from_clump, to_clump)) {
-        // If it is not, then this reference is not completing a simple cycle,
-        // so there's no need to entangle the objects. Just record that we're
-        // creating a new reference to the clump.
-        ERC_ExternalBorrow(to_clump);
-        return;
-    }
-
-    // If ERC_ShouldEntangle() returned true, then `to` _might_ be a descendant
-    // of from (in which case this reference would be creating a simple cycle),
-    // but it might not be (since the Bloom filter used by ERC_ShouldEntangle
-    // can yield false positives).
-    //
-    // In any case, try to entangle the objects. This will either successfully
-    // entangle them, or discover that `to` is not a descendant of `from` (that
-    // is, ERC_ShouldEntangle gave us a false positive) in which case it will
-    // have no effect on the objects.
+    // The objects are not yet entangled. Try to entangle them. This will fail
+    // if `to_clump` is not a descendant of `from_clump`, so this reference is
+    // not creating a simple cycle, or if we decide not to entangle the objects
+    // as an optimization (for example, one of the clumps is getting too big).
     if (!ERC_Entangle(from_clump, to_clump)) {
-        // If we could not entangle the objects because of a false positive,
-        // then just record the new reference on the existing clump.
         ERC_ExternalBorrow(to_clump);
+            // If we did not entangle the objects, then just record the new
+            // reference on the existing clump.
+
+        // Add the reference to `from_clump`s list of outgoing references, so
+        // that if we ever do entangle these two clumps, we will know to stop
+        // counting this reference.
+        ref->next = from_clump->clump_references;
+        if (ref->next != NULL) {
+            ref->next->prev = ref;
+        }
+
+        ref->prev = NULL;
+        from_clump->clump_references = ref;
+
+        return;
     }
 }
 
-static inline void ERC_ReleaseScopeReference(Object *from, Object *to)
+static inline void ERC_ReleaseRef(Object *from, Ref *ref)
 {
     Object *from_clump = ERC_GetClump(from);
-    Object *to_clump   = ERC_GetClump(to);
+    Object *to_clump   = ERC_GetClump(ref->to);
 
-    if (from_clump != to_clump &&
-            // We need to make sure these objects belong to two different
-            // clumps, because if they are entangled then references between
-            // them are not counted in the clump reference count, so we can't
-            // decrement the reference count here.
-        --to_clump->clump_refcount == 0)
-    {
-        ERC_FreeClump(to_clump);
+    // We need to make sure these objects belong to two different clumps,
+    // because if they are entangled then references between them are not
+    // counted in the clump reference count, so we can't decrement the reference
+    // count here.
+    if (from_clump != to_clump) {
+        // Remove the references from `from_clump`s list of outgoing references.
+        if (ref->next != NULL) {
+            ref->next->prev = ref->prev;
+        }
+        if (ref->prev != NULL) {
+            assert(ref != from_clump->clump_references);
+            ref->prev->next = ref->next;
+        } else {
+            assert(ref == from_clump->clump_references);
+            from_clump->clump_references = ref->next;
+        }
+
+        // Decrement the reference count.
+        if (--to_clump->clump_refcount == 0) {
+            ERC_FreeClump(to_clump);
+        }
     }
 }
 
@@ -1093,28 +1095,7 @@ static inline Object *ERC_GetClump(Object *obj)
     return clump;
 }
 
-static inline bool ERC_ShouldEntangle(Object *from, Object *to)
-{
-    if (from->type == OBJ_GLOBAL) {
-        // Never entangle any object with the global object. Since the global
-        // object is never freed, any object in its clump can never be freed by
-        // ERC. So entangling an object with the global object can never help
-        // us. It's better to just let objects form cycles with the global
-        // object and hope that those cycles are later broken.
-        return false;
-    }
-
-    if (from != to && !bv128_Test(bv128_And(from->self_mask, to->predecessors))) {
-        // If the bits corresponding to `from` are not set in the predecessors
-        // Bloom filter of `to`, then `to` is definitely not a descendant of
-        // `from`, and so this edge is not completing a parent pointer cycle.
-        return false;
-    }
-
-    return true;
-}
-
-static bool ERC_Entangle(Object *from, Object *to)
+static bool ERC_EntangleRecursive(Object *from, Object *to)
 {
     assert(from->entangled == NULL);
     assert(to->entangled == NULL);
@@ -1145,13 +1126,34 @@ static bool ERC_Entangle(Object *from, Object *to)
         // `false` because `from` turned out not to be reachable (due to a Bloom
         // filter false positive) then we will be able to return `false` in turn
         // without having modified the clumps.
-        if (ERC_Entangle(from, parent)) {
+        if (ERC_EntangleRecursive(from, parent)) {
             ERC_MergeClumps(from, to);
             return true;
         } else {
             return false;
         }
     }
+}
+
+static inline bool ERC_Entangle(Object *from, Object *to)
+{
+    if (from->type == OBJ_GLOBAL) {
+        // Never entangle any object with the global object. Since the global
+        // object is never freed, any object in its clump can never be freed by
+        // ERC. So entangling an object with the global object can never help
+        // us. It's better to just let objects form cycles with the global
+        // object and hope that those cycles are later broken.
+        return false;
+    }
+
+    if (from != to && !bv128_Test(bv128_And(from->self_mask, to->predecessors))) {
+        // If the bits corresponding to `from` are not set in the predecessors
+        // Bloom filter of `to`, then `to` is definitely not a descendant of
+        // `from`, and so this edge is not completing a parent pointer cycle.
+        return false;
+    }
+
+    return ERC_EntangleRecursive(from, to);
 }
 
 static void ERC_MergeClumps(Object *root, Object *child)
@@ -1174,6 +1176,76 @@ static void ERC_MergeClumps(Object *root, Object *child)
 
     // Entangle the child to the root.
     child->entangled = root;
+
+    // For each outgoing reference from the child clump, if it points to a
+    // descendant of the root, make sure that that descendant is entangled with
+    // `root` and that the reference is not counted in the clump reference
+    // count. This accounts for references between siblings of a common root.
+    //
+    // For example, consider the following data structure:
+    //
+    //                      root                                              //
+    //                      /  \                                              //
+    //                child1--->child2                                        //
+    //
+    // where `child1` and `child2` both have parent pointers to `root`, and
+    // `child1` has a scope reference to `child2`. Creating that scope reference
+    // would not entangle `child1` with `child2` because neither is a descendant
+    // of the other.
+    //
+    // But say we now create a scope reference from `root` to `child1`. This
+    // creates a simple cycle involving `root` and `child1`, which we detect,
+    // causing us to entangle `root` with `child2`. But it also creates a cycle
+    // involving `root`, `child1`, _and_ `child2`. We do not immediately detect
+    // this cycle, because `child2` is not involved in the operation at all.
+    //
+    // In general, any cycle involving parent pointers and more than one scope
+    // reference will not be detected by the normal cycle detection procedure.
+    // To detect these cycles, whenever we entangle a child with one of its
+    // ancestors, we need to make sure that all of the other ancestors that the
+    // child references are also entangled, because they all participate in
+    // cycles with the common ancestor and the child.
+    //
+    // Note that we only have to do this for outgoing references from `child`,
+    // not from `root`. If `root` had any outgoing references to any of its
+    // descendants, they would already have been accounted for using the normal
+    // cycle detection algorithm.
+    Ref *ref = child->clump_references;
+    while (ref != NULL) {
+        Ref *next = ref->next;
+
+        Object *clump = ERC_GetClump(ref->to);
+        if (root == clump ||
+                // The child has an existing reference to an object in the root
+                // clump. Since `child` and `root` previously represented to
+                // different clumps, this reference was counted in the root
+                // clump reference count, but it should no longer be since we
+                // are merging the clumps.
+            ERC_Entangle(root, clump)
+                // The child's reference does not point directly into the root
+                // clump, but it points to a descendant of `root`, which we must
+                // now entangle.
+        ) {
+            // Discount the reference which was previously counted, now that it
+            // is between two obejcts in the same clump.
+            assert(root->clump_refcount > 0);
+            --root->clump_refcount;
+        } else {
+            // This is still an external reference to some other clump. Add it
+            // to the list of outgoing references from the root so that we can
+            // check it again if `root` is ever merged with one of its
+            // ancestors.
+            ref->next = root->clump_references;
+            if (ref->next != NULL) {
+                ref->next->prev = ref;
+            }
+
+            ref->prev = NULL;
+            root->clump_references = ref;
+        }
+
+        ref = next;
+    }
 }
 
 static inline void ERC_RemoveFromClump(Object *obj)
@@ -1207,21 +1279,21 @@ static void ERC_FreeClump(Object *clump)
 // Unified reference counting API
 //
 
-static inline void BorrowScopeReference(Object *from, Object *to)
+static inline void BorrowRef(Object *from, Ref *ref)
 {
     Blimp *blimp = GetBlimp(from);
 
     if (blimp->options.gc_refcount) {
-        RC_BorrowScopeReference(from, to);
+        RC_BorrowRef(from, ref);
     }
     if (blimp->options.gc_cycle_detection) {
-        ERC_BorrowScopeReference(from, to);
+        ERC_BorrowRef(from, ref);
     }
 }
 
-static inline void ReleaseScopeReference(Object *from, Object *to)
+static inline void ReleaseRef(Object *from, Ref *ref)
 {
-    if (to->type == OBJ_FREE) {
+    if (ref->to->type == OBJ_FREE) {
         // It's possible that we have a reference to a free object if that
         // object has already been freed by the tracing garbage collector.
         return;
@@ -1230,11 +1302,11 @@ static inline void ReleaseScopeReference(Object *from, Object *to)
     Blimp *blimp = GetBlimp(from);
 
     if (blimp->options.gc_cycle_detection) {
-        ERC_ReleaseScopeReference(from, to);
+        ERC_ReleaseRef(from, ref);
     }
 
     if (blimp->options.gc_refcount) {
-        RC_ReleaseScopeReference(from, to);
+        RC_ReleaseRef(from, ref);
     }
 }
 
@@ -1315,7 +1387,7 @@ static void MarkReachable(ObjectPool *pool)
              it != Scope_End(&obj->scope);
              it = Scope_Next(&obj->scope, it))
         {
-            Object *child = Scope_GetValue(&obj->scope, it);
+            Object *child = Scope_GetValue(&obj->scope, it)->to;
             assert(child->type != OBJ_FREE);
 
             if (!child->reached) {
@@ -1478,7 +1550,10 @@ static Status NewObject(Blimp *blimp, Object *parent, Object **obj)
                 return Blimp_Reraise(blimp);
             }
             (*obj)->reached = false;
-            ERC_StaticInit(*obj);
+
+            if (blimp->options.gc_cycle_detection) {
+                ERC_StaticInit(&blimp->objects, *obj);
+            }
         }
     }
 
@@ -1517,7 +1592,9 @@ static void FreeObject(Object *obj)
          entry != Scope_End(&obj->scope);
          entry = Scope_Next(&obj->scope, entry))
     {
-        ReleaseScopeReference(obj, Scope_GetValue(&obj->scope, entry));
+        Ref *ref = Scope_GetValue(&obj->scope, entry);
+        ReleaseRef(obj, ref);
+        free(ref);
     }
 
     // Release our reference to our parent.
@@ -1568,11 +1645,11 @@ Status BlimpObject_NewGlobal(Blimp *blimp, Object **obj)
 // Object API
 //
 
-static Object **Lookup(Object *obj, const Symbol *sym, Object **owner)
+static Ref *Lookup(Object *obj, const Symbol *sym, Object **owner)
 {
     Object *curr = obj;
     while (curr) {
-        Object **ret = Scope_Lookup(&curr->scope, sym);
+        Ref *ret = Scope_Lookup(&curr->scope, sym);
         if (ret) {
             if (owner) {
                 *owner = curr;
@@ -1654,9 +1731,9 @@ Status BlimpObject_Get(const Object *obj, const Symbol *sym, Object **ret)
 {
     assert(obj->type != OBJ_FREE);
 
-    Object **value = Lookup((Object *)obj, sym, NULL);
+    Ref *value = Lookup((Object *)obj, sym, NULL);
     if (value) {
-        *ret = *value;
+        *ret = value->to;
         return BLIMP_OK;
     } else {
         return ErrorMsg(
@@ -1668,25 +1745,32 @@ Status BlimpObject_Get(const Object *obj, const Symbol *sym, Object **ret)
 
 Status BlimpObject_Set(Object *obj, const Symbol *sym, Object *val)
 {
+    Blimp *blimp = GetBlimp(obj);
+
     assert(obj->type != OBJ_FREE);
     assert(val->type != OBJ_FREE);
 
     // If the symbol is already in scope, update the existing value.
     Object *owner;
-    Object **existing_value = Lookup(obj, sym, &owner);
-    if (existing_value) {
-        ReleaseScopeReference(owner, *existing_value);
+    Ref *ref = Lookup(obj, sym, &owner);
+    if (ref) {
+        ReleaseRef(owner, ref);
             // This scope owned a reference to the existing value. After this
             // operation, the old value will no longer be reachable through this
             // scope, so we have to release our reference.
-        BorrowScopeReference(owner, val);
+
+        ref->to = val;
+            // Reinitialize the reference to point to the new value.
+
+        BorrowRef(owner, ref);
             // Borrow the new value on behalf of the existing owner of the scope
             // entry.
-        *existing_value = val;
     } else {
         // Otherwise, add it to the innermost scope.
-        BorrowScopeReference(obj, val);
-        TRY(Scope_Update(&obj->scope, sym, val));
+        TRY(Malloc(blimp, sizeof(Ref), &ref));
+        ref->to = val;
+        TRY(Scope_Update(&obj->scope, sym, ref));
+        BorrowRef(obj, ref);
     }
 
     return BLIMP_OK;

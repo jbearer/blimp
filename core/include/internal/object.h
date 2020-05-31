@@ -4,8 +4,15 @@
 #include "internal/bit_vector.h"
 #include "internal/common.h"
 #include "internal/hash_map.h"
+#include "internal/random.h"
 
 typedef HashMap Scope;
+
+typedef struct Ref {
+    Object *to;
+    struct Ref *next;
+    struct Ref *prev;
+} Ref;
 
 struct BlimpObject {
     // General object data.
@@ -56,6 +63,8 @@ struct BlimpObject {
     Object *clump_next;
     Object *clump_prev;
         // Doubly linked, circular list of all the objects in this clump.
+    Ref *clump_references;
+        // List of references from this clump to other clumps.
 
     // Reachability analysis.
     bool reached;
@@ -99,6 +108,7 @@ typedef struct {
     Object *free_list;
     const Symbol *symbol_tag;
     size_t batches_since_last_gc;
+    Random random;
 } ObjectPool;
 
 PRIVATE Status ObjectPool_Init(Blimp *blimp, ObjectPool *pool);

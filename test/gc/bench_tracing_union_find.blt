@@ -1,4 +1,4 @@
-#: --skip-racket --blimp-timeout 3.6 -fno-gc-tracing
+#: --skip-racket --blimp-timeout 3.6 -fno-gc-cycle-detection
 
 # This test implements a version of Tarjan's union-find data structure for
 # disjoint set operations. The data structure is a forest of inverted trees,
@@ -32,11 +32,12 @@
 # random unions on it. This should create a data structure with many large,
 # disjoint sets. We then leak that data structure and repeat this 100 times.
 #
-# This is the same test as bench_tracing_union_find, but it runs with ERC on and
-# tracing disabled. It should be faster than the tracing version of the test,
-# otherwise ERC isn't gaining us anything compared to tracing. If you change
-# either the blimp-timeout value above or the one in bench_tracing_union_find,
-# check that bench_erc_union_find is still faster than bench_tracing_union_find.
+# This is the same test as bench_erc_union_find, but it runs with tracing on and
+# enhanced reference counting is disabled. It should be slower than the ERC
+# version of the test, otherwise ERC isn't gaining us anything compared to
+# tracing. If you change either the blimp-timeout value above or the one in
+# bench_erc_union_find, check that bench_erc_union_find is still faster than
+# bench_tracing_union_find.
 
 ################################################################################
 # Booleans
@@ -3189,6 +3190,7 @@ go1{:=|.};
     # Clear our reference to `go1`, which has a very large scope. This renders
     # the few thousand mappings in that scope unreachable.
 
+{gc|.}{!collect|.};
 {gc|.}{!print_stats|.};
 {gc|.}{!expect_clean|.};
 
