@@ -1,0 +1,66 @@
+#: --skip-racket -fno-gc-refcount -fno-gc-cycle-detection
+
+# Tests garbage collection of trees, one of the most well-behaved data
+# structures, since every node is referenced exactly once, by its parent.
+
+bind tree.init (
+    this{.get|.}{.eval|.};
+    this{.get|.}
+);
+
+# Depth-first traversal, just so that we actually use the trees we make.
+bind nil.dfs .;
+bind tree.dfs (
+    left{.get|.}{.dfs|.};
+    right{.get|.}{.dfs|.};
+    value{.get|.}
+);
+
+{!benchmark|n{:=|100000}} {erc_tree|
+    # We'll build the following tree:
+    #                   a
+    #                  / \
+    #                 b   c
+    #                /
+    #               d
+    # starting from the leaves and building up.
+
+    {do|
+        # Level 0
+        d {:=|{tree|
+            value{:=|d};
+            left{:=|{nil|.}};
+            right{:=|{nil|.}}
+        }{.init|.}};
+
+        # Level 1
+        b {:=|{tree|
+            value{:=|b};
+            left{:=|d{.get|.}};
+            right{:=|{nil|.}}
+        }{.init|.}};
+        c {:=|{tree|
+            value{:=|c};
+            left{:=|{nil|.}};
+            right{:=|{nil|.}}
+        }{.init|.}};
+
+        # Level 2 (root)
+        a {:=|{tree|
+            value{:=|a};
+            left{:=|b{.get|.}};
+            right{:=|c{.get|.}}
+        }{.init|.}};
+
+        a{.get|.}{.dfs|.};
+
+        .
+    }{.eval|.}
+};
+
+{gc|.}{!collect|.};
+{gc|.}{!print_stats|.};
+{gc|.}{!check_collect|.};
+
+.
+

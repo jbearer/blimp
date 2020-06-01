@@ -1,0 +1,17 @@
+# Check that sending a message fails when there is no handler bound.
+{do|
+    {foo|.}{bar|.}
+}{!expect_error|.};
+
+bind foo bar (
+    # Check this and that.
+    this{.get|.}{.eval|.}{!expect|this};
+    that{.get|.}{.eval|.}{!expect|that};
+
+    # Return something.
+    foobar
+);
+
+{foo|this}{bar|that}{!expect|foobar};
+
+.
