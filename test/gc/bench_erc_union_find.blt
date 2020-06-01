@@ -1,4 +1,4 @@
-#: --skip-racket --blimp-timeout 3.6 -fno-gc-tracing -fno-gc-refcount
+#: --skip-racket -fno-gc-tracing -fno-gc-refcount
 
 # This test uses the union-find data structure defined in union_find.bli  to run
 # an intensive GC benchmark. We create a union-find with 1000 nodes, and then we
@@ -8,9 +8,7 @@
 #
 # This is the same test as bench_tracing_union_find, but it runs with ERC on and
 # tracing disabled. It should be faster than the tracing version of the test,
-# otherwise ERC isn't gaining us anything compared to tracing. If you change
-# either the blimp-timeout value above or the one in bench_tracing_union_find,
-# check that bench_erc_union_find is still faster than bench_tracing_union_find.
+# otherwise ERC isn't gaining us anything compared to tracing.
 
 {import|.} union_find;
 

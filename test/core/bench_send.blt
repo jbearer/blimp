@@ -1,4 +1,4 @@
-#: --skip-racket --blimp-timeout 0.5
+#: --skip-racket
 
 # Message send benchmark. Sends a trivial message 1 million times.
 

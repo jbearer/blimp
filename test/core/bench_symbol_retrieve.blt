@@ -1,4 +1,4 @@
-#: --skip-racket --blimp-timeout 1.2
+#: --skip-racket
 
 # Benchmark for symbol lookup. This benchmark creates 1000 symbols and then
 # looks up the same 1000 symbols over again 20000 times.

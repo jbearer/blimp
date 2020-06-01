@@ -1,4 +1,4 @@
-#: --skip-racket --blimp-timeout 0.025
+#: --skip-racket
 
 # Benchmark for symbol creation. Each line in this program causes a new symbol
 # to be created in the symbol table.

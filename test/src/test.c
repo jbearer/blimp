@@ -21,6 +21,7 @@
 
 #include "options.h"
 #include "racket.h"
+#include "test.h"
 #include "test_blimp.h"
 #include "timing.h"
 
@@ -29,45 +30,6 @@
 #define ANSI_PURPLE "\e[1;35m"
 #define ANSI_YELLOW "\e[1;33m"
 #define ANSI_RESET  "\e[0m"
-
-typedef enum {
-    TEST_PASSED,
-    TEST_PERF_REGRESSION,
-    TEST_FAILED,
-    TEST_SKIPPED,
-    NUM_RESULT_TYPES,
-} TestResult;
-
-typedef struct Test {
-    // Inputs
-    const char *name;
-    Options options;
-    Blimp *blimp;
-    BlimpStream *stream;
-    Racket *racket;
-
-    // Outputs
-    TestResult result;
-} Test;
-
-typedef struct Group {
-    // Inputs
-    const char *name;
-    Options options;
-    size_t num_tests;
-    Test **tests;
-    char *import_path[2];
-
-    // Outputs
-    size_t results[NUM_RESULT_TYPES];
-} Group;
-
-typedef struct Suite {
-    size_t num_groups;
-    Group **groups;
-    Racket racket;
-    Options options;
-} Suite;
 
 ////////////////////////////////////////////////////////////////////////////////
 // Displaying results
@@ -86,7 +48,7 @@ static void PassTest(Test *test, size_t racket_ms, size_t blimp_ms)
     float expected_ms = test->options.perf_factor*test->options.blimp_timeout;
 
     // Check for performance regressions.
-    if (test->options.use_blimp && blimp_ms > expected_ms)
+    if (test->options.use_blimp && expected_ms && blimp_ms > expected_ms)
     {
         printf(ANSI_YELLOW "performance regression!" ANSI_RESET
                " %s: performance regression: %.3f > %.3f\n",
@@ -351,7 +313,7 @@ static void PrintUsage(FILE *f, int argc, char **argv)
     fprintf(f, "    --blimp-timeout SECONDS\n");
     fprintf(f, "        Consider a test failed if it takes more than SECONDS to evaluate\n");
     fprintf(f, "        in the bl:mp interpreter. SECONDS may be an integer or floating\n");
-    fprintf(f, "        point literal. The default is 5.\n");
+    fprintf(f, "        point literal. By default there is no timeout.\n");
     fprintf(f, "\n");
     fprintf(f, "    --racket-timeout SECONDS\n");
     fprintf(f, "        Consider a test failed if it takes more than SECONDS to evaluate\n");
@@ -362,6 +324,9 @@ static void PrintUsage(FILE *f, int argc, char **argv)
     fprintf(f, "        Multiply timeouts by FACTOR. For example, if a test has a blimp-timeout\n");
     fprintf(f, "        of 1s, but perf-factor is 1.5, then the test will only fail if it takes\n");
     fprintf(f, "        more than 1.5 seconds to execute.\n");
+    fprintf(f, "\n");
+    fprintf(f, "    -p, --perf-report FILE\n");
+    fprintf(f, "        Write a CSV summary of benchmark performance to FILE\n");
     fprintf(f, "\n");
     fprintf(f, "        This can be used to account for variations in the underlying performance\n");
     fprintf(f, "        of the system where the tests are running. For example, if the test\n");
@@ -429,6 +394,7 @@ typedef enum {
     FLAG_TEST               = 't',
     FLAG_FILTER             = 'F',
     FLAG_BLIMP_OPTION       = 'f',
+    FLAG_PERF_REPORT        = 'p',
     FLAG_VERBOSE            = 'v',
     FLAG_HELP               = 'h',
 
@@ -458,11 +424,12 @@ static Options DefaultOptions(void)
         .use_racket     = true,
         .use_blimp      = true,
         .racket_timeout = 5000,
-        .blimp_timeout  = 5000,
+        .blimp_timeout  = 0,
         .perf_factor    = DEFAULT_PERF_FACTOR,
             // This default is defined by CMake, so that it can be overridden
             // for each build configuration.
         .blimp_options  = DEFAULT_BLIMP_OPTIONS,
+        .perf_report    = NULL,
     };
 }
 
@@ -493,6 +460,7 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
         {"racket-timeout", required_argument, NULL, FLAG_RACKET_TIMEOUT },
         {"blimp-timeout",  required_argument, NULL, FLAG_BLIMP_TIMEOUT },
         {"perf-factor",    required_argument, NULL, FLAG_PERF_FACTOR },
+        {"perf-report",    required_argument, NULL, FLAG_PERF_REPORT },
         {"verbose",        optional_argument, NULL, FLAG_VERBOSE },
         {"help",           no_argument,       NULL, FLAG_HELP },
         {0, 0, 0, 0},
@@ -503,7 +471,7 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
         // parse test-specific options) we need to reset this global variable
         // each time.
     int option, i = 1;
-    while ((option = getopt_long(argc, argv, "t:g:F:f:v::h", cli_options, &i)) != -1) {
+    while ((option = getopt_long(argc, argv, "t:g:F:f:p:v::h", cli_options, &i)) != -1) {
         switch (option) {
             case FLAG_TEST:
                 ++options->num_tests;
@@ -592,8 +560,23 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
                     optarg, &options->blimp_options);
                 if (error) {
                     fprintf(stderr, "%s\n", error);
-                    return EXIT_FAILURE;
+                    *status = EXIT_FAILURE;
+                    return true;
                 }
+
+                break;
+            }
+
+            case FLAG_PERF_REPORT: {
+                options->perf_report = fopen(optarg, "w");
+
+                if (options->perf_report == NULL) {
+                    perror("cannot open perf-report");
+                    *status = EXIT_FAILURE;
+                    return true;
+                }
+
+                PrintPerfReportHeader(options->perf_report);
 
                 break;
             }
@@ -750,6 +733,7 @@ static Suite *FindTests(const Options *options)
             // It is! Create a test for it.
             Test *test = malloc(sizeof(Test));
             test->name = strdup(test_de->d_name);
+            test->group = group;
             test->options = group->options;
             FILE *test_file = fdopen(
                 openat(dirfd(group_dir), test_de->d_name, O_RDONLY), "r");
@@ -800,7 +784,7 @@ static Suite *FindTests(const Options *options)
             rewind(test_file);
 
             // Create a bl:mp interpreter for the test.
-            test->blimp = TestBlimp_New(&test->options);
+            test->blimp = TestBlimp_New(test);
             Blimp_Check(Blimp_OpenFileStream(
                 test->blimp, test_de->d_name, test_file, &test->stream));
 

@@ -1,4 +1,4 @@
-#: --skip-racket --blimp-timeout 1.9 -fno-gc-tracing -fno-gc-cycle-detection
+#: --skip-racket -fno-gc-tracing -fno-gc-cycle-detection
 
 # Tests garbage collection of cycles which get broken by the user. Creates 100k
 # 10-element cycles, and then breaks each cycle.
@@ -6,9 +6,7 @@
 # This is the same test as tracing_cycle_broken, but it runs with reference
 # counting on and tracing is disabled. It should be slower than the tracing
 # version of the test, otherwise reference counting isn't gaining us anything
-# compared to tracing. If you change either the blimp-timeout value above or the
-# one in tracing_cycle_broken, check that refcount_cycle_broken is still faster
-# than tracing_cycle_broken.
+# compared to tracing.
 
 bind node.set_next (
     next{:=|that{.get|.}{.eval|.}}

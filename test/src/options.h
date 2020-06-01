@@ -31,6 +31,7 @@ typedef struct {
     size_t blimp_timeout;   // ms
     float perf_factor;
     BlimpOptions blimp_options;
+    FILE *perf_report;
 } Options;
 
 #endif

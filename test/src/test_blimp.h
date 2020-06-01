@@ -12,7 +12,9 @@
 
 #include <blimp.h>
 #include "options.h"
+#include "test.h"
 
-Blimp *TestBlimp_New(const Options *options);
+Blimp *TestBlimp_New(Test *test);
+void PrintPerfReportHeader(FILE *perf_report);
 
 #endif

@@ -1,4 +1,4 @@
-#: --skip-racket --blimp-timeout 0.5 -fno-gc-tracing -fno-gc-refcount
+#: --skip-racket -fno-gc-tracing -fno-gc-refcount
 
 # Tests garbage collection of local variables; that is, objects which are
 # referenced by a parent object (or a parent of a parent, etc.). These seem easy

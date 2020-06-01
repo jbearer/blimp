@@ -1,4 +1,4 @@
-#: --skip-racket --blimp-timeout 1.6 -fno-gc-refcount -fno-gc-cycle-detection
+#: --skip-racket -fno-gc-refcount -fno-gc-cycle-detection
 
 # Tests garbage collection of self-cycles. Creates 1 million objects, each of
 # which has two references to itself: the special `this` reference, and a user-
@@ -7,9 +7,7 @@
 # This is the same test as refcount_cycle_self, but it runs with tracing on and
 # reference counting is disabled. It should be slower than the reference
 # counting version of the test, otherwise reference counting isn't gaining us
-# anything compared to tracing. If you change either the blimp-timeout value
-# above or the one in refcount_cycle_self, check that refcount_cycle_self is
-# still faster than tracing_cycle_self.
+# anything compared to tracing.
 
 bind test.go1 (
     self{:=|this{.get|.}}

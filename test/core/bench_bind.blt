@@ -1,4 +1,4 @@
-#: --skip-racket --blimp-timeout 3.1
+#: --skip-racket
 
 # Binds 100 methods each on 100 different classes, 1000 times.
 

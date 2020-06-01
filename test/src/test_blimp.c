@@ -1,3 +1,5 @@
+#include <math.h>
+
 #include "options.h"
 #include "test_blimp.h"
 #include "timing.h"
@@ -179,7 +181,8 @@ static BlimpStatus Benchmark(
 {
     (void)scope;
 
-    const Options *options = data;
+    const Test    *test    = data;
+    const Options *options = &test->options;
 
     size_t iter;
     size_t ops;
@@ -264,6 +267,11 @@ static BlimpStatus Benchmark(
     size_t min = SIZE_MAX;
     size_t max = 0;
     size_t total = 0;
+    float sse = 0;
+        // Online computation of the sum squared error. This can be used after
+        // the data is collected to compute variance and standard deviation.
+    float avg = 0;
+        // Running estimate of the average. Used to compute `sse` online.
     float cycles_per_ns = CyclesPerNS();
 
     // Run the benchmark;
@@ -284,17 +292,41 @@ static BlimpStatus Benchmark(
             max = elapsed;
         }
         total += elapsed;
+
+        float old_avg = avg;
+        avg += ((float)elapsed/ops - old_avg)/(i+1);
+        sse += ((float)elapsed/ops - old_avg)*((float)elapsed/ops - avg);
+    }
+
+    float std_dev;
+    if (iter <= 1) {
+        std_dev = 0;
+    } else {
+        std_dev = sqrt(sse/(iter - 1))/cycles_per_ns;
     }
 
     float avg_time = (float)total/(iter*ops)/cycles_per_ns;
+    float min_time = (float)min/ops/cycles_per_ns;
+    float max_time = (float)max/ops/cycles_per_ns;
+
+    // Write the results to a file.
+    if (options->perf_report) {
+        fprintf(options->perf_report, "%s,%s,%s,%zu,%zu,%f,%f,%f,%f,%f\n",
+            test->group->name, test->name, BlimpSymbol_GetName(name),
+            iter, ops, cycles_per_ns, avg_time, std_dev, min_time, max_time);
+    }
+
+    // Write results to the terminal.
+
     const char *avg_unit;
     FormatNS(&avg_time, &avg_unit);
 
-    float min_time = (float)min/ops/cycles_per_ns;
+    const char *std_dev_unit;
+    FormatNS(&std_dev, &std_dev_unit);
+
     const char *min_unit;
     FormatNS(&min_time, &min_unit);
 
-    float max_time = (float)max/ops/cycles_per_ns;
     const char *max_unit;
     FormatNS(&max_time, &max_unit);
 
@@ -304,13 +336,19 @@ static BlimpStatus Benchmark(
         printf("  Cycles/ns:  %.2f\n", cycles_per_ns);
         printf("  Operations: %zu\n", iter*ops);
         printf("  Total time: %.3fs\n", (float)total/1000000000);
-        printf("  Time/Op:    %.3f%s\n", avg_time, avg_unit);
+        printf("  Time/Op:    %.3f%s +- %.3f%s\n", avg_time, avg_unit, std_dev, std_dev_unit);
         printf("  Min:        %.3f%s\n", min_time, min_unit);
         printf("  Max:        %.3f%s\n", max_time, max_unit);
     }
 
+
     VoidReturn(blimp, result);
     return BLIMP_OK;
+}
+
+void PrintPerfReportHeader(FILE *perf_report)
+{
+    fprintf(perf_report, "group,test,benchmark,iterations,ops/iteration,cycles/ns,avg,min,max\n");
 }
 
 static BlimpStatus GC_Allocated(
@@ -460,7 +498,8 @@ static BlimpStatus GC_PrintStats(
     (void)receiver;
     (void)message;
 
-    const Options *options = data;
+    const Test    *test    = data;
+    const Options *options = &test->options;
 
     VoidReturn(blimp, result);
 
@@ -483,25 +522,25 @@ static BlimpStatus GC_PrintStats(
     return BLIMP_OK;
 }
 
-Blimp *TestBlimp_New(const Options *options)
+Blimp *TestBlimp_New(Test *test)
 {
-    Blimp *blimp = Blimp_New(&options->blimp_options);
+    Blimp *blimp = Blimp_New(&test->options.blimp_options);
     if (blimp == NULL) {
         return blimp;
     }
 
     BlimpVTableFragment table = {
-        { "symbol", "!expect",          Expect,           NULL },
-        { "symbol", "!expect_percent",  ExpectPercent,    NULL },
-        { "_",      "!expect_error",    ExpectError,      NULL },
-        { "!benchmark","_",             Benchmark,        (void *)options },
-        { "gc",     "!allocated",       GC_Allocated,     NULL },
-        { "gc",     "!reachable",       GC_Reachable,     NULL },
-        { "gc",     "!high_water_mark", GC_HighWaterMark, NULL },
-        { "gc",     "!collect",         GC_Collect,       NULL },
-        { "gc",     "!expect_clean",    GC_ExpectClean,   NULL },
-        { "gc",     "!check_collect",   GC_CheckCollect,  NULL },
-        { "gc",     "!print_stats",     GC_PrintStats,    (void *)options },
+        { "symbol", "!expect",          Expect,           test },
+        { "symbol", "!expect_percent",  ExpectPercent,    test },
+        { "_",      "!expect_error",    ExpectError,      test },
+        { "!benchmark","_",             Benchmark,        test },
+        { "gc",     "!allocated",       GC_Allocated,     test },
+        { "gc",     "!reachable",       GC_Reachable,     test },
+        { "gc",     "!high_water_mark", GC_HighWaterMark, test },
+        { "gc",     "!collect",         GC_Collect,       test },
+        { "gc",     "!expect_clean",    GC_ExpectClean,   test },
+        { "gc",     "!check_collect",   GC_CheckCollect,  test },
+        { "gc",     "!print_stats",     GC_PrintStats,    test },
         { 0, 0, 0, 0}
     };
     if (Blimp_BindVTableFragment(blimp, table) != BLIMP_OK) {

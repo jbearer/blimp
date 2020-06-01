@@ -1,4 +1,4 @@
-#: --skip-racket --blimp-timeout 5.7 -fno-gc-cycle-detection -fno-gc-refcount
+#: --skip-racket -fno-gc-cycle-detection -fno-gc-refcount
 
 # Tests garbage collection of local variables; that is, objects which are
 # referenced by a parent object (or a parent of a parent, etc.).
@@ -6,9 +6,7 @@
 # This is the same test as erc_locals_anon, but it runs with tracing on and
 # enhanced reference counting is disabled. It should be slower than the ERC
 # version of the test, otherwise ERC isn't gaining us anything compared to
-# tracing. If you change either the blimp-timeout value above or the one in
-# erc_locals_anon, check that erc_locals_anon is still faster than
-# tracing_locals_anon.
+# tracing.
 
 bind set symbol (
     this{.get|.}{.eval|.}{:=|that{.get|.}}

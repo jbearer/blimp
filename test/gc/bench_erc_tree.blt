@@ -1,4 +1,4 @@
-#: --skip-racket --blimp-timeout 1.5 -fno-gc-tracing -fno-gc-refcount
+#: --skip-racket -fno-gc-tracing -fno-gc-refcount
 
 # Tests garbage collection of trees, one of the most well-behaved data
 # structures, since every node is referenced exactly once, by its parent.
