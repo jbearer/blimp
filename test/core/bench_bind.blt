@@ -1,8 +1,8 @@
-#: --skip-racket --blimp-timeout 1.1
+#: --skip-racket --blimp-timeout 3.1
 
 # Binds 100 methods each on 100 different classes, 1000 times.
 
-go1{:=|{do|
+{!benchmark|n{:=|1000}; ops{:=|10000}}{bench_bind|
     bind 1 1 .;
     bind 1 2 .;
     bind 1 3 .;
@@ -10004,48 +10004,6 @@ go1{:=|{do|
     bind 100 99 .;
     bind 100 100 .;
     .
-}};
+};
 
-go10{:=|{do|
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    .
-}};
-
-go100{:=|{do|
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    .
-}};
-
-go1000{:=|{do|
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    .
-}};
-
-go1000{.get|.}{.eval|.};
 .

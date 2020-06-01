@@ -1,4 +1,4 @@
-#: --skip-racket --blimp-timeout 2.2
+#: --skip-racket --blimp-timeout 3.1
 
 # Benchmark for scope set (the := primitive). Sets 1000 distinct symbols in a
 # block 10000 times each.
@@ -1007,62 +1007,8 @@ scope{:=|{do|
     .
 }};
 
-go10{:=|{do|
-    scope{.get|.}{.eval|.};
-    scope{.get|.}{.eval|.};
-    scope{.get|.}{.eval|.};
-    scope{.get|.}{.eval|.};
-    scope{.get|.}{.eval|.};
-    scope{.get|.}{.eval|.};
-    scope{.get|.}{.eval|.};
-    scope{.get|.}{.eval|.};
-    scope{.get|.}{.eval|.};
-    scope{.get|.}{.eval|.};
-    .
-}};
-
-go100{:=|{do|
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    .
-}};
-
-go1000{:=|{do|
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    .
-}};
-
-go10000{:=|{do|
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    .
-}};
-
-go10000{.get|.}{.eval|.};
+{!benchmark|n{:=|10000}; ops{:=|1000}}{block_set|
+    scope{.get|.}{.eval|.}
+};
 
 .

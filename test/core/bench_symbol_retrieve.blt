@@ -1,10 +1,10 @@
-#: --skip-racket --blimp-timeout 0.5
+#: --skip-racket --blimp-timeout 1.2
 
 # Benchmark for symbol lookup. This benchmark creates 1000 symbols and then
 # looks up the same 1000 symbols over again 20000 times.
 
 # These 1000 symbols are taken from the start of bench_create_symbol.blt.
-go1{:=|{do|
+{!benchmark| n{:=|20000}; ops{:=|1000}; warmup{:=|1}} {symbol_retrieve|
     A;
     a;
     Aachen;
@@ -1004,67 +1004,7 @@ go1{:=|{do|
     adolescence;
     adolescences;
     adolescent;
-    adolescents;
-    .
-}};
-
-go10{:=|{do|
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    .
-}};
-
-go100{:=|{do|
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    .
-}};
-
-go1000{:=|{do|
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    .
-}};
-
-go10000{:=|{do|
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    .
-}};
-
-go10000{.get|.}{.eval|.};
-go10000{.get|.}{.eval|.};
+    adolescents
+};
 
 .

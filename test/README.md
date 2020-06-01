@@ -12,6 +12,7 @@ The `bl:mp` test runner, `blimp-test`, interprets "`bl:mp` test" files, denoted 
 |`symbol` |    `!expect`    | `symbol` | Causes a test failure if the receiver and the body do not evaluate to the same symbol.
 |`symbol` | `!expect_percent`| block   | The receiver should be a numeric symbol. The body should be a block `{tolerance\|value}`, where `tolerance` and `value` are both numeric symbols. Checks that the receiver is approximately equal to `value` within a margin of `tolerance`%.
 |   _     | `!expect_error` |     _    | Causes a test failure unless the body of the receiver (which must be a block) fails to evaluate.
+| `!benchmark` |     _      |     _    | Runs the body of a message many times and displays performance statistics.
 |  `gc`   | `!print_stats`  |     _    | Prints GC statistics.
 |  `gc`   | `!allocated`    |     _    | Returns a symbol representing the number of currently allocated objects.
 |  `gc`   | `!reachable`    |     _    | Returns a symbol representing the number of objects which are reachable from the global object.

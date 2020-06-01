@@ -15,91 +15,9 @@ bind test.go1 (
     self{:=|this{.get|.}}
 );
 
-go10{:=|{do|
-    {test|.}{.go1|.};
-    {test|.}{.go1|.};
-    {test|.}{.go1|.};
-    {test|.}{.go1|.};
-    {test|.}{.go1|.};
-    {test|.}{.go1|.};
-    {test|.}{.go1|.};
-    {test|.}{.go1|.};
-    {test|.}{.go1|.};
-    {test|.}{.go1|.};
-    .
-}};
-
-go100{:=|{do|
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    .
-}};
-
-go1000{:=|{do|
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    .
-}};
-
-go10000{:=|{do|
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    .
-}};
-
-go100000{:=|{do|
-    go10000{.get|.}{.eval|.};
-    go10000{.get|.}{.eval|.};
-    go10000{.get|.}{.eval|.};
-    go10000{.get|.}{.eval|.};
-    go10000{.get|.}{.eval|.};
-    go10000{.get|.}{.eval|.};
-    go10000{.get|.}{.eval|.};
-    go10000{.get|.}{.eval|.};
-    go10000{.get|.}{.eval|.};
-    go10000{.get|.}{.eval|.};
-    .
-}};
-
-go1000000{:=|{do|
-    go100000{.get|.}{.eval|.};
-    go100000{.get|.}{.eval|.};
-    go100000{.get|.}{.eval|.};
-    go100000{.get|.}{.eval|.};
-    go100000{.get|.}{.eval|.};
-    go100000{.get|.}{.eval|.};
-    go100000{.get|.}{.eval|.};
-    go100000{.get|.}{.eval|.};
-    go100000{.get|.}{.eval|.};
-    go100000{.get|.}{.eval|.};
-    .
-}};
-
-go1000000{.get|.}{.eval|.};
+{!benchmark|n{:=|1000000}} {refcount_cycle_self|
+    {test|.}{.go1|.}
+};
 
 {gc|.}{!print_stats|.};
 

@@ -1,10 +1,10 @@
-#: --skip-racket --blimp-timeout 8.6 -fno-gc-cycle-detection -fno-gc-refcount
+#: --skip-racket --blimp-timeout 4.2 -fno-gc-cycle-detection -fno-gc-refcount
 
 # This test uses the union-find data structure defined in union_find.bli  to run
 # an intensive GC benchmark. We create a union-find with 1000 nodes, and then we
 # perform 1000 random unions on it. This should create a data structure with
 # many large, disjoint sets. We then leak that data structure and repeat this
-# 100 times.
+# 50 times.
 #
 # This is the same test as bench_erc_union_find, but it runs with tracing on and
 # enhanced reference counting is disabled. It should be slower than the ERC
@@ -15,7 +15,7 @@
 
 {import|.} union_find;
 
-go1{:=|{do|
+{!benchmark|n{:=|50}; ops{:=|2000}} {tracing_union_find|
     # Create 1000 nodes.
     1{:=|{node|1}};
     1{.get|.}{.insert|.};
@@ -3021,43 +3021,7 @@ go1{:=|{do|
     214{.get|.}{.union|390{.get|.}};
 
     .
-}};
-
-
-go10{:=|{do|
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    .
-}};
-
-go100{:=|{do|
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    .
-}};
-
-go100{.get|.}{.eval|.};
-
-
-go1{:=|.};
-    # Clear our reference to `go1`, which has a very large scope. This renders
-    # the few thousand mappings in that scope unreachable.
+};
 
 {gc|.}{!collect|.};
 {gc|.}{!print_stats|.};

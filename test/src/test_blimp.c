@@ -1,5 +1,6 @@
 #include "options.h"
 #include "test_blimp.h"
+#include "timing.h"
 
 static inline void VoidReturn(Blimp *blimp, BlimpObject **result)
 {
@@ -146,6 +147,166 @@ static BlimpStatus ExpectError(
 
     if (BlimpObject_Eval(receiver, result) == BLIMP_OK) {
         return Blimp_ErrorMsg(blimp, BLIMP_ERROR, "expected error");
+    }
+
+    VoidReturn(blimp, result);
+    return BLIMP_OK;
+}
+
+static void FormatNS(float *time, const char **unit)
+{
+    if (*time >= 1000000000) {
+        *time /= 1000000000;
+        *unit = "s";
+    } else if (*time >= 1000000) {
+        *time /= 1000000;
+        *unit = "ms";
+    } else if (*time >= 1000) {
+        *time /= 1000;
+        *unit = "us";
+    } else {
+        *unit = "ns";
+    }
+}
+
+static BlimpStatus Benchmark(
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject *receiver,
+    BlimpObject *message,
+    void *data,
+    BlimpObject **result)
+{
+    (void)scope;
+
+    const Options *options = data;
+
+    size_t iter;
+    size_t ops;
+    size_t warmup;
+
+    // Get the name of the benchmark.
+    const BlimpSymbol *name;
+    if (BlimpObject_ParseBlock(message, &name, NULL) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    // Evaluate the receiver for the side effects of setting up the `n`, `ops`,
+    // and `warmup` member variables.
+    if (BlimpObject_Eval(receiver, result) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+    BlimpObject_Release(*result);
+
+    // Get the number of iterations to run.
+    const BlimpSymbol *iter_key;
+    if (Blimp_GetSymbol(blimp, "n", &iter_key) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+    BlimpObject *iter_obj;
+    const BlimpSymbol *iter_sym;
+    if (BlimpObject_Get(receiver, iter_key, &iter_obj) != BLIMP_OK ||
+        BlimpObject_ParseSymbol(iter_obj, &iter_sym) != BLIMP_OK ||
+        !ParseUIntSymbol(iter_sym, &iter))
+    {
+        iter = 1000;
+            // Do 1000 iterations by default.
+    }
+
+    // Clean up our reference to `n`.
+    BlimpObject_Set(receiver, iter_key, receiver);
+
+    // Get the number of operations per iteration.
+    const BlimpSymbol *ops_key;
+    if (Blimp_GetSymbol(blimp, "ops", &ops_key) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+    BlimpObject *ops_obj;
+    const BlimpSymbol *ops_sym;
+    if (BlimpObject_Get(receiver, ops_key, &ops_obj) != BLIMP_OK ||
+        BlimpObject_ParseSymbol(ops_obj, &ops_sym) != BLIMP_OK ||
+        !ParseUIntSymbol(ops_sym, &ops))
+    {
+        ops = 1;
+            // By default, each iteration is considered one operation.
+    }
+
+    // Clean up our reference to `ops`.
+    BlimpObject_Set(receiver, ops_key, receiver);
+
+    // Get the number of warmup iterations.
+    const BlimpSymbol *warmup_key;
+    if (Blimp_GetSymbol(blimp, "warmup", &warmup_key) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+    BlimpObject *warmup_obj;
+    const BlimpSymbol *warmup_sym;
+    if (BlimpObject_Get(receiver, warmup_key, &warmup_obj) != BLIMP_OK ||
+        BlimpObject_ParseSymbol(warmup_obj, &warmup_sym) != BLIMP_OK ||
+        !ParseUIntSymbol(warmup_sym, &warmup))
+    {
+        warmup = 0;
+            // No warmup by default.
+    }
+
+    // Clean up our reference to `warmup`.
+    BlimpObject_Set(receiver, warmup_key, receiver);
+
+    // Do warmup
+    for (size_t i = 0; i < warmup; ++i) {
+        if (BlimpObject_Eval(message, result) != BLIMP_OK) {
+            return Blimp_Reraise(blimp);
+        }
+        BlimpObject_Release(*result);
+    }
+
+    // Set up stats.
+    size_t min = SIZE_MAX;
+    size_t max = 0;
+    size_t total = 0;
+    float cycles_per_ns = CyclesPerNS();
+
+    // Run the benchmark;
+    for (size_t i = 0; i < iter; ++i) {
+        uint64_t start = RDTSC();
+
+        if (BlimpObject_Eval(message, result) != BLIMP_OK) {
+            return Blimp_Reraise(blimp);
+        }
+
+        BlimpObject_Release(*result);
+
+        uint64_t elapsed = RDTSC() - start;
+        if (elapsed < min) {
+            min = elapsed;
+        }
+        if (elapsed > max) {
+            max = elapsed;
+        }
+        total += elapsed;
+    }
+
+    float avg_time = (float)total/(iter*ops)/cycles_per_ns;
+    const char *avg_unit;
+    FormatNS(&avg_time, &avg_unit);
+
+    float min_time = (float)min/ops/cycles_per_ns;
+    const char *min_unit;
+    FormatNS(&min_time, &min_unit);
+
+    float max_time = (float)max/ops/cycles_per_ns;
+    const char *max_unit;
+    FormatNS(&max_time, &max_unit);
+
+    if (options->verbosity >= VERB_STATS) {
+        printf("Benchmark results for `%s':\n", BlimpSymbol_GetName(name));
+        printf("  Iterations: %zu\n", iter);
+        printf("  Cycles/ns:  %.2f\n", cycles_per_ns);
+        printf("  Operations: %zu\n", iter*ops);
+        printf("  Total time: %.3fs\n", (float)total/1000000000);
+        printf("  Time/Op:    %.3f%s\n", avg_time, avg_unit);
+        printf("  Min:        %.3f%s\n", min_time, min_unit);
+        printf("  Max:        %.3f%s\n", max_time, max_unit);
     }
 
     VoidReturn(blimp, result);
@@ -333,6 +494,7 @@ Blimp *TestBlimp_New(const Options *options)
         { "symbol", "!expect",          Expect,           NULL },
         { "symbol", "!expect_percent",  ExpectPercent,    NULL },
         { "_",      "!expect_error",    ExpectError,      NULL },
+        { "!benchmark","_",             Benchmark,        (void *)options },
         { "gc",     "!allocated",       GC_Allocated,     NULL },
         { "gc",     "!reachable",       GC_Reachable,     NULL },
         { "gc",     "!high_water_mark", GC_HighWaterMark, NULL },

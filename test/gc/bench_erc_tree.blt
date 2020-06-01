@@ -1,4 +1,4 @@
-#: --skip-racket --blimp-timeout 1.1 -fno-gc-tracing -fno-gc-refcount
+#: --skip-racket --blimp-timeout 1.5 -fno-gc-tracing -fno-gc-refcount
 
 # Tests garbage collection of trees, one of the most well-behaved data
 # structures, since every node is referenced exactly once, by its parent.
@@ -16,7 +16,7 @@ bind tree.dfs (
     value{.get|.}
 );
 
-make_one_tree{:=|{do|
+{!benchmark|n{:=|100000}} {erc_tree|
     # We'll build the following tree:
     #                   a
     #                  / \
@@ -33,102 +33,30 @@ make_one_tree{:=|{do|
             right{:=|{nil|.}}
         }{.init|.}};
 
-        ## Level 1
-        #b {:=|{tree|
-        #    value{:=|b};
-        #    left{:=|d{.get|.}};
-        #    right{:=|{nil|.}}
-        #}{.init|.}};
-        #c {:=|{tree|
-        #    value{:=|c};
-        #    left{:=|{nil|.}};
-        #    right{:=|{nil|.}}
-        #}{.init|.}};
+        # Level 1
+        b {:=|{tree|
+            value{:=|b};
+            left{:=|d{.get|.}};
+            right{:=|{nil|.}}
+        }{.init|.}};
+        c {:=|{tree|
+            value{:=|c};
+            left{:=|{nil|.}};
+            right{:=|{nil|.}}
+        }{.init|.}};
 
-        ## Level 2 (root)
-        #a {:=|{tree|
-        #    value{:=|a};
-        #    left{:=|b{.get|.}};
-        #    right{:=|c{.get|.}}
-        #}{.init|.}};
+        # Level 2 (root)
+        a {:=|{tree|
+            value{:=|a};
+            left{:=|b{.get|.}};
+            right{:=|c{.get|.}}
+        }{.init|.}};
 
-        #a{.get|.}{.dfs|.};
+        a{.get|.}{.dfs|.};
 
         .
     }{.eval|.}
-}};
-
-make_ten_trees{:=|{do|
-    make_one_tree{.get|.}{.eval|.};
-    make_one_tree{.get|.}{.eval|.};
-    make_one_tree{.get|.}{.eval|.};
-    make_one_tree{.get|.}{.eval|.};
-    make_one_tree{.get|.}{.eval|.};
-    make_one_tree{.get|.}{.eval|.};
-    make_one_tree{.get|.}{.eval|.};
-    make_one_tree{.get|.}{.eval|.};
-    make_one_tree{.get|.}{.eval|.};
-    make_one_tree{.get|.}{.eval|.};
-    .
-}};
-
-make_one_hundred_trees{:=|{do|
-    make_ten_trees{.get|.}{.eval|.};
-    make_ten_trees{.get|.}{.eval|.};
-    make_ten_trees{.get|.}{.eval|.};
-    make_ten_trees{.get|.}{.eval|.};
-    make_ten_trees{.get|.}{.eval|.};
-    make_ten_trees{.get|.}{.eval|.};
-    make_ten_trees{.get|.}{.eval|.};
-    make_ten_trees{.get|.}{.eval|.};
-    make_ten_trees{.get|.}{.eval|.};
-    make_ten_trees{.get|.}{.eval|.};
-    .
-}};
-
-make_one_thousand_trees{:=|{do|
-    make_one_hundred_trees{.get|.}{.eval|.};
-    make_one_hundred_trees{.get|.}{.eval|.};
-    make_one_hundred_trees{.get|.}{.eval|.};
-    make_one_hundred_trees{.get|.}{.eval|.};
-    make_one_hundred_trees{.get|.}{.eval|.};
-    make_one_hundred_trees{.get|.}{.eval|.};
-    make_one_hundred_trees{.get|.}{.eval|.};
-    make_one_hundred_trees{.get|.}{.eval|.};
-    make_one_hundred_trees{.get|.}{.eval|.};
-    make_one_hundred_trees{.get|.}{.eval|.};
-    .
-}};
-
-make_ten_thousand_trees{:=|{do|
-    make_one_thousand_trees{.get|.}{.eval|.};
-    make_one_thousand_trees{.get|.}{.eval|.};
-    make_one_thousand_trees{.get|.}{.eval|.};
-    make_one_thousand_trees{.get|.}{.eval|.};
-    make_one_thousand_trees{.get|.}{.eval|.};
-    make_one_thousand_trees{.get|.}{.eval|.};
-    make_one_thousand_trees{.get|.}{.eval|.};
-    make_one_thousand_trees{.get|.}{.eval|.};
-    make_one_thousand_trees{.get|.}{.eval|.};
-    make_one_thousand_trees{.get|.}{.eval|.};
-    .
-}};
-
-make_one_hundred_thousand_trees{:=|{do|
-    make_ten_thousand_trees{.get|.}{.eval|.};
-    make_ten_thousand_trees{.get|.}{.eval|.};
-    make_ten_thousand_trees{.get|.}{.eval|.};
-    make_ten_thousand_trees{.get|.}{.eval|.};
-    make_ten_thousand_trees{.get|.}{.eval|.};
-    make_ten_thousand_trees{.get|.}{.eval|.};
-    make_ten_thousand_trees{.get|.}{.eval|.};
-    make_ten_thousand_trees{.get|.}{.eval|.};
-    make_ten_thousand_trees{.get|.}{.eval|.};
-    make_ten_thousand_trees{.get|.}{.eval|.};
-    .
-}};
-
-make_one_hundred_thousand_trees{.get|.}{.eval|.};
+};
 
 {gc|.}{!print_stats|.};
 {gc|.}{!expect_clean|.};

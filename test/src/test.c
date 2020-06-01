@@ -22,6 +22,7 @@
 #include "options.h"
 #include "racket.h"
 #include "test_blimp.h"
+#include "timing.h"
 
 #define ANSI_GREEN  "\e[1;32m"
 #define ANSI_RED    "\e[1;31m"
@@ -845,6 +846,8 @@ int main(int argc, char **argv)
     if (should_exit) {
         return status;
     }
+
+    InitTiming();
 
     if (RunSuite(FindTests(&options))) {
         return EXIT_SUCCESS;

@@ -1,0 +1,5 @@
+file(GLOB MODULE_SRC "module/*.c")
+add_library(blimpmodule ${MODULE_SRC})
+target_compile_options(blimpmodule PRIVATE -Wall -Wextra -Werror -ansi -std=c99)
+target_include_directories(blimpmodule PUBLIC include)
+target_link_libraries(blimpmodule blimp)

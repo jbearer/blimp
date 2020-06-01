@@ -1,4 +1,4 @@
-#: --skip-racket --blimp-timeout 3 -fno-gc-refcount -fno-gc-cycle-detection
+#: --skip-racket --blimp-timeout 4 -fno-gc-refcount -fno-gc-cycle-detection
 
 # Tests garbage collection of cycles which get broken by the user. Creates 100k
 # 10-element cycles, and then breaks each cycle.
@@ -14,7 +14,9 @@ bind node.set_next (
     next{:=|that{.get|.}{.eval|.}}
 );
 
-go1{:=|{do|
+unit{:=|.};
+
+{!benchmark|n{:=|100000}; ops{:=|10}} {refcount_cycle_broken|
     # Create 10 nodes.
     1{:=|{node|.}};
     2{:=|{node|.}};
@@ -42,80 +44,20 @@ go1{:=|{do|
     # Break the cycle.
     10{.get|.}{.set_next|{nil|.}};
 
-    .
-}};
+    # Leak the nodes.
+    1{:=|unit{.get|.}};
+    2{:=|unit{.get|.}};
+    3{:=|unit{.get|.}};
+    4{:=|unit{.get|.}};
+    5{:=|unit{.get|.}};
+    6{:=|unit{.get|.}};
+    7{:=|unit{.get|.}};
+    8{:=|unit{.get|.}};
+    9{:=|unit{.get|.}};
+    10{:=|unit{.get|.}};
 
-go10{:=|{do|
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
-    go1{.get|.}{.eval|.};
     .
-}};
-
-go100{:=|{do|
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    go10{.get|.}{.eval|.};
-    .
-}};
-
-go1000{:=|{do|
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    go100{.get|.}{.eval|.};
-    .
-}};
-
-go10000{:=|{do|
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    go1000{.get|.}{.eval|.};
-    .
-}};
-
-go100000{:=|{do|
-    go10000{.get|.}{.eval|.};
-    go10000{.get|.}{.eval|.};
-    go10000{.get|.}{.eval|.};
-    go10000{.get|.}{.eval|.};
-    go10000{.get|.}{.eval|.};
-    go10000{.get|.}{.eval|.};
-    go10000{.get|.}{.eval|.};
-    go10000{.get|.}{.eval|.};
-    go10000{.get|.}{.eval|.};
-    go10000{.get|.}{.eval|.};
-    .
-}};
-
-go100000{.get|.}{.eval|.};
+};
 
 {gc|.}{!collect|.};
 {gc|.}{!print_stats|.};
