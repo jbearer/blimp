@@ -1,11 +1,22 @@
 #: --skip-racket
 
-# Message send benchmark. Sends a trivial message 1 million times.
+# Message send benchmark. Sends a trivial message, a fallthrough message, and a
+# fallthrough receiver 1 million times each.
 
-bind foo.bar .;
+bind receiver.message .;
+bind _.fallthrough    .;
+bind fallthrough _    .;
 
-{!benchmark|n{:=|1000000}}{send|
-    {foo|.}{.bar|.}
+{!benchmark|n{:=|1000000}}{normal|
+    {receiver|.}{.message|.}
+};
+
+{!benchmark|n{:=|1000000}}{fallthrough_message|
+    {fallthrough|.}{.message|.}
+};
+
+{!benchmark|n{:=|1000000}}{fallthrough_receiver|
+    {receiver|.}{.fallthrough|.}
 };
 
 .
