@@ -323,6 +323,13 @@ Status Blimp_EvalSymbol(
     Object *scope,
     const Symbol **sym)
 {
+    // Fast path for the case where `expr` is a symbol literal: don't even
+    // bother creating a temporary object.
+    if (expr->tag == EXPR_SYMBOL) {
+        *sym = expr->symbol;
+        return BLIMP_OK;
+    }
+
     Object *obj;
     TRY(Blimp_Eval(blimp, expr, scope, &obj));
 

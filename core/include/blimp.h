@@ -1080,7 +1080,8 @@ BlimpStatus Blimp_Eval(
  * object.
  *
  * You can think of this as a wrapper around Blimp_Eval(),
- * BlimpObject_ParseSymbol(), and BlimpObject_Release().
+ * BlimpObject_ParseSymbol(), and BlimpObject_Release(). However, it may be
+ * implemented more efficiently to avoid the creation of temporary objects
  */
 BlimpStatus Blimp_EvalSymbol(
     Blimp *blimp,
