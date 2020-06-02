@@ -1,6 +1,8 @@
 #ifndef BLIMP_TEST_H
 #define BLIMP_TEST_H
 
+#include <wordexp.h>
+
 #include "options.h"
 #include "racket.h"
 
@@ -17,6 +19,7 @@ typedef struct Test {
     const char *name;
     struct Group *group;
     Options options;
+    wordexp_t options_split;
     Blimp *blimp;
     BlimpStream *stream;
     Racket *racket;

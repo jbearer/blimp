@@ -240,7 +240,6 @@ static void RunGroup(Group *group)
                 test->blimp, (const char **)group->import_path));
             RunTest(test);
         }
-        Blimp_Delete(test->blimp);
         ++group->results[test->result];
     }
 
@@ -661,6 +660,8 @@ static int CompareTests(const void *p1, const void *p2)
     return strcmp(t1->name, t2->name);
 }
 
+static void DestroyGroup(Group *group);
+
 static Suite *FindTests(const Options *options)
 {
     Suite *suite = malloc(sizeof(Suite));
@@ -676,20 +677,20 @@ static Suite *FindTests(const Options *options)
                     "failed to open Racket "
                     "(maybe you meant to run with --skip-racket)\n");
             }
-            return false;
+            return NULL;
         }
 
         if (!Racket_Exec(&suite->racket, "(require redex)")) {
             if (suite->options.verbosity >= VERB_SUITE) {
                 fprintf(stderr, "racket: failed to import redex\n");
             }
-            return false;
+            return NULL;
         }
         if (!Racket_Exec(&suite->racket, "(require (file \"" SEMANTICS_PATH "\"))")) {
             if (suite->options.verbosity >= VERB_SUITE) {
                 fprintf(stderr, "racket: failed to import semantics.rkt\n");
             }
-            return false;
+            return NULL;
         }
     }
 
@@ -744,6 +745,7 @@ static Suite *FindTests(const Options *options)
             test->name = strdup(test_de->d_name);
             test->group = group;
             test->options = group->options;
+            test->options_split = (wordexp_t) {0};
             FILE *test_file = fdopen(
                 openat(dirfd(group_dir), test_de->d_name, O_RDONLY), "r");
             test->racket = &suite->racket;
@@ -762,8 +764,8 @@ static Suite *FindTests(const Options *options)
 
                 // Split into words, using the same string splitting altgorithm
                 // as the shell to respect quoted words with whitespace.
-                wordexp_t split = { .we_offs = 1 };
-                wordexp(&first_line[2], &split, WRDE_NOCMD|WRDE_DOOFFS);
+                test->options_split.we_offs = 1;
+                wordexp(&first_line[2], &test->options_split, WRDE_NOCMD|WRDE_DOOFFS);
                     // Flags:
                     //  WRDE_NOCMD: don't do command substitution.
                     //  WRDE_DOOFFS:
@@ -774,12 +776,16 @@ static Suite *FindTests(const Options *options)
                     //      the first argument.
 
                 // Prepend the name of the executable.
-                split.we_wordv[0] = "blimp-test";
-                split.we_wordc++;
+                test->options_split.we_wordv[0] = "blimp-test";
+                test->options_split.we_wordc++;
 
                 // Parse the array of split words as options.
                 ParseOptions(
-                    split.we_wordc, split.we_wordv, &test->options, NULL);
+                    test->options_split.we_wordc,
+                    test->options_split.we_wordv,
+                    &test->options,
+                    NULL
+                );
 
                 // Normally, after calling wordexp, we would call wordfree to
                 // free the memory that wordexp allocated. In this case, though,
@@ -788,6 +794,8 @@ static Suite *FindTests(const Options *options)
                 //
                 // We can, however, get rid of the raw line that we read from
                 // file.
+                free(first_line);
+            } else {
                 free(first_line);
             }
             rewind(test_file);
@@ -820,7 +828,7 @@ static Suite *FindTests(const Options *options)
             suite->groups[suite->num_groups++] = group;
         } else {
             // Ditch the empty group.
-            free(group);
+            DestroyGroup(group);
         }
 
         closedir(group_dir);
@@ -829,6 +837,38 @@ static Suite *FindTests(const Options *options)
     closedir(suite_dir);
 
     return suite;
+}
+
+static void DestroyGroup(Group *group)
+{
+    for (size_t j = 0; j < group->num_tests; ++j) {
+        Test *test = group->tests[j];
+
+        free((void *)test->name);
+
+        if (test->options_split.we_offs) {
+            wordfree(&test->options_split);
+        }
+
+        Blimp_Delete(test->blimp);
+    }
+
+    free((void *)group->name);
+    free(group->tests);
+    for (char **str = group->import_path; *str; ++str) {
+        free(*str);
+    }
+
+    free(group);
+}
+
+static void DestroyTests(Suite *suite)
+{
+    for (size_t i = 0; i < suite->num_groups; ++i) {
+        DestroyGroup(suite->groups[i]);
+    }
+    free(suite->groups);
+    free(suite);
 }
 
 int main(int argc, char **argv)
@@ -842,7 +882,11 @@ int main(int argc, char **argv)
 
     InitTiming();
 
-    if (RunSuite(FindTests(&options))) {
+    Suite *suite = FindTests(&options);
+    bool passed = RunSuite(suite);
+    DestroyTests(suite);
+
+    if (passed) {
         return EXIT_SUCCESS;
     } else {
         return EXIT_FAILURE;

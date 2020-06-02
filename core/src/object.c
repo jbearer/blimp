@@ -924,16 +924,10 @@ static void ERC_StaticInit(ObjectPool *pool, Object *obj)
     obj->self_mask = BV128_ZER0;
         // Initialize the mask to all zeros.
 
-    if (obj->type != OBJ_GLOBAL) {
-        // We don't set any bits for the global object, because nothing is ever
-        // entangled with the global object, so having it test positive in any
-        // Bloom filters would be pointless.
-
-        // Randomly set some number of bits.
-        for (size_t i = 0; i < BLOOM_FILTER_NUM_HASHES; ++i) {
-            obj->self_mask = bv128_Set(
-                obj->self_mask, Random_NextWord(&pool->random) % 128);
-        }
+    // Randomly set some number of bits.
+    for (size_t i = 0; i < BLOOM_FILTER_NUM_HASHES; ++i) {
+        obj->self_mask = bv128_Set(
+            obj->self_mask, Random_NextWord(&pool->random) % 128);
     }
 }
 
@@ -948,10 +942,15 @@ static void ERC_Init(Object *obj)
     obj->clump_prev = obj;
     obj->clump_references = NULL;
 
-    if (obj->parent) {
+    if (obj->parent && obj->parent->type != OBJ_GLOBAL) {
         // The objects predecessors set consists of its parent together with its
         // parent's predecessors. To compute this set, we union (bitwise-or) the
         // parent's predecessors Bloom filter with the parent's self_mask.
+        //
+        // We don't include the global object in the predecessors sets of any of
+        // its children, because nothing is ever entangled with the global
+        // object, so having it test positive in any Bloom filters would be
+        // pointless.
         obj->predecessors = bv128_Or(
             obj->parent->predecessors, obj->parent->self_mask);
     } else {
