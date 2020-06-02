@@ -65,6 +65,57 @@ static BlimpStatus Expect(
     return BLIMP_OK;
 }
 
+static BlimpStatus ExpectLT(
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject *receiver,
+    BlimpObject *message,
+    void *data,
+    BlimpObject **result)
+{
+    (void)scope;
+    (void)data;
+
+    const BlimpSymbol *rec_sym;
+    if (BlimpObject_ParseSymbol(receiver, &rec_sym) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    size_t rec;
+    if (!ParseUIntSymbol(rec_sym, &rec)) {
+        return Blimp_ErrorMsg(blimp, BLIMP_ERROR,
+            "receiver of !expect_lt must be a numeric symbol (got `%s')",
+            BlimpSymbol_GetName(rec_sym));
+    }
+
+    BlimpObject *arg;
+    if (BlimpObject_Eval(message, &arg) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    const BlimpSymbol *msg_sym;
+    if (BlimpObject_ParseSymbol(arg, &msg_sym) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    size_t msg;
+    if (!ParseUIntSymbol(msg_sym, &msg)) {
+        return Blimp_ErrorMsg(blimp, BLIMP_ERROR,
+            "body of !expect_lt must be a numeric symbol (got `%s')",
+            BlimpSymbol_GetName(msg_sym));
+    }
+
+    if (rec >= msg) {
+        return Blimp_ErrorMsg(blimp, BLIMP_ERROR,
+            "expected `%zu' to be less than `%zu'", rec, msg);
+    }
+
+    BlimpObject_Borrow(receiver);
+    *result = receiver;
+
+    return BLIMP_OK;
+}
+
 static BlimpStatus ExpectPercent(
     Blimp *blimp,
     BlimpObject *scope,
@@ -393,6 +444,30 @@ static BlimpStatus GC_Reachable(
     return BlimpObject_NewSymbol(blimp, scope, sym, result);
 }
 
+static BlimpStatus GC_Unreachable(
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject *receiver,
+    BlimpObject *message,
+    void *data,
+    BlimpObject **result)
+{
+    (void)receiver;
+    (void)message;
+    (void)data;
+
+    BlimpGCStatistics stats = Blimp_GetGCStatistics(blimp);
+    size_t unreachable = stats.allocated - stats.reachable;
+
+    const BlimpSymbol *sym;
+    if (MakeUIntSymbol(blimp, unreachable, &sym)
+            != BLIMP_OK)
+    {
+        return Blimp_Reraise(blimp);
+    }
+    return BlimpObject_NewSymbol(blimp, scope, sym, result);
+}
+
 static BlimpStatus GC_HighWaterMark(
     Blimp *blimp,
     BlimpObject *scope,
@@ -509,6 +584,7 @@ static BlimpStatus GC_PrintStats(
 
     BlimpGCStatistics stats = Blimp_GetGCStatistics(blimp);
     printf("GC Statistics:\n");
+    printf("  created:         %zu\n", stats.created);
     printf("  allocated now:   %zu\n", stats.allocated);
     printf("  reachable:       %zu\n", stats.reachable);
     printf("  high water mark: %zu\n", stats.max_allocated);
@@ -531,11 +607,13 @@ Blimp *TestBlimp_New(Test *test)
 
     BlimpVTableFragment table = {
         { "symbol", "!expect",          Expect,           test },
+        { "symbol", "!expect_lt",       ExpectLT,         test },
         { "symbol", "!expect_percent",  ExpectPercent,    test },
         { "_",      "!expect_error",    ExpectError,      test },
         { "!benchmark","_",             Benchmark,        test },
         { "gc",     "!allocated",       GC_Allocated,     test },
         { "gc",     "!reachable",       GC_Reachable,     test },
+        { "gc",     "!unreachable",     GC_Unreachable,   test },
         { "gc",     "!high_water_mark", GC_HighWaterMark, test },
         { "gc",     "!collect",         GC_Collect,       test },
         { "gc",     "!expect_clean",    GC_ExpectClean,   test },

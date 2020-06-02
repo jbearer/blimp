@@ -139,6 +139,30 @@ typedef struct {
      * This option is enabled by default.
      */
     bool gc_cycle_detection;
+
+    /**
+     * \brief
+     *      This option controls the maximum size of ERC clumps.
+     *      It can also be used to prevent new objects from entangling with
+     *      long-lived objects.
+     *
+     * If `gc_max_clump_size` is set to a nonzero value, then clumps larger than
+     * `gc_max_clump_size` will stop entangling with new objects. Large clumps
+     * can be expensive to manage, and each new object entangled with a clump
+     * decreases the probability that that clump will ever be freed by ERC, so
+     * limiting the clump size can sometimes be a performance optimization.
+     *
+     * In addition, objects created at different times, more than
+     * `gc_max_clump_size` objects apart, are prohibited from entangling. This
+     * means that if an object is particularly long-lived, once
+     * `gc_max_clump_size` objects have been created after it, no new objects
+     * will entangle with that object. This can prevent short-lived objects from
+     * entangling with long-lived objects, which could prevent the short-lived
+     * objects from being freed.
+     *
+     * The default is 0 (no limit on clump size or clump age difference).
+     */
+    size_t gc_max_clump_size;
 } BlimpOptions;
 
 extern const BlimpOptions DEFAULT_BLIMP_OPTIONS;
@@ -755,6 +779,9 @@ BlimpStatus BlimpObject_Eval(BlimpObject *obj, BlimpObject **ret);
  */
 
 typedef struct {
+    size_t created;
+        ///< The total number of objects ever created.
+
     size_t allocated;
         ///< The total number of objects allocated right now.
     size_t reachable;

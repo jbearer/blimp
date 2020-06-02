@@ -18,6 +18,8 @@ struct BlimpObject {
     // General object data.
     Object *parent;
     Scope scope;
+    size_t seq;
+        // Sequence number for this object.
 
     // Reference counting.
     size_t transient_refcount;
@@ -110,6 +112,7 @@ typedef struct {
     size_t batches_since_last_gc;
     size_t gc_collections;
     Random random;
+    size_t seq;
 } ObjectPool;
 
 PRIVATE Status ObjectPool_Init(Blimp *blimp, ObjectPool *pool);

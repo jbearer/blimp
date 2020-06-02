@@ -823,6 +823,7 @@ Status ObjectPool_Init(Blimp *blimp, ObjectPool *pool)
     pool->free_list = NULL;
     pool->batches_since_last_gc = 1;
     pool->gc_collections = 0;
+    pool->seq = 0;
 
     Random_Init(&pool->random, 42);
 
@@ -1138,12 +1139,36 @@ static bool ERC_EntangleRecursive(Object *from, Object *to)
 
 static inline bool ERC_Entangle(Object *from, Object *to)
 {
+    Blimp *blimp = GetBlimp(from);
+
     if (from->type == OBJ_GLOBAL) {
         // Never entangle any object with the global object. Since the global
         // object is never freed, any object in its clump can never be freed by
         // ERC. So entangling an object with the global object can never help
         // us. It's better to just let objects form cycles with the global
         // object and hope that those cycles are later broken.
+        return false;
+    }
+
+    if (from->seq > to->seq) {
+        // Any object is younger than its ancestors. Therefore, if `from` is
+        // younger than `to`, `to` cannot be a descendant of `from`, so this
+        // edge is not completing a simple cycle.
+        return false;
+    }
+    assert(from->seq < to->seq);
+
+    if (blimp->options.gc_max_clump_size &&
+        blimp->options.gc_max_clump_size + from->seq < to->seq)
+    {
+        // The age difference between `from` and `to` is greater than the
+        // maximum configured clump size. Essentially, this means that `from` is
+        // a very long-lived object compared to `to`. Therefore, entangling `to`
+        // with `from` is more likely to force `to` to live longer than
+        // necessary, than it is to help free it. We're better off not
+        // entangling the two objects, keeping the clump sizes small, and hoping
+        // that any cycles between them are broken manually by the user. If not,
+        // the tracing GC will eventually get it.
         return false;
     }
 
@@ -1162,6 +1187,8 @@ static void ERC_MergeClumps(Object *root, Object *child)
     assert(root->entangled == NULL);
     assert(child->entangled == NULL);
     assert(root != child);
+    assert(root->seq < child->seq);
+        // `child` is a descendant of `root`.
 
     // Update refcounts.
     assert(root->clump_refcount > 0);
@@ -1436,7 +1463,8 @@ void ObjectPool_CollectGarbage(ObjectPool *pool)
 BlimpGCStatistics ObjectPool_GetStats(ObjectPool *pool)
 {
     BlimpGCStatistics stats = {
-        .min_clump = SIZE_MAX
+        .created = pool->seq,
+        .min_clump = SIZE_MAX,
     };
 
     MarkReachable(pool);
@@ -1562,11 +1590,13 @@ static Status NewObject(Blimp *blimp, Object *parent, Object **obj)
     }
 
     (*obj)->parent = parent;
+    (*obj)->seq = blimp->objects.seq++;
     (*obj)->internal_refcount = 0;
     (*obj)->transient_refcount = 0;
     ERC_Init(*obj);
 
     if (parent) {
+        assert((*obj)->seq > parent->seq);
         BorrowParent(*obj);
     }
 

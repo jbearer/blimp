@@ -6,6 +6,7 @@ const BlimpOptions DEFAULT_BLIMP_OPTIONS = {
     .gc_batches_per_trace = 1,
     .gc_refcount          = true,
     .gc_cycle_detection   = true,
+    .gc_max_clump_size    = 0,
 };
 
 const char *BLIMP_OPTIONS_USAGE =
@@ -119,6 +120,28 @@ const char *BLIMP_OPTIONS_USAGE =
     "        it.\n"
     "        \n"
     "        This option is enabled by default.\n"
+    "\n"
+    "    gc-max-clump-size=N\n"
+    "    no-gc-max-clump-size\n"
+    "        The first form sets a limit on the size of ERC clumps. The\n"
+    "        second form disables a previously set limit.\n"
+    "\n"
+    "        If this option is enabled, then clumps larger than N objects\n"
+    "        will stop entangling with new objects. Large clumps can be\n"
+    "        can be expensive to manage, and each new object entangled with a\n"
+    "        clump decreases the probability that that clump will ever be\n"
+    "        freed by ERC, so limiting the clump size can sometimes be a\n"
+    "        performance optimization.\n"
+    "\n"
+    "        In addition, objects created at different times, more than N\n"
+    "        objects apart, are prohibited from entangling. This means that\n"
+    "        if an object is particularly long-lived, once N objects have\n"
+    "        been created after it, no new objects will entangle with that\n"
+    "        object. This can prevent short-lived objects from entangling\n"
+    "        with long-lived objects, which could prevent the short-lived\n"
+    "        objects from being freed.\n"
+    "\n"
+    "        This option is disabled by default.\n"
 ;
 
 static const char *ParseUInt(const char *value, size_t *result)
@@ -214,6 +237,13 @@ const char *Blimp_ParseOption(const char *str, BlimpOptions *options)
     } else if (strncmp("gc-cycle-detection", option, option_len) == 0) {
         options->gc_cycle_detection = !negate;
         return NULL;
+    } else if (strncmp("gc-max-clump-size", option, option_len) == 0) {
+        if (negate) {
+            options->gc_max_clump_size = 0;
+            return NULL;
+        } else {
+            return ParseUInt(value, &options->gc_max_clump_size);
+        }
     } else {
         return "unknown option";
     }

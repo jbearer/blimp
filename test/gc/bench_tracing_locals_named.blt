@@ -1,4 +1,4 @@
-#: --skip-racket -fno-gc-tracing -fno-gc-refcount -fgc-max-clump-size=100
+#: --skip-racket -fno-gc-cycle-detection -fno-gc-refcount
 
 # Tests garbage collection of local variables; that is, objects which are
 # referenced by a parent object (or a parent of a parent, etc.). These seem easy
@@ -48,8 +48,7 @@ long_lived{:=|{long_lived|.}};
     long_lived{.get|.}{.do_test|.}
 };
 
+{gc|.}{!collect|.};
 {gc|.}{!print_stats|.};
-{gc|.}{!unreachable|.}{!expect_lt|100};
-    # We may leak up to 100 objects which got entangled with the long long-lived
-    # object. After that, nothing should be leaked.
+{gc|.}{!check_collect|.};
 .
