@@ -141,11 +141,8 @@ static void RunTest(Test *test)
     }
 
     // Skip this test if it gets filtered out.
-    if (strncasecmp(
-            test->name, test->options.filter, strlen(test->options.filter))
-        != 0)
-    {
-        SkipTest(test, "does not match filter `%s'", test->options.filter);
+    if (regexec(&test->options.filter, test->name, 0, NULL, 0) == REG_NOMATCH) {
+        SkipTest(test, "does not match filter");
         return;
     }
 
@@ -301,8 +298,8 @@ static void PrintUsage(FILE *f, int argc, char **argv)
     fprintf(f, "        Only run the test group NAME. This option can be passed more than\n");
     fprintf(f, "        once to select multiple groups.\n");
     fprintf(f, "\n");
-    fprintf(f, "    -F, --filter STRING\n");
-    fprintf(f, "        Run only tests whose name begins with STRING (case-insensitive).\n");
+    fprintf(f, "    -F, --filter REGEX\n");
+    fprintf(f, "        Run only tests whose name matches with REGEX (case-insensitive).\n");
     fprintf(f, "\n");
     fprintf(f, "    --skip-racket\n");
     fprintf(f, "        Do not run Racket semantics tests.\n");
@@ -414,13 +411,12 @@ typedef enum {
 
 static Options DefaultOptions(void)
 {
-    return (Options) {
+    Options options = {
         .verbosity      = VERB_GROUP,
         .tests          = NULL,
         .num_tests      = 0,
         .groups         = NULL,
         .num_groups     = 0,
-        .filter         = "",
         .use_racket     = true,
         .use_blimp      = true,
         .racket_timeout = 5000,
@@ -431,6 +427,10 @@ static Options DefaultOptions(void)
         .blimp_options  = DEFAULT_BLIMP_OPTIONS,
         .perf_report    = NULL,
     };
+
+    regcomp(&options.filter, ".*", REG_EXTENDED);
+
+    return options;
 }
 
 // Parse the options in the given command line, and store the result in the
@@ -478,7 +478,7 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
                 options->tests = realloc(
                     options->tests, options->num_tests*sizeof(char *));
                 if (options->tests == NULL) {
-                    fprintf(stderr, "out of memory");
+                    fprintf(stderr, "out of memory\n");
                     *status = EXIT_FAILURE;
                     return true;
                 }
@@ -491,7 +491,7 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
                 options->groups = realloc(
                     options->groups, options->num_groups*sizeof(char *));
                 if (options->groups == NULL) {
-                    fprintf(stderr, "out of memory");
+                    fprintf(stderr, "out of memory\n");
                     *status = EXIT_FAILURE;
                     return true;
                 }
@@ -500,7 +500,16 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
                 break;
 
             case FLAG_FILTER:
-                options->filter = optarg;
+                regfree(&options->filter);
+                int err = regcomp(
+                    &options->filter, optarg, REG_EXTENDED|REG_ICASE);
+                if (err) {
+                    char err_msg[100];
+                    regerror(err, &options->filter, err_msg, sizeof(err_msg));
+                    fprintf(stderr, "filter: %s\n", err_msg);
+                    *status = EXIT_FAILURE;
+                    return true;
+                }
                 break;
 
             case FLAG_SKIP_RACKET:

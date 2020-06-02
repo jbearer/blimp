@@ -1,6 +1,7 @@
 #ifndef TEST_OPTIONS
 #define TEST_OPTIONS
 
+#include <regex.h>
 #include <stdbool.h>
 #include <stdlib.h>
 
@@ -24,7 +25,7 @@ typedef struct {
     size_t num_tests;
     const char **groups;
     size_t num_groups;
-    const char *filter;
+    regex_t filter;
     bool use_racket;
     bool use_blimp;
     size_t racket_timeout;  // ms
