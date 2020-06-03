@@ -202,14 +202,11 @@ static Status MakeSpace(HashMap *map)
             // initialized, which means that their `status` field is ABSENT.
     }
 
-    size_t new_capacity = map->capacity * 2;
-    HashMapEntry *new_entries;
-    TRY(Calloc(map->blimp, new_capacity, EntrySize(map), &new_entries));
+    HashMapEntry *old_entries = map->entries;
+    map->capacity *= 2;
+    TRY(Calloc(map->blimp, map->capacity, EntrySize(map), &map->entries));
         // Calloc ensures that all the entries in the new array are zero-
         // initialized, which means that their `status` field is ABSENT.
-
-    map->capacity = new_capacity;
-    map->entries  = new_entries;
 
     // For each entry in the old map, compute it's position in the new map and
     // copy it there. We iterate through the entries using the linked list, both
@@ -243,7 +240,7 @@ static Status MakeSpace(HashMap *map)
         //    on, so we just keep probing. With those two simplification, this
         //    loop amounts to just finding the first ABSENT entry on the
         //    triangular number sequence and copying the old entry there.
-        size_t n           = old_entry->hash % new_capacity;
+        size_t n           = old_entry->hash % map->capacity;
         size_t probe_delta = 1;
         while (true) {
             HashMapEntry *new_entry = NthEntry(map, n);
@@ -261,7 +258,7 @@ static Status MakeSpace(HashMap *map)
                 prev = new_entry;
                 break;
             }
-            n = (n + probe_delta) % new_capacity;
+            n = (n + probe_delta) % map->capacity;
             ++probe_delta;
         }
 
@@ -270,6 +267,9 @@ static Status MakeSpace(HashMap *map)
 
     // Fix the tail of the list.
     map->last = prev;
+
+    // We don't need the old memory anymore.
+    Free(map->blimp, &old_entries);
 
     return BLIMP_OK;
 }

@@ -851,6 +851,8 @@ static void DestroyGroup(Group *group)
         }
 
         Blimp_Delete(test->blimp);
+
+        free(test);
     }
 
     free((void *)group->name);

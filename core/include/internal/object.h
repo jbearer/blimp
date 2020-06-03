@@ -113,6 +113,9 @@ typedef struct {
     size_t gc_collections;
     Random random;
     size_t seq;
+
+    struct RefBatch *refs;
+    Ref *free_refs;
 } ObjectPool;
 
 PRIVATE Status ObjectPool_Init(Blimp *blimp, ObjectPool *pool);

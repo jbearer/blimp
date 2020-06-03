@@ -15,6 +15,7 @@ static inline Blimp *GetBlimp(const Object *obj)
 static inline Status Scope_Init(Blimp *blimp, Scope *scope)
 {
     HashMapOptions options = HASH_MAP_DEFAULT_OPTIONS;
+    options.user_data = blimp;
     options.create_empty = true;
         // Create the scope with no associated memory. This is an optimization:
         // since many bl:mp objects (especially symbols) never have values
@@ -26,6 +27,11 @@ static inline Status Scope_Init(Blimp *blimp, Scope *scope)
         sizeof(Symbol *), sizeof(Ref *),
         (EqFunc)SymbolEq, (HashFunc)SymbolHash,
         &options);
+}
+
+static inline void Scope_Destroy(Scope *scope)
+{
+    HashMap_Destroy(scope);
 }
 
 static inline void Scope_Clear(Scope *scope)
@@ -805,6 +811,12 @@ typedef struct ObjectBatch {
     Object objects[];
 } ObjectBatch;
 
+typedef struct RefBatch {
+    size_t uninitialized;
+    struct RefBatch *next;
+    Ref refs[];
+} RefBatch;
+
 Status ObjectPool_Init(Blimp *blimp, ObjectPool *pool)
 {
     TRY(Blimp_GetSymbol(blimp, "symbol", &pool->symbol_tag));
@@ -824,6 +836,8 @@ Status ObjectPool_Init(Blimp *blimp, ObjectPool *pool)
     pool->batches_since_last_gc = 1;
     pool->gc_collections = 0;
     pool->seq = 0;
+    pool->free_refs = NULL;
+    pool->refs = NULL;
 
     Random_Init(&pool->random, 42);
 
@@ -832,19 +846,83 @@ Status ObjectPool_Init(Blimp *blimp, ObjectPool *pool)
 
 void ObjectPool_Destroy(Blimp *blimp, ObjectPool *pool)
 {
+    // Free any remaining allocated objects.
+    for (ObjectBatch *batch = pool->batches; batch; batch = batch->next) {
+        for (size_t i = 0; i < batch->uninitialized; ++i) {
+            Object *obj = &batch->objects[i];
+
+            if (obj->type == OBJ_BLOCK) {
+                Blimp_FreeExpr(obj->code);
+            }
+
+            Scope_Destroy(&obj->scope);
+        }
+    }
+
+    // Free object batches.
     ObjectBatch *batch = pool->batches;
     while (batch) {
         ObjectBatch *next = batch->next;
         Free(blimp, &batch);
         batch = next;
     }
+
+    // Free ref batches.
+    RefBatch *ref_batch = pool->refs;
+    while (ref_batch) {
+        RefBatch *next = ref_batch->next;
+        Free(blimp, &ref_batch);
+        ref_batch = next;
+    }
 }
 
-static void FreeObject(Object *obj);
+static Status AllocRef(Blimp *blimp, Ref **ref)
+{
+    ObjectPool *pool = &blimp->objects;
+
+    if (pool->free_refs == NULL) {
+        // If the free list is empty, try to allocate from a partial batch.
+        if (pool->refs == NULL ||
+            pool->refs->uninitialized >= blimp->options.gc_batch_size)
+        {
+            // If the first batch is fully allocated, allocate a new batch.
+            RefBatch *batch;
+            TRY(Malloc(
+                blimp,
+                sizeof(RefBatch) + blimp->options.gc_batch_size*sizeof(Ref),
+                &batch));
+
+            batch->uninitialized = 0;
+            batch->next = pool->refs;
+            pool->refs = batch;
+        }
+
+        assert(pool->refs != NULL);
+        assert(pool->refs->uninitialized < blimp->options.gc_batch_size);
+
+        pool->free_refs = &pool->refs->refs[pool->refs->uninitialized++];
+        pool->free_refs->next = NULL;
+    }
+
+    assert(pool->free_refs != NULL);
+    *ref = pool->free_refs;
+    pool->free_refs = (*ref)->next;
+    return BLIMP_OK;
+}
+
+static void FreeRef(Blimp *blimp, Ref *ref)
+{
+    ObjectPool *pool = &blimp->objects;
+
+    ref->next = pool->free_refs;
+    pool->free_refs = ref;
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 // Reference counting
 //
+
+static void FreeObject(Object *obj);
 
 static inline void RC_BorrowRef(Object *from, Ref *ref)
 {
@@ -1627,7 +1705,7 @@ static void FreeObject(Object *obj)
     {
         Ref *ref = Scope_GetValue(&obj->scope, entry);
         ReleaseRef(obj, ref);
-        free(ref);
+        FreeRef(blimp, ref);
     }
 
     // Release our reference to our parent.
@@ -1800,7 +1878,7 @@ Status BlimpObject_Set(Object *obj, const Symbol *sym, Object *val)
             // entry.
     } else {
         // Otherwise, add it to the innermost scope.
-        TRY(Malloc(blimp, sizeof(Ref), &ref));
+        TRY(AllocRef(blimp, &ref));
         ref->to = val;
         TRY(Scope_Update(&obj->scope, sym, ref));
         BorrowRef(obj, ref);

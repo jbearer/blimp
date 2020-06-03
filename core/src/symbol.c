@@ -43,6 +43,16 @@ Status SymbolTable_Init(Blimp *blimp, SymbolTable *symbols)
 
 void SymbolTable_Destroy(SymbolTable *symbols)
 {
+    Blimp *blimp = HashMap_GetBlimp(symbols);
+
+    for (HashMapEntry *entry = HashMap_Begin(symbols);
+         entry != HashMap_End(symbols);
+         entry = HashMap_Next(symbols, entry))
+    {
+        Free(blimp, (char **)HashMap_GetKey(symbols, entry));
+        Free(blimp, (Symbol **)HashMap_GetValue(symbols, entry));
+    }
+
     HashMap_Destroy(symbols);
 }
 

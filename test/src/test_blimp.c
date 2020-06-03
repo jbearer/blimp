@@ -362,7 +362,7 @@ static BlimpStatus Benchmark(
 
     // Write the results to a file.
     if (options->perf_report) {
-        fprintf(options->perf_report, "%s,%s,%s,%zu,%zu,%f,%f,%f,%f,%f\n",
+        fprintf(options->perf_report, "\"%s\",\"%s\",\"%s\",%zu,%zu,%f,%f,%f,%f,%f\n",
             test->group->name, test->name, BlimpSymbol_GetName(name),
             iter, ops, cycles_per_ns, avg_time, std_dev, min_time, max_time);
     }
