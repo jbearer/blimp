@@ -1,0 +1,24 @@
+#: --skip-racket
+
+# Symbols with keywords.
+`bind` {!expect|`bind`};
+
+# Symbols with spaces.
+`foo bar` {!expect|`foo bar`};
+
+# Symbols with special characters.
+`|{}#` {!expect|`|{}#`};
+
+# Symbols with newlines.
+`a
+multiline
+symbol` {!expect|
+`a
+multiline
+symbol`};
+
+# Symbols with unicode.
+`∀ε>0. ∃δ>0. |x-x₀| < δ -> |f(x)-f(x₀)| < ε`{!expect|
+    `∀ε>0. ∃δ>0. |x-x₀| < δ -> |f(x)-f(x₀)| < ε`};
+
+.

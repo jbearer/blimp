@@ -12,6 +12,7 @@
 //
 //  <symbol> ::= <operator-char>+<identifier-char>*
 //            |  <operator-char>*<identifier-char>+
+//            |  '`' .* '`'
 //
 // This grammar is a fully adequate description of the bl:mp AST, in that any
 // valid bl:mp parse tree is produced by this grammar. However, the grammar as
@@ -321,7 +322,6 @@ static bool IsOperatorChar(int c)
 {
     switch (c) {
         case '~':
-        case '`':
         case '!':
         case '@':
         case '$':
@@ -442,6 +442,45 @@ static Status Lexer_Peek(Lexer *lex, Token *tok)
         case EOF:
             tok->type = TOK_EOF;
             goto success;
+        case '`':
+            // ` starts an escaped symbol literal. We will consume all non-`
+            // characters until we get to another `.
+            TRY(Malloc(lex->blimp, sym_capacity, &sym_name));
+
+            while (true) {
+                TRY(Stream_Next(lex->input, &c));
+                if (c == '`') {
+                    break;
+                }
+                if (c == EOF) {
+                    return Blimp_ErrorAt(
+                        lex->blimp, Stream_Location(lex->input),
+                        BLIMP_UNEXPECTED_TOKEN,
+                        "unexpected end of input (expecting ``')"
+                    );
+                }
+
+                if (sym_length >= sym_capacity) {
+                    sym_capacity *= 2;
+                    TRY(Realloc(lex->blimp, sym_capacity, &sym_name));
+                }
+                sym_name[sym_length++] = c;
+            }
+
+            // Append a null terminator.
+            if (sym_length >= sym_capacity) {
+                TRY(Realloc(lex->blimp, sym_length + 1, &sym_name));
+            }
+            sym_name[sym_length++] = '\0';
+
+            // Create the symbol.
+            tok->type = TOK_SYMBOL;
+            TRY(Blimp_GetSymbol(lex->blimp, sym_name, &tok->symbol));
+            assert(tok->symbol);
+
+            Free(lex->blimp, &sym_name);
+            goto success;
+
         default:
             // Any other character must be the start of a symbol or keyword. We
             // will build up a string containing the text of the token, and then

@@ -6,7 +6,7 @@ file_extensions: [bli, blt]
 scope: source.blimp
 
 variables:
- symbol: '[`~@$%^&\*\[\]\-\+=:",\.<>/\?!]*[a-zA-Z0-9_]*'
+ symbol: '[~@$%^&\*\[\]\-\+=:",\.<>/\?!]*[a-zA-Z0-9_]*'
 
 contexts:
   main:
@@ -27,6 +27,10 @@ contexts:
       scope: keyword.control
       push: method
 
+    - match: '`'
+      scope: string.quoted.other
+      push: symbol
+
   method:
     - match: '{{symbol}}'
       scope: entity.name.function
@@ -43,3 +47,9 @@ contexts:
       pop: true
 
     - include: expr
+
+  symbol:
+    - meta_scope: string.quoted.other
+
+    - match: '`'
+      pop: true
