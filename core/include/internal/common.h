@@ -9,6 +9,7 @@
 typedef BlimpStatus Status;
 typedef BlimpSourceLoc SourceLoc;
 typedef BlimpSourceRange SourceRange;
+typedef BlimpStackTrace StackTrace;
 typedef BlimpSymbol Symbol;
 typedef BlimpStream Stream;
 typedef BlimpExpr Expr;

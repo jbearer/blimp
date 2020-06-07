@@ -1,6 +1,8 @@
 #include "internal/blimp.h"
 
 const BlimpOptions DEFAULT_BLIMP_OPTIONS = {
+    .recursion_limit      = 1000,
+    .stack_trace_limit    = 5,
     .gc_batch_size        = (1ull<<20), // 1MB
     .gc_tracing           = true,
     .gc_batches_per_trace = 1,
@@ -10,6 +12,36 @@ const BlimpOptions DEFAULT_BLIMP_OPTIONS = {
 };
 
 const char *BLIMP_OPTIONS_USAGE =
+    "    recursion-limit=N\n"
+    "    no-recursion-limit\n"
+    "        The first form sets the maximum number of message sends allowed\n"
+    "        on the stack at a time. The second form disables a previously\n"
+    "        set limit.\n"
+    "\n"
+    "        If this option is enabled, then attempts to evaluate a message\n"
+    "        send when there are already N sends on the stack will fail. Note\n"
+    "        that even if this option is disabled, the allowed recursion\n"
+    "        depth may be limited by the size of the process stack.\n"
+    "\n"
+    "        The default is 1000\n"
+    "\n"
+    "    stack-trace-limit=N\n"
+    "    no-stack-trace-limit\n"
+    "        The first form sets a limit on how much of large stack traces is\n"
+    "        printed when a runtime error occurs. The second form disables a\n"
+    "        previously set limit.\n"
+    "\n"
+    "        If this option is enabled, then when a stack trace is printed,\n"
+    "        at most N frames are printed from the beginning of the trace,\n"
+    "        and at most N frames are printed from the end of the trace.\n"
+    "        Missing frames will be indicated with an ellipsis, as well as by\n"
+    "        a discontinuity in the stack depth printed with each frame.\n"
+    "\n"
+    "        If this option is disabled, the entire stack trace will be\n"
+    "        printed.\n"
+    "\n"
+    "        The default is 5.\n"
+    "\n"
     "    gc-batch-size=SIZE\n"
     "        When allocating new objects, this option controls the number of\n"
     "        objects allocated at once, to be initialized on demand later.\n"
@@ -224,7 +256,21 @@ const char *Blimp_ParseOption(const char *str, BlimpOptions *options)
     }
 
     // Option-specific handling.
-    if        (strncmp("gc-batch-size", option, option_len) == 0) {
+    if        (strncmp("recursion-limit", option, option_len) == 0) {
+        if (negate) {
+            options->recursion_limit = 0;
+            return NULL;
+        } else {
+            return ParseUInt(value, &options->recursion_limit);
+        }
+    } else if (strncmp("stack-trace-limit", option, option_len) == 0) {
+        if (negate) {
+            options->stack_trace_limit = 0;
+            return NULL;
+        } else {
+            return ParseUInt(value, &options->stack_trace_limit);
+        }
+    } else if (strncmp("gc-batch-size", option, option_len) == 0) {
         return ParseBytes(value, &options->gc_batch_size);
     } else if (strncmp("gc-tracing", option, option_len) == 0) {
         options->gc_tracing = !negate;

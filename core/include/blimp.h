@@ -24,6 +24,40 @@ typedef struct Blimp Blimp;
 typedef struct {
     /**
      * \brief
+     *      This option controls the maximum number of message sends allowed on
+     *      the stack at a time.
+     *
+     * If `recursion_limit` is set to a nonzero number, then attempts to
+     * evaluate a message send when there are already `recursion_limit` sends on
+     * the stack will fail with a `BLIMP_STACK_OVERFLOW` error.
+     *
+     * If `recursion_limit` is 0, the limit is the size of the process stack.
+     *
+     * The default is 1000.
+     */
+    size_t recursion_limit;
+
+    /**
+     * \brief
+     *      This option controls how much of large stack traces is printed when
+     *      a runtime error occurs.
+     *
+     * If `stack_trace_limit` is set to a nonzero number, then when a stack
+     * trace is printed, at most `stack_trace_limit` frames are printed from the
+     * beginning of the trace, and at most `stack_trace_limit` frames are
+     * printed from the end of the trace.
+     *
+     * Missing frames will be indicated with an ellipsis, as well as by a
+     * discontinuity in the stack depth printed with each frame.
+     *
+     * If `stack_trace_limit` is zero, the entire stack trace will be printed.
+     *
+     * The default is 5.
+     */
+    size_t stack_trace_limit;
+
+    /**
+     * \brief
      *      When allocating new \ref objects, this option controls the number
      *      of objects allocated at once, to be initialized on demand later.
      *
@@ -250,6 +284,7 @@ typedef enum BlimpErrorCode {
     BLIMP_NO_SUCH_METHOD,
     BLIMP_MUST_BE_BLOCK,
     BLIMP_MUST_BE_SYMBOL,
+    BLIMP_STACK_OVERFLOW,
 
     // Internal consistency errors
     BLIMP_INVALID_EXPR,
@@ -257,6 +292,7 @@ typedef enum BlimpErrorCode {
     // Generic errors
     BLIMP_OUT_OF_MEMORY,
     BLIMP_IO_ERROR,
+    BLIMP_NOT_SUPPORTED,
     BLIMP_ERROR,
 } BlimpErrorCode;
 
@@ -272,9 +308,108 @@ typedef struct {
 } BlimpSourceRange;
 
 /**
+ * \defgroup stack_trace Stack Traces
+ *
+ * Errors which occur during the execution of `bl:mp` code have associated stack
+ * traces, which can be used to obtain detailed information about where in the
+ * `bl:mp` program the error occurred.
+ *
+ * @{
+ */
+
+typedef struct BlimpStackTrace BlimpStackTrace;
+
+/**
+ * \brief Save the current call stack for inspection.
+ *
+ * If successful, `*trace` points to a dynamically allocated BlimpStackTrace
+ * object which is now considered owned by the caller. The caller is responsible
+ * for eventually freeing the memory allocated to `*trace` by calling
+ * Blimp_FreeStackTrace().
+ */
+BlimpStatus Blimp_SaveStackTrace(Blimp *blimp, BlimpStackTrace **trace);
+
+/**
+ * \brief Copy a saved stack trace.
+ *
+ * If successful, `*to` points to a BlimpStackTrace which is equivalent to but
+ * independent from `from`. `*to` has its own independent lifetime.
+ *
+ * The memory needed to store `*to` is dynamically allocated by this function.
+ * The caller is responsible for eventually freeing the memory allocated to
+ * `*to` by calling Blimp_FreeStackTrace().
+ */
+BlimpStatus Blimp_CopyStackTrace(
+    Blimp *blimp, const BlimpStackTrace *from, BlimpStackTrace **to);
+
+/**
+ * \brief Free memory allocated to a stack trace.
+ */
+void Blimp_FreeStackTrace(Blimp *blimp, BlimpStackTrace *trace);
+
+/**
+ * \brief Move one level higher up a stack trace.
+ *
+ * This affects the current frame which can be inspected using
+ * BlimpStackTrace_GetRange().
+ *
+ * \returns
+ *      `true` if the stack trace was successful moved up one frame; `false` if
+ *      the stack trace is already at the top frame.
+ */
+bool BlimpStackTrace_Up(BlimpStackTrace *trace);
+
+/**
+ * \brief Move one level lower down a stack trace.
+ *
+ * This affects the current frame which can be inspected using
+ * BlimpStackTrace_GetRange().
+ *
+ * \returns
+ *      `true` if the stack trace was successful moved down one frame; `false`
+ *      if the stack trace is already at the bottom frame.
+ */
+bool BlimpStackTrace_Down(BlimpStackTrace *trace);
+
+/**
+ * \brief
+ *      Get the location in the source code corresponding to the current frame.
+ */
+void BlimpStackTrace_GetRange(
+    const BlimpStackTrace *trace, BlimpSourceRange *range);
+
+/**
+ * \brief Pretty-print a stack trace.
+ *
+ * The `limit` parameter controls how much of the trace is printed, if the trace
+ * is large.
+ *
+ * If `limit` is nonzero, at most `limit` frames are printed from the beginning
+ * of the trace, and at most `limit` frames are printed from the end of the
+ * trace. Missing frames will be indicated with an ellipsis, as well as by a
+ * discontinuity in the stack depth printed with each frame.
+ *
+ * If `limit` is zero, the entire stack trace will be printed.
+ */
+void BlimpStackTrace_Print(
+    FILE *file, const BlimpStackTrace *trace, size_t limit);
+
+/**
+ * @}
+ */
+
+/**
  * \brief Generate an error status with a given error code.
  */
 BlimpStatus Blimp_Error(Blimp *blimp, BlimpErrorCode code);
+
+
+/**
+ * \brief Generate an error status with a given error code.
+ *
+ * The error will contain a snapshot of the current stack trace from `blimp`.
+ */
+BlimpStatus Blimp_RuntimeError(Blimp *blimp, BlimpErrorCode code);
 
 /**
  * \brief Generate an error status with a given error code and message.
@@ -286,24 +421,85 @@ BlimpStatus Blimp_ErrorMsg(
     Blimp *blimp, BlimpErrorCode code, const char *fmt, ...)
         __attribute__((format (printf, 3, 4)));
 
+
 /**
- * \brief Generate an error status with a given source location, error code and message.
+ * \brief Generate an error status with a given error code and message.
+ *
+ * \param[in] fmt A printf-style format string for the error message.
+ * \param[in] ... Arguments for formatting the error message.
+ *
+ * The error will contain a snapshot of the current stack trace from `blimp`.
+ */
+BlimpStatus Blimp_RuntimeErrorMsg(
+    Blimp *blimp, BlimpErrorCode code, const char *fmt, ...)
+        __attribute__((format (printf, 3, 4)));
+
+/**
+ * \brief
+ *      Generate an error status with a given source location, error code and
+ *      message.
  *
  * \param[in] fmt A printf-style format string for the error message.
  * \param[in] ... Arguments for formatting the error message.
  */
 BlimpStatus Blimp_ErrorAt(
-    Blimp *blimp, BlimpSourceLoc loc, BlimpErrorCode code, const char *fmt, ...)
+    Blimp *blimp,
+    BlimpSourceLoc loc,
+    BlimpErrorCode code,
+    const char *fmt,
+    ...)
         __attribute__((format (printf, 4, 5)));
 
 /**
- * \brief Generate an error status with a given source range, error code and message.
+ * \brief
+ *      Generate an error status with a given source location, error code and
+ *      message.
+ *
+ * \param[in] fmt A printf-style format string for the error message.
+ * \param[in] ... Arguments for formatting the error message.
+ *
+ * The error will contain a snapshot of the current stack trace from `blimp`.
+ */
+BlimpStatus Blimp_RuntimeErrorAt(
+    Blimp *blimp,
+    BlimpSourceLoc loc,
+    BlimpErrorCode code,
+    const char *fmt,
+    ...)
+        __attribute__((format (printf, 4, 5)));
+
+/**
+ * \brief
+ *      Generate an error status with a given source range, error code and
+ *      message.
  *
  * \param[in] fmt A printf-style format string for the error message.
  * \param[in] ... Arguments for formatting the error message.
  */
 BlimpStatus Blimp_ErrorFrom(
-    Blimp *blimp, BlimpSourceRange range, BlimpErrorCode code, const char *fmt, ...)
+    Blimp *blimp,
+    BlimpSourceRange range,
+    BlimpErrorCode code,
+    const char *fmt,
+    ...)
+        __attribute__((format (printf, 4, 5)));
+
+/**
+ * \brief
+ *      Generate an error status with a given source range, error code and
+ *      message.
+ *
+ * \param[in] fmt A printf-style format string for the error message.
+ * \param[in] ... Arguments for formatting the error message.
+ *
+ * The error will contain a snapshot of the current stack trace from `blimp`.
+ */
+BlimpStatus Blimp_RuntimeErrorFrom(
+    Blimp *blimp,
+    BlimpSourceRange range,
+    BlimpErrorCode code,
+    const char *fmt,
+    ...)
         __attribute__((format (printf, 4, 5)));
 
 /**
@@ -328,11 +524,20 @@ void Blimp_Check(BlimpStatus status);
  *
  * \param[in]  blimp   The interpreter to query.
  * \param[out] range   The source range of the error (if available) or NULL.
+ * \param[out] trace
+ *      The stack trace where the error occurred (if available) or NULL. If
+ *      `*trace` is not NULL after this function returns, then it contains a
+ *      copy of the stack trace saved with the error. The caller is responsible
+ *      for eventually freeing the copied memory by calling
+ *      Blimp_FreeStackTrace().
  * \param[out] message The error message (may be "" if no message is available).
  * \return The error code.
  */
 BlimpErrorCode Blimp_GetLastError(
-    Blimp *blimp, const BlimpSourceRange **range, const char **message);
+    Blimp *blimp,
+    const BlimpSourceRange **range,
+    BlimpStackTrace **trace,
+    const char **message);
 
 /**
  * @}

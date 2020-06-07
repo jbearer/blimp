@@ -305,6 +305,7 @@ int main(int argc, char *const *argv)
 
             case FLAG_HISTORY_FILE: {
                 options.history_file = optarg;
+                break;
             }
 
             case FLAG_HELP:
@@ -332,7 +333,7 @@ int main(int argc, char *const *argv)
     if (optind == argc) {
         return ReplMain(blimp, &options);
     } else if (optind + 1 == argc) {
-        return EvalMain(blimp, argv[i], &options);
+        return EvalMain(blimp, argv[optind], &options);
     } else {
         PrintUsage(stderr, argc, argv);
         return EXIT_FAILURE;

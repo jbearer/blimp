@@ -34,6 +34,10 @@ Blimp *Blimp_New(const BlimpOptions *options)
         goto err_vtable;
     }
 
+    if (Stack_Init(blimp, &blimp->stack) != BLIMP_OK) {
+        goto err_stack;
+    }
+
     // Create the global object.
     if (BlimpObject_NewGlobal(blimp, &blimp->global) != BLIMP_OK) {
         goto err_global;
@@ -42,6 +46,8 @@ Blimp *Blimp_New(const BlimpOptions *options)
     return blimp;
 
 err_global:
+    Stack_Destroy(blimp, &blimp->stack);
+err_stack:
     VTable_Destroy(&blimp->vtable);
 err_vtable:
     ObjectPool_Destroy(blimp, &blimp->objects);
@@ -56,6 +62,7 @@ err_malloc:
 
 void Blimp_Delete(Blimp *blimp)
 {
+    Stack_Destroy(blimp, &blimp->stack);
     VTable_Destroy(&blimp->vtable);
     ObjectPool_Destroy(blimp, &blimp->objects);
     SymbolTable_Destroy(&blimp->symbols);
@@ -280,6 +287,14 @@ Status Blimp_Eval(
                 goto err_message;
             }
 
+            StackFrame frame = {
+                .range = expr->range,
+            };
+            if ((ret = Stack_Push(blimp, &blimp->stack, &frame, 128)) != BLIMP_OK)
+            {
+                goto err_push;
+            }
+
             if ((ret = Blimp_Send(blimp, scope, receiver, message, result))
                     != BLIMP_OK)
             {
@@ -287,6 +302,8 @@ Status Blimp_Eval(
             }
 
 err_send:
+            Stack_Pop(blimp, &blimp->stack);
+err_push:
             BlimpObject_Release(message);
 err_message:
             BlimpObject_Release(receiver);

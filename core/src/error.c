@@ -48,7 +48,7 @@ static ssize_t Getline(char **line, size_t *length, FILE *f)
     return row;
 }
 
-static void PrintSourceRange(FILE *f, const SourceRange *range)
+void PrintSourceRange(FILE *f, const SourceRange *range)
 {
     FILE *source_file;
 
@@ -167,9 +167,11 @@ static const char *GenericErrorCodeMessage(BlimpErrorCode code)
         case BLIMP_NO_SUCH_METHOD:    return "no such method";
         case BLIMP_MUST_BE_BLOCK:     return "expected block";
         case BLIMP_MUST_BE_SYMBOL:    return "expected symbol";
+        case BLIMP_STACK_OVERFLOW:    return "stack overflow";
         case BLIMP_INVALID_EXPR:      return "invalid expression";
         case BLIMP_OUT_OF_MEMORY:     return "out of memory";
         case BLIMP_IO_ERROR:          return "I/O error";
+        case BLIMP_NOT_SUPPORTED:     return "operation not supported";
         default:                      return "unknown error";
     }
 }
@@ -178,16 +180,28 @@ static Status VError(
     Blimp *blimp,
     const SourceRange *range,
     BlimpErrorCode code,
+    bool runtime,
     const char *fmt,
     va_list args)
 {
     blimp->last_error.code = code;
+
     if (range) {
         blimp->last_error.range = *range;
         blimp->last_error.has_range = true;
     } else {
         blimp->last_error.has_range = false;
     }
+
+    if (blimp->last_error.trace != NULL) {
+        Blimp_FreeStackTrace(blimp, blimp->last_error.trace);
+    }
+    if (runtime) {
+        Blimp_SaveStackTrace(blimp, &blimp->last_error.trace);
+    } else {
+        blimp->last_error.trace = NULL;
+    }
+
     if (fmt) {
         vsnprintf(blimp->last_error.message, ERR_MSG_LEN, fmt, args);
     } else {
@@ -206,11 +220,28 @@ Status Blimp_Error(Blimp *blimp, BlimpErrorCode code)
     return Blimp_ErrorMsg(blimp, code, NULL);
 }
 
+Status Blimp_RuntimeError(Blimp *blimp, BlimpErrorCode code)
+{
+    return Blimp_RuntimeErrorMsg(blimp, code, NULL);
+}
+
+
 Status Blimp_ErrorMsg(Blimp *blimp, BlimpErrorCode code, const char *fmt, ...)
 {
     va_list args;
     va_start(args, fmt);
-    VError(blimp, NULL, code, fmt, args);
+    VError(blimp, NULL, code, false, fmt, args);
+    va_end(args);
+
+    return &blimp->last_error;
+}
+
+Status Blimp_RuntimeErrorMsg(
+    Blimp *blimp, BlimpErrorCode code, const char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    VError(blimp, NULL, code, true, fmt, args);
     va_end(args);
 
     return &blimp->last_error;
@@ -223,7 +254,20 @@ Status Blimp_ErrorAt(
 
     va_list args;
     va_start(args, fmt);
-    VError(blimp, &range, code, fmt, args);
+    VError(blimp, &range, code, false, fmt, args);
+    va_end(args);
+
+    return &blimp->last_error;
+}
+
+Status Blimp_RuntimeErrorAt(
+    Blimp *blimp, SourceLoc loc, BlimpErrorCode code, const char *fmt, ...)
+{
+    SourceRange range = { loc, loc };
+
+    va_list args;
+    va_start(args, fmt);
+    VError(blimp, &range, code, true, fmt, args);
     va_end(args);
 
     return &blimp->last_error;
@@ -234,7 +278,18 @@ Status Blimp_ErrorFrom(
 {
     va_list args;
     va_start(args, fmt);
-    VError(blimp, &range, code, fmt, args);
+    VError(blimp, &range, code, false, fmt, args);
+    va_end(args);
+
+    return &blimp->last_error;
+}
+
+Status Blimp_RuntimeErrorFrom(
+    Blimp *blimp, SourceRange range, BlimpErrorCode code, const char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    VError(blimp, &range, code, true, fmt, args);
     va_end(args);
 
     return &blimp->last_error;
@@ -246,7 +301,10 @@ Status Blimp_Reraise(Blimp *blimp)
 }
 
 BlimpErrorCode Blimp_GetLastError(
-    Blimp *blimp, const SourceRange **range, const char **message)
+    Blimp *blimp,
+    const SourceRange **range,
+    StackTrace **trace,
+    const char **message)
 {
     if (range) {
         if (blimp->last_error.has_range) {
@@ -255,6 +313,14 @@ BlimpErrorCode Blimp_GetLastError(
             *range = NULL;
         }
     }
+
+    if (trace) {
+        *trace = NULL;
+        if (blimp->last_error.trace) {
+            Blimp_CopyStackTrace(blimp, blimp->last_error.trace, trace);
+        }
+    }
+
     if (message) {
         *message = blimp->last_error.message;
     }
@@ -262,20 +328,25 @@ BlimpErrorCode Blimp_GetLastError(
     return blimp->last_error.code;
 }
 
-static void DumpError(FILE *f, Status err)
+static void DumpError(FILE *f, Status err, size_t trace_limit)
 {
+    if (err->trace) {
+        fprintf(f, "Call stack (most recent call last):\n");
+        BlimpStackTrace_Print(f, err->trace, trace_limit);
+    }
+
     fprintf(f, "%sbl:mp error%s %zu%s%s\n",
         ANSI_RED, ANSI_RESET, (size_t)err->code,
         err->message[0] ? ": " : "",  err->message);
 
     if (err->has_range) {
-        PrintSourceRange(stderr, &err->range);
+        PrintSourceRange(f, &err->range);
     }
 }
 
 void Blimp_DumpLastError(Blimp *blimp, FILE *f)
 {
-    DumpError(f, &blimp->last_error);
+    DumpError(f, &blimp->last_error, blimp->options.stack_trace_limit);
 }
 
 void Blimp_Check(Status err)
@@ -284,6 +355,6 @@ void Blimp_Check(Status err)
         return;
     }
 
-    DumpError(stderr, err);
+    DumpError(stderr, err, 0);
     exit(EXIT_FAILURE);
 }

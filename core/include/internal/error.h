@@ -7,10 +7,15 @@
 
 // Abbreviations for the Blimp_Error* functions.
 #define Error(...) Blimp_Error(__VA_ARGS__)
+#define RuntimeError(...) Blimp_RuntimeError(__VA_ARGS__)
 #define ErrorMsg(...) Blimp_ErrorMsg(__VA_ARGS__)
+#define RuntimeErrorMsg(...) Blimp_ErrorRuntimeMsg(__VA_ARGS__)
 #define ErrorAt(...) Blimp_ErrorAt(__VA_ARGS__)
+#define RuntimeErrorAt(...) Blimp_ErrorRuntimeAt(__VA_ARGS__)
 #define ErrorFrom(...) Blimp_ErrorFrom(__VA_ARGS__)
+#define RuntimeErrorFrom(...) Blimp_ErrorRuntimeFrom(__VA_ARGS__)
 #define Reraise(...) Blimp_Reraise(__VA_ARGS__)
+#define RuntimeReraise(...) Blimp_RuntimeReraise(__VA_ARGS__)
 
 // If `e` evalutes to an error, return that error from the function invoking
 // this macro.
@@ -74,5 +79,7 @@ static inline Status Strdup(Blimp *blimp, const char *str, char **ret)
     free(*p); \
     *p = NULL; \
 } while (0)
+
+PRIVATE void PrintSourceRange(FILE *f, const SourceRange *range);
 
 #endif
