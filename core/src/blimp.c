@@ -79,6 +79,259 @@ Object *Blimp_GlobalObject(Blimp *blimp)
     return blimp->global;
 }
 
+////////////////////////////////////////////////////////////////////////////////
+// Evaluation
+//
+
+static const Method BLIMP_METHOD_EVAL = NULL;
+    // Sentinel method indicating that this method is bound to a bl:mp
+    // expression. Having this information available directly in `Send` is a bit
+    // more convenient than binding the method to BlimpMethod_Eval, because we
+    // can preserve the result type of the message send and potentially avoid
+    // the creation of temporary objects.
+
+// Dynamic result types. This structure allows the caller of an evaluation
+// function to request a specific kind of result from the callee, by setting the
+// `type` field before passing a pointer to a `Value`. Depending on the
+// requested result type, the callee may be able to evaluate the expression more
+// efficiently. For example, if the caller requests a symbol, and the expression
+// is an EXPR_SYMBOL, the callee doesn't need to ever create an object
+// representing the result of evaluating the expression. They can pass the
+// symbol back to the caller directly.
+typedef struct {
+    enum {
+        VALUE_OBJECT,
+        VALUE_SYMBOL,
+        VALUE_VOID,
+    } type;
+
+    union {
+        Object *obj;
+        const Symbol *sym;
+    };
+} Value;
+
+// Initialize a `Value` union with a symbol literal, converting to an object if
+// requested by the creator of the `Value`.
+static inline Status ReturnSymbol(
+    Blimp *blimp,
+    Object *scope,
+    const Symbol *sym,
+    Value *result)
+{
+    switch (result->type) {
+        case VALUE_OBJECT:
+            return BlimpObject_NewSymbol(blimp, scope, sym, &result->obj);
+
+        case VALUE_SYMBOL:
+            result->sym = sym;
+            return BLIMP_OK;
+
+        case VALUE_VOID:
+            return BLIMP_OK;
+
+        default:
+            assert(false);
+            return Error(blimp, BLIMP_INVALID_EXPR);
+    }
+}
+
+// Initialize a `Value` union with a block literal, creating a new object only
+// if requested by the creator of the `Value`.
+static inline Status ReturnBlock(
+    Blimp *blimp,
+    Object *scope,
+    const Symbol *tag,
+    Expr *code,
+    Value *result)
+{
+    switch (result->type) {
+        case VALUE_OBJECT:
+            return BlimpObject_NewBlock(blimp, scope, tag, code, &result->obj);
+
+        case VALUE_SYMBOL:
+            return Error(blimp, BLIMP_MUST_BE_SYMBOL);
+
+        case VALUE_VOID:
+            return BLIMP_OK;
+
+        default:
+            assert(false);
+            return Error(blimp, BLIMP_INVALID_EXPR);
+    }
+}
+
+// Initialize a `Value` union with an object, parsing it as a symbol if
+// requested by the creator of the `Value`.
+//
+// This function consumes the caller's reference to the object. If the object
+// is stored in `result`, its reference count will not be incremented. If the
+// creator of `result` did not request an object, then a reference to `obj` will
+// be released.
+static inline Status ReturnObject(Blimp *blimp, Object *obj, Value *result)
+{
+    (void)blimp;
+
+    switch (result->type) {
+        case VALUE_OBJECT:
+            result->obj = obj;
+            return BLIMP_OK;
+
+        case VALUE_SYMBOL: {
+            Status ret = BlimpObject_ParseSymbol(obj, &result->sym);
+            BlimpObject_Release(obj);
+            return ret;
+        }
+
+        case VALUE_VOID:
+            BlimpObject_Release(obj);
+            return BLIMP_OK;
+
+        default:
+            assert(false);
+            return Error(blimp, BLIMP_INVALID_EXPR);
+    }
+}
+
+static Status EvalExpr(
+    Blimp *blimp, const Expr *expr, Object *scope, Value *result);
+static Status EvalStmt(
+    Blimp *blimp, const Expr *expr, Object *scope, Value *result);
+static Status Send(
+    Blimp *blimp,
+    Object *scope,
+    Object *receiver,
+    Object *message,
+    Value *result);
+
+static Status EvalExpr(
+    Blimp *blimp, const Expr *expr, Object *scope, Value *result)
+{
+    // Evaluate all expressions except the last in the sequence of expressions.
+    // We don't care about the results here, this is just for side-effects.
+    while (expr->next) {
+        TRY(EvalStmt(blimp, expr, scope, &(Value){.type=VALUE_VOID}));
+        expr = expr->next;
+    }
+
+    // Evaluate the final expression in the sequence for its result.
+    return EvalStmt(blimp, expr, scope, result);
+}
+
+static Status EvalStmt(
+    Blimp *blimp,
+    const Expr *expr,
+    Object *scope,
+    Value *result)
+{
+    switch (expr->tag) {
+        case EXPR_SYMBOL:
+            return ReturnSymbol(blimp, scope, expr->symbol, result);
+
+        case EXPR_BLOCK: {
+            Value tag = {.type=VALUE_SYMBOL};
+            TRY(EvalExpr(blimp, expr->block.tag, scope, &tag));
+            return ReturnBlock(blimp, scope, tag.sym, expr->block.code, result);
+        }
+
+        case EXPR_BIND: {
+            Value receiver = {.type=VALUE_SYMBOL};
+            Value message  = {.type=VALUE_SYMBOL};
+
+            TRY(EvalExpr(blimp, expr->bind.receiver, scope, &receiver));
+            TRY(EvalExpr(blimp, expr->bind.message,  scope, &message));
+            TRY(Blimp_BindExpr(
+                blimp, receiver.sym, message.sym, expr->bind.code));
+
+            return ReturnSymbol(blimp, scope, receiver.sym, result);
+        }
+
+        case EXPR_SEND: {
+            Status ret = BLIMP_OK;
+
+            Value receiver = {VALUE_OBJECT};
+            Value message  = {VALUE_OBJECT};
+
+            if ((ret = EvalExpr(blimp, expr->send.receiver, scope, &receiver))
+                    != BLIMP_OK)
+            {
+                goto err_receiver;
+            }
+
+            if ((ret = EvalExpr(blimp, expr->send.message, scope, &message))
+                    != BLIMP_OK)
+            {
+                goto err_message;
+            }
+
+            StackFrame frame = {
+                .range = expr->range,
+            };
+            if ((ret = Stack_Push(blimp, &blimp->stack, &frame, 128)) != BLIMP_OK)
+            {
+                goto err_push;
+            }
+
+            if ((ret = Send(blimp, scope, receiver.obj, message.obj, result))
+                    != BLIMP_OK)
+            {
+                goto err_send;
+            }
+
+err_send:
+            Stack_Pop(blimp, &blimp->stack);
+err_push:
+            BlimpObject_Release(message.obj);
+err_message:
+            BlimpObject_Release(receiver.obj);
+err_receiver:
+            if (ret && !ret->has_range) {
+                // A lot of specialized method handlers do not assign source.
+                // locations to their errors. If this was one of those methods,
+                // set the location to the location of the overal expression.
+                ret->range = expr->range;
+                ret->has_range = true;
+            }
+
+            return ret;
+        }
+
+        default:
+            assert(false);
+            return ErrorFrom(
+                blimp,
+                expr->range,
+                BLIMP_INVALID_EXPR,
+                "internal error: expression is invalid");
+    }
+}
+
+static Status Send(
+    Blimp *blimp,
+    Object *scope,
+    Object *receiver,
+    Object *message,
+    Value *result)
+{
+    const Symbol *receiver_tag = BlimpObject_Tag(receiver);
+    const Symbol *message_tag  = BlimpObject_Tag(message);
+
+    Method method;
+    void *data;
+    TRY(VTable_Resolve(
+        &blimp->vtable, receiver_tag, message_tag, &method, &data));
+
+    if (method == BLIMP_METHOD_EVAL) {
+        TRY(BlimpObject_Set(receiver, blimp->this_symbol, receiver));
+        TRY(BlimpObject_Set(receiver, blimp->that_symbol, message));
+        return EvalExpr(blimp, (const Expr *)data, receiver, result);
+    } else {
+        Object *obj;
+        TRY(method(blimp, scope, receiver, message, data, &obj));
+        return ReturnObject(blimp, obj, result);
+    }
+}
+
 Status Blimp_Bind(
     Blimp *blimp,
     const Symbol *receiver,
@@ -115,7 +368,7 @@ Status Blimp_BindExpr(
         &blimp->vtable,
         receiver,
         message,
-        (Method)BlimpMethod_Eval,
+        BLIMP_METHOD_EVAL,
         (void *)expr
     );
 }
@@ -137,15 +390,10 @@ Status Blimp_Send(
     Object *message,
     Object **result)
 {
-    const Symbol *receiver_tag = BlimpObject_Tag(receiver);
-    const Symbol *message_tag  = BlimpObject_Tag(message);
-
-    Method method;
-    void *data;
-    TRY(VTable_Resolve(
-        &blimp->vtable, receiver_tag, message_tag, &method, &data));
-
-    return method(blimp, context, receiver, message, data, result);
+    Value v = {VALUE_OBJECT};
+    TRY(Send(blimp, context, receiver, message, &v));
+    *result = v.obj;
+    return BLIMP_OK;
 }
 
 Status BlimpMethod_Eval(
@@ -221,117 +469,15 @@ Status BlimpMethod_PrimitiveEval(
 }
 
 Status Blimp_Eval(
-    Blimp *blimp, const Expr *expr, Object *scope, Object **result)
+    Blimp *blimp,
+    const Expr *expr,
+    Object *scope,
+    Object **obj)
 {
-    switch (expr->tag) {
-        case EXPR_SYMBOL:
-            return BlimpObject_NewSymbol(blimp, scope, expr->symbol, result);
-
-        case EXPR_BLOCK: {
-            const Symbol *tag;
-            if (Blimp_EvalSymbol(blimp, expr->block.tag, scope, &tag)
-                    != BLIMP_OK)
-            {
-                return ErrorFrom(
-                    blimp,
-                    expr->block.tag->range,
-                    BLIMP_MUST_BE_SYMBOL,
-                    "object tag must evaluate to a symbol");
-            }
-            return BlimpObject_NewBlock(
-                blimp, scope, tag, expr->block.code, result);
-        }
-
-        case EXPR_BIND: {
-            TRY(Blimp_Eval(blimp, expr->bind.receiver, scope, result));
-
-            const Symbol *receiver;
-            if (BlimpObject_ParseSymbol(*result, &receiver) != BLIMP_OK) {
-                return ErrorFrom(
-                    blimp,
-                    expr->bind.receiver->range,
-                    BLIMP_MUST_BE_SYMBOL,
-                    "bind receiver must evaluate to a symbol"
-                );
-            }
-
-            const Symbol *message;
-            if (Blimp_EvalSymbol(blimp, expr->bind.message, scope, &message)
-                    != BLIMP_OK)
-            {
-                return ErrorFrom(
-                    blimp,
-                    expr->bind.receiver->range,
-                    BLIMP_MUST_BE_SYMBOL,
-                    "bind message must evaluate to a symbol"
-                );
-            }
-
-            return Blimp_BindExpr(blimp, receiver, message, expr->bind.code);
-        }
-
-        case EXPR_SEND: {
-            Status ret = BLIMP_OK;
-
-            Object *receiver;
-            if ((ret = Blimp_Eval(blimp, expr->send.receiver, scope, &receiver))
-                    != BLIMP_OK)
-            {
-                goto err_receiver;
-            }
-
-            Object *message;
-            if ((ret = Blimp_Eval(blimp, expr->send.message, scope, &message))
-                    != BLIMP_OK)
-            {
-                goto err_message;
-            }
-
-            StackFrame frame = {
-                .range = expr->range,
-            };
-            if ((ret = Stack_Push(blimp, &blimp->stack, &frame, 128)) != BLIMP_OK)
-            {
-                goto err_push;
-            }
-
-            if ((ret = Blimp_Send(blimp, scope, receiver, message, result))
-                    != BLIMP_OK)
-            {
-                goto err_send;
-            }
-
-err_send:
-            Stack_Pop(blimp, &blimp->stack);
-err_push:
-            BlimpObject_Release(message);
-err_message:
-            BlimpObject_Release(receiver);
-err_receiver:
-            if (ret && !ret->has_range) {
-                // A lot of specialized method handlers do not assign source.
-                // locations to their errors. If this was one of those methods,
-                // set the location to the location of the overal expression.
-                ret->range = expr->range;
-                ret->has_range = true;
-            }
-
-            return ret;
-        }
-
-        case EXPR_SEQ:
-            TRY(Blimp_Eval(blimp, expr->seq.fst, scope, result));
-            BlimpObject_Release(*result);
-            return Blimp_Eval(blimp, expr->seq.snd, scope, result);
-
-        default:
-            assert(false);
-            return ErrorFrom(
-                blimp,
-                expr->range,
-                BLIMP_INVALID_EXPR,
-                "internal error: expression is invalid");
-    }
+    Value v = {VALUE_OBJECT};
+    TRY(EvalExpr(blimp, expr, scope, &v));
+    *obj = v.obj;
+    return BLIMP_OK;
 }
 
 Status Blimp_EvalSymbol(
@@ -340,19 +486,10 @@ Status Blimp_EvalSymbol(
     Object *scope,
     const Symbol **sym)
 {
-    // Fast path for the case where `expr` is a symbol literal: don't even
-    // bother creating a temporary object.
-    if (expr->tag == EXPR_SYMBOL) {
-        *sym = expr->symbol;
-        return BLIMP_OK;
-    }
-
-    Object *obj;
-    TRY(Blimp_Eval(blimp, expr, scope, &obj));
-
-    Status ret = BlimpObject_ParseSymbol(obj, sym);
-    BlimpObject_Release(obj);
-    return ret;
+    Value v = {.type=VALUE_SYMBOL};
+    TRY(EvalExpr(blimp, expr, scope, &v));
+    *sym = v.sym;
+    return BLIMP_OK;
 }
 
 BlimpGCStatistics Blimp_GetGCStatistics(Blimp *blimp)

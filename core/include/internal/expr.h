@@ -10,11 +10,23 @@ struct BlimpExpr {
         EXPR_BLOCK,
         EXPR_SEND,
         EXPR_BIND,
-        EXPR_SEQ,
     } tag;
 
     size_t refcount;
     SourceRange range;
+
+    Expr *next;
+        // Next expression in a sequene of expressions starting with this one.
+        // Sequences (the ; operator) are represented as a list (rather than a
+        // recursive algebraic data type like the rest of the expressions) to
+        // make them easier to process in an iterative fashion.
+        //
+        // Processing sequence expressions recursively is problematic because
+        // the length of a bl:mp program is primarily made up of a single long
+        // sequence, so processing that sequence recursively would require stack
+        // depth proportional to the length of the input program. For other
+        // kinds of expressions, the depth of the AST is small and bounded in
+        // reasonable input programs.
 
     union {
         const Symbol *symbol;
@@ -34,11 +46,6 @@ struct BlimpExpr {
             Expr *message;
             Expr *code;
         } bind;
-
-        struct {
-            Expr *fst;
-            Expr *snd;
-        } seq;
     };
 };
 
