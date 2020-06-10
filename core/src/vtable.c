@@ -146,7 +146,7 @@ PRIVATE Status VTable_Resolve(
     }
 
     if (method == NULL) {
-        return ErrorMsg(
+        return RuntimeErrorMsg(
             GetBlimp(vtable), BLIMP_NO_SUCH_METHOD,
             "no method bound for `%s %s'", receiver->name, message->name);
     }

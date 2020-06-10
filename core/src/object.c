@@ -1847,7 +1847,7 @@ Status BlimpObject_Get(const Object *obj, const Symbol *sym, Object **ret)
         *ret = value->to;
         return BLIMP_OK;
     } else {
-        return ErrorMsg(
+        return RuntimeErrorMsg(
             GetBlimp(obj),
             BLIMP_NO_SUCH_SYMBOL,
             "no symbol `%s' in scope", sym->name);
