@@ -14,7 +14,7 @@ An implementation of the `bl:mp` core language semantics as defined in [the spec
 A pure `bl:mp` library which implements some useful convenience features.
 
 * [system](system/README.md)
-A plugin library that implements some `bl:mp` primitives that are not part of the core language specification, but which are necessary to write real-world programs, such as I/O functions and interfaces to system libraries. This sub-project builds a `bl:mp` extension which can be loaded into the [interpreter](blimp/README.md).
+A plugin library that implements some `bl:mp` primitives that are not part of the core language specification, but which are necessary to write real-world programs, such as I/O functions and interfaces to system libraries. This sub-project builds `bl:mp` extensions which can be loaded into the [interpreter](blimp/README.md).
 
 * [blimp](blimp/README.md)
 A complete `bl:mp` interpreter. This sub-project builds a standalone executable which links to [`libblimp`](core/README.md) and uses it to drive an interpreter.

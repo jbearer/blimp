@@ -9,8 +9,6 @@ target_compile_options(blimp PRIVATE -Wall -Wextra -Werror -ansi -std=c99)
 target_link_libraries(blimp Threads::Threads)
 
 # Build libblimp API documentation.
-find_package(Doxygen)
 if (DOXYGEN_FOUND)
-    set(DOXYGEN_PREDEFINED "DOXYGEN=1")
     doxygen_add_docs(libblimp-docs include/blimp.h)
 endif()

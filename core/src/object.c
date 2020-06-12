@@ -1805,6 +1805,9 @@ void BlimpObject_Print(FILE *f, const Object *obj)
             Blimp_PrintExpr(f, obj->code);
             fprintf(f, "}");
             break;
+        case OBJ_GLOBAL:
+            fprintf(f, "<global>");
+            break;
         default:
             assert(false);
     }

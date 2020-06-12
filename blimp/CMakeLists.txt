@@ -5,6 +5,8 @@ set_target_properties(blimp-interpreter PROPERTIES OUTPUT_NAME blimp)
 target_link_libraries(blimp-interpreter blimp)
 target_link_libraries(blimp-interpreter blimpmodule)
 target_compile_options(blimp-interpreter PRIVATE -Wall -Wextra -Werror -ansi -std=c99)
+target_compile_options(blimp-interpreter PRIVATE -DEXTENSIONS_PATH="${CMAKE_BINARY_DIR}")
+target_compile_options(blimp-interpreter PRIVATE -DPRELUDE_PATH="${CMAKE_SOURCE_DIR}/prelude")
 
 find_package(Readline)
 if (Readline_FOUND)
