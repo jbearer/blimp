@@ -17,6 +17,8 @@ typedef struct {
     const char **import_path;
 
     const char *history_file;
+
+    bool implicit_prelude;
 } Options;
 
 void DefaultOptions(Options *options);

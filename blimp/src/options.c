@@ -28,4 +28,6 @@ void DefaultOptions(Options *options)
         }
     }
     options->history_file = history_file;
+
+    options->implicit_prelude = true;
 }

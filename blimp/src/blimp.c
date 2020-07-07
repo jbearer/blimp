@@ -38,6 +38,10 @@ static void PrintUsage(FILE *f, int argc, char *const *argv)
     fprintf(f, "        Specify values for tunable interpreter properties. See\n");
     fprintf(f, "        below for a list of interpreter options.\n");
     fprintf(f, "\n");
+    fprintf(f, "    --core\n");
+    fprintf(f, "        Use core bl:mp. This disables the implicit import of\n");
+    fprintf(f, "        the `std' prelude.\n");
+    fprintf(f, "\n");
     fprintf(f, "    -a, --action\n");
     fprintf(f, "        Set the action to perform on the input program:\n");
     fprintf(f, "            * eval: evaluate the program and print the result\n");
@@ -247,12 +251,14 @@ typedef enum {
         // greater than the value of the sentinel, which should guarantee that
         // all the flags have unique values.
 
+    FLAG_CORE,
     FLAG_HISTORY_FILE,
 } Flag;
 
 int main(int argc, char *const *argv)
 {
     struct option flags[] = {
+        {"core",                    no_argument,        NULL, FLAG_CORE},
         {"import-path",             required_argument,  NULL, FLAG_IMPORT_PATH},
         {"action",                  required_argument,  NULL, FLAG_ACTION},
         {"history-file",            required_argument,  NULL, FLAG_HISTORY_FILE},
@@ -277,6 +283,10 @@ int main(int argc, char *const *argv)
 
                 break;
             }
+
+            case FLAG_CORE:
+                options.implicit_prelude = false;
+                break;
 
             case FLAG_IMPORT_PATH:
                 options.import_path = realloc(
@@ -329,6 +339,19 @@ int main(int argc, char *const *argv)
     }
 
     Blimp_Check(BlimpModule_Init(blimp, options.import_path));
+
+    // Automatically import the `std' prelude if requested by the user.
+    if (options.implicit_prelude) {
+        BlimpObject *std;
+        Blimp_Check(BlimpModule_Import(
+            blimp,
+            "std",
+            Blimp_GlobalObject(blimp),
+            options.import_path,
+            &std
+        ));
+        BlimpObject_Release(std);
+    }
 
     if (optind == argc) {
         return ReplMain(blimp, &options);
