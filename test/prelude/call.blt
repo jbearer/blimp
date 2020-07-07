@@ -1,0 +1,20 @@
+{import|.} std;
+
+bind foo bar (that{.get|.}{.eval|.});
+bind foo _   (that{.get|.}{.eval|.});
+bind _ foobar (that{.get|.}{.eval|.});
+
+# Call a normal method.
+({foo|.}: bar baz) {!expect|baz};
+((new foo): bar baz) {!expect|baz};
+
+# Call a static method.
+(foo: bar baz) {!expect|baz};
+
+# Call a fallthrough method.
+(new foo): baz bat {!expect|bat};
+
+# Call a method with a fallthrough receiver.
+(new foo): foobar baz {!expect|baz};
+
+.

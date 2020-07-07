@@ -1,0 +1,17 @@
+bind true __negate false;
+bind false __negate true;
+bind ! symbol (that{.get|.}{__negate|.});
+
+operator and;
+bind true and (that{.get|.}{.eval|.});
+bind false and false;
+
+operator or;
+bind true or true;
+bind false or (that{.get|.}{.eval|.});
+
+bind true __check_assert .;
+bind false __check_assert (__assertion_failed{.get|.});
+bind assert symbol (that{.get|.}{__check_assert|.});
+
+.

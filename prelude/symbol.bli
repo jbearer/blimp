@@ -1,0 +1,51 @@
+############################################################################
+# symbol equality
+############################################################################
+
+bind __symbol_eq_sandbox set_x (
+    self{:=|this{.get|.}};
+    val{:=|that{.get|.}{.eval|.}};
+
+    __symbol_eq_x {:=|val{.get|.}};
+    self{.get|.}
+);
+
+bind __symbol_eq_sandbox set_y (
+    self{:=|this{.get|.}};
+    val{:=|that{.get|.}{.eval|.}};
+
+    __symbol_eq_y {:=|val{.get|.}};
+    self{.get|.}
+);
+
+bind __symbol_eq_sandbox test ({do|
+    __symbol_eq_x{.get|.}{:=|false};
+    __symbol_eq_y{.get|.}{:=|true};
+    __symbol_eq_x{.get|.}{.get|.}
+}{.eval|.});
+
+operator ==;
+bind symbol == (
+self{:=|this{.get|.}};
+arg{:=|that{.get|.}{.eval|.}};
+{do|
+    x <- ($ self);
+    y <- ($ arg);
+
+    (new __symbol_eq_sandbox)
+        : set_x ($ x)
+        : set_y ($ y)
+        : test[]
+}{run|.});
+
+operator !=;
+bind symbol != (
+self{:=|this{.get|.}};
+arg{:=|that{.get|.}{.eval|.}};
+{do|
+    x <- ($ self);
+    y <- ($ arg);
+    !(($ x) == ($ y))
+}{run|.});
+
+.

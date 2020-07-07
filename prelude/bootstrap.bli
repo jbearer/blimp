@@ -1,0 +1,723 @@
+################################################################################
+# The bl:mp standard library
+#
+# Note: while bootstrapping some of the language constructs, we will
+# occassionally define methods on objects which are created unsanitarily.
+# Methods of classes which may be created unsanitarily must use the following
+# convention for all local variables:
+#   * they should be prefixed with __ (2 underscores)
+#   * their names should be unique within this file
+# Classes which may be instantiated unsanitarily are:
+#   * symbol
+#   * do
+
+################################################################################
+# __new - sanitary object creation
+################################################################################
+
+bind symbol __class symbol;
+bind _ __class (__class{.get|.});
+    # The __class variable should be set at object creation time.
+bind __call_symbol __class (__class{.get|.});
+bind __default_call_symbol __class (__class{.get|.});
+bind __operator __class (__class{.get|.});
+bind __bound_method __class (__class{.get|.});
+bind __bound_method_symbol_call __class (__class{.get|.});
+bind __bound_field_set __class (__class{.get|.});
+bind __const __class (__class{.get|.});
+
+bind _ __set_class (__class{:=|that{.get|.}{.eval|.}});
+bind __call_symbol __set_class (__class{:=|that{.get|.}{.eval|.}});
+bind __default_call_symbol __set_class (__class{:=|that{.get|.}{.eval|.}});
+bind __operator __set_class (__class{:=|that{.get|.}{.eval|.}});
+bind __bound_method __set_class (__class{:=|that{.get|.}{.eval|.}});
+bind __bound_method_symbol_call __set_class (__class{:=|that{.get|.}{.eval|.}});
+bind __bound_field_set __set_class (__class{:=|that{.get|.}{.eval|.}});
+bind __const __set_class (__class{:=|that{.get|.}{.eval|.}});
+bind symbol __set_class (__class{:=|that{.get|.}{.eval|.}});
+
+bind __new symbol ({do|
+    __new_class{:=|that{.get|.}};
+
+    __new_obj{:=|{__new_class{.get|.}|.}};
+        # Create an empty block of the given class in the scope of the receiver.
+        # For this creation to be sanitry, the receiver's scope must be
+        # sanitary. This is accomplished by always sending "new" messages to the
+        # global singleton `new` object (see below) whose parent is the global
+        # scope.
+    __new_obj{.get|.}{__set_class|__new_class{.get|.}};
+    __new_obj{.get|.}
+}{.eval|.});
+
+__new{:=|{__new|.}};
+
+################################################################################
+# __operator - dispatch operator applications
+################################################################################
+#
+# An operator is a symbol which, when sent to an object, should not be
+# interpreted as a complete message, but rather an instruction where the exact
+# symbol being sent determines which handler function to call.
+#
+# Example operator applications include
+#   * foo := bar, where the operator is `:=`
+#   * receiver: method arg, where the operator is `:`
+#
+# Dispatch works using the vtable. The handler for each operator symbol (say,
+# operator `op`) is bound to the receiver-message pair `__operator op`. When a
+# symbol is sent to an object as a message, and the message is not explicitly
+# handled by the receiving object, a fallthrough handler will create a block
+# whose tag is the symbol, and then send that to an object with tag
+# `__operator`. Regular vtable dispatch will then select the appropriate
+# handler.
+################################################################################
+
+# If an object receives an unhandled symbol message, dispatch using the symbol
+# as an operator.
+bind _ symbol ({do|
+    rec{:=|this{.get|.}};
+    op{:=|that{.get|.}};
+
+    __new{.get|.}__operator
+        {__operator_set_op|op{.get|.}}
+        {op{.get|.}|rec{.get|.}}
+            # Send the __operator object a message whose tag is the operator
+            # symbol and whose body is the receiver. This allows the handler to
+            # access the receiver by evaluating the message body.
+}{.eval|.});
+
+# Set the symbol for the operator on which we are dispatching as a property of
+# the __operator dispatch object. This allows the handler to access the operator
+# symbol dynamically if necessary.
+#
+# Note that all non-operator-handler methods bound on the __operator class must
+# have unique, __-prefixed names, since the user may dynamically bind arbitrary
+# new methods on the __operator class.
+bind __operator __operator_set_op (
+    op{:=|that{.get|.}{.eval|.}};
+    this{.get|.}
+);
+
+# Declare a new operator symbol. Sending an `operator` object a message `my_op`
+# has the following effects:
+#
+# It overriddes `__operator my_op` to return a `__bound_method` object (see
+# below) where the bound receiver is the original receiver of the operator and
+# the bound message is the operator. If another object `arg` is passed to the
+# result, then it is as if `{my_op|arg}` was sent to the original receiver.
+#
+# For example, after `operator +`, `x + y` should be equivalent to `x{+|y}`.
+bind operator symbol ({do|
+    __oper{:=|that{.get|.}};
+    bind __operator (__oper{.get|.}) ({do|
+        __oper_receiver{:=|that{.get|.}{.eval|.}};
+        __new{.get|.}__bound_method
+            {__bound_method_set_receiver|__oper_receiver{.get|.}}
+            {__bound_method_set_message|op{.get|.}}
+    }{.eval|.})
+}{.eval|.});
+
+################################################################################
+# : operator - braceless message send syntax
+################################################################################
+#
+# An application of the `:` operator (e.g. `foo: bar`) returns a
+# `__bound_method` object, which represents a pending call to the method `bar`
+# where the receiver will be `foo`. When a message `m` is sent to the
+# `__bound_method` object it will be passed as the argument to the `bar` method
+# of `foo`, as in `foo {bar|m}`.
+################################################################################
+
+# The __bound_method has a fallthrough message handler which is supposed to
+# handle arguments to the bound method, which can be any user-defined object. So
+# any specific methods that we define on the __bound_method class must not
+# conflict with any valid user-defined object class, hence the __bound_method_
+# prefix.
+bind __bound_method __bound_method_set_receiver (
+    receiver{:=|that{.get|.}{.eval|.}};
+    this{.get|.}
+);
+
+bind __bound_method __bound_method_set_message (
+    message{:=|that{.get|.}{.eval|.}};
+    this{.get|.}
+);
+
+bind __bound_method __bound_method_get_receiver (
+    receiver{.get|.}
+);
+
+bind __bound_method __bound_method_get_message (
+    message{.get|.}
+);
+
+{operator|.} :;
+bind _ : ({do|
+    # This could be called on any object, including unsanitary prelude objects,
+    # so our local variables have to have unique names.
+    __bound_op_receiver{:=|this{.get|.}};
+    __bound_op_message{:=|that{.get|.}{.eval|.}};
+
+    __new{.get|.}__bound_method
+        {__bound_method_set_receiver|__bound_op_receiver{.get|.}}
+        {__bound_method_set_message|__bound_op_message{.get|.}}
+}{.eval|.});
+
+# The bindings for `_ :` and `symbol _` conflict when dipatching `symbol :`, and
+# per the rules of bl:mp `symbol _` wins. `symbol _` assumes that there is no
+# method bound on the symbol class and tries to call the method on an object
+# whose tag is the receiving signal instead (i.e. a static method call). Since
+# we have bound `_ :`, there actually _is_ a method bound for `symbol :`, which
+# this explicit binding makes clear.
+bind symbol : ({do|
+    # Symbols are unsanitary, so our local variables have to have unique names.
+    __bound_op_receiver{:=|this{.get|.}};
+    __bound_op_message{:=|that{.get|.}{.eval|.}};
+
+    __new{.get|.}__bound_method
+        {__bound_method_set_receiver|__bound_op_receiver{.get|.}}
+        {__bound_method_set_message|__bound_op_message{.get|.}}
+}{.eval|.});
+
+bind __bound_method _ ({do|
+    arg{:=|that{.get|.}};
+    msg{:=|{message{.get|.}|arg{.get|.}}};
+    msg{.get|.}{__set_class|message{.get|.}};
+    receiver{.get|.}(msg{.get|.})
+}{.eval|.});
+
+bind __bound_method __bound_method_call ({do|
+    arg{:=|that{.get|.}{.eval|.}};
+    msg{:=|{message{.get|.}|arg{.get|.}}};
+    msg{.get|.}{__set_class|message{.get|.}};
+    receiver{.get|.}(msg{.get|.})
+}{.eval|.});
+
+################################################################################
+# symbol _ - static methods
+################################################################################
+#
+# If a message is sent to a symbol, and the `symbol` class does not have an
+# explicit handler for that kind of message, then we instantiate a new empty
+# block whose tag is the receiving symbol, and send the message to that object
+# instead.
+#
+# For example,
+#   foo{bar|baz}
+# is equivalent to
+#   (new foo){bar|baz}
+# assuming `symbol bar` is not otherwise bound.
+#
+# The mechanism which dispatches is `foo x` to `{foo|.} x` is extensible; you
+# can change it to a different behavior on a per-symbol basis by overriding
+# `__call_symbol foo`. For example, the `function` infrastructure below does
+# this to look up a function body expression and evaluate it when an argument is
+# sent to a symbol which is the name of a function.
+#
+# So, to be a bit more precise than above, `foo {x|y}`, where `symbol x` is not
+# explicitly bound, is equivalent to whatever `__call_symbol foo` is bound to.
+# In the body of the `__call_symbol` method, the symbol is available dynamically
+# as `sym` and the message being sent to the symbol is available as `arg`.
+################################################################################
+
+bind __call_symbol _ (
+    # If the behavior for calling the receiver symbol is not overridden, use
+    # __default_call_symbol to dispatch on the message. If the message is also
+    # a symbol, we have to dispatch on that in case it is an operator (see
+    # __operator above). Otherwise, we'll eventually just send the message to a
+    # newly constructed object whose tag is the receiver.
+    __new{.get|.}__default_call_symbol
+        {__default_call_symbol_set_sym|sym{.get|.}}
+        (arg{.get|.})
+);
+
+bind __default_call_symbol __default_call_symbol_set_sym (
+    sym{:=|that{.get|.}{.eval|.}};
+    this{.get|.}
+);
+
+bind __default_call_symbol _ ({do|
+    # If the message is not a symbol, then this is definitely a static method
+    # call. Create a bespoke receiver object with the right tag and send it the
+    # message.
+    arg{:=|that{.get|.}};
+    __new{.get|.}(sym{.get|.})(arg{.get|.})
+}{.eval|.});
+
+bind __default_call_symbol symbol ({do|
+    arg{:=|that{.get|.}};
+
+    # If a symbol was sent to a symbol, dispatch this like an operator call. If
+    # this is in fact an operator, then the __operator mechanism will eventually
+    # send a non-symbol message back to the receiver, which will then hit the
+    # case above, causing the operator invocation to be handled like a static
+    # method.
+    __new{.get|.}__operator
+        {__operator_set_op|arg{.get|.}}
+        {arg{.get|.}|sym{.get|.}}
+}{.eval|.});
+
+bind __operator _ ({do|
+    # If the operator dispatch above fails because the symbol argument is
+    # actually not a registered operator symbol, then just make the static call.
+    rec{:=|that{.get|.}{.eval|.}};
+    __new{.get|.}(rec{.get|.})(op{.get|.})
+}{.eval|.});
+
+# Setters for __call_symbol. Note that since `__call_symbol _` takes objects
+# whose tag can be any valid user-defined symbol, the names of any methods
+# explicitly bound here must be unique.
+bind __call_symbol __call_symbol_set_sym (
+    sym{:=|that{.get|.}{.eval|.}};
+    this{.get|.}
+);
+bind __call_symbol __call_symbol_set_arg (
+    arg{:=|that{.get|.}{.eval|.}};
+    this{.get|.}
+);
+
+# When a symbol gets a message it doesn't understand, dispatch to a handler
+# using __call_symbol.
+bind symbol _ ({do|
+    __sym_call_rec{:=|this{.get|.}};
+    __sym_call_mes{:=|that{.get|.}};
+
+    __new{.get|.}__call_symbol
+        {__call_symbol_set_sym|__sym_call_rec{.get|.}}
+        {__call_symbol_set_arg|__sym_call_mes{.get|.}}
+        {__sym_call_rec{.get|.}|.}
+}{.eval|.});
+
+################################################################################
+# := operator - braceless assignment syntax
+################################################################################
+
+operator :=;
+
+################################################################################
+# Variable scoping
+################################################################################
+#
+# Scopes, by standard library convention, are represented by `do` blocks. These
+# are used a bit differently than all other user-facing objects. While most
+# objects are created dynamically using `new`, `do` blocks are meant to be
+# created only statically, and the expression in the body of the `do` block is
+# important. Essentially, other objects are used to represent data, while `do`
+# blocks represent code.
+#
+# In addition to the code in its body, each `do` block also has some state; like
+# all bl:mp objects, it is a map from variables to values. The variables in a
+# `do` block are called "local" variables.
+#
+
+# __assign
+#   a data structure used to pass information about a pending assignment.
+# Properties:
+#   symbol: symbol
+#   value:  object
+bind __assign set_symbol (
+    symbol{:=|that{.get|.}{.eval|.}};
+    this{.get|.}
+);
+bind __assign set_value (
+    value{:=|that{.get|.}{.eval|.}};
+    this{.get|.}
+);
+bind __assign get_symbol (
+    symbol{.get|.}
+);
+bind __assign get_value (
+    value{.get|.}
+);
+
+# Set a variable in a scope based on an __assign object.
+bind do __set_var(
+    __set_var_assign{:=|that{.get|.}{.eval|.}};
+    __set_var_assign{.get|.}{.eval|.};
+    __set_var_assign{.get|.}{get_symbol|.}
+        {:=|__set_var_assign{.get|.}{get_value|.}};
+    .
+);
+
+# Dynamically execute a block of code as a sub-scope of the currently active
+# scope.
+bind do run (this{.get|.}{.eval|.});
+
+# Assign to a local variable.
+operator <-;
+
+# Convenient syntax to get the value of the symbol in the scope where it was
+# created. This is usually the current scope (as in `$ x`) but creating symbols
+# in one scope and passing them to another scope can be used sort of like
+# reference paramters in other language (as in `$ $ param`, to get the value of
+# the symbol which was passed in as `param` in the caller's scope).
+bind $ symbol (
+    that{.get|.}{__get|.}
+);
+bind symbol __get (
+    this{.get|.}{.get|.}
+);
+
+################################################################################
+# Static functions
+################################################################################
+
+__functions{:=|{__functions|.}};
+
+bind __functions register (
+    prot{:=|that{.get|.}{.eval|.}};
+    (prot{.get|.}{get_name|.}){:=|prot{.get|.}}
+);
+
+bind __functions __call ({do|
+    call{:=|that{.get|.}};
+    prot{:=|call{.get|.}{get_name|.}{.get|.}};
+
+    prot{.get|.}{get_body|.}
+        : __set_var (__new{.get|.} __assign
+            : set_symbol (prot{.get|.}{get_param|.})
+            : set_value (call{.get|.}{get_arg|.})
+        );
+
+    prot{.get|.}{get_body|.}{run|.}
+}{.eval|.});
+
+bind __function_prototype set_body (
+    body{:=|that{.get|.}{.eval|.}}
+);
+
+bind __function_prototype set_name (
+    name{:=|(that{.get|.}{.eval|.})};
+    this{.get|.}
+);
+
+bind __function_prototype get_name (
+    name{.get|.}
+);
+
+bind __function_prototype get_body (
+    body{.get|.}
+);
+
+bind __function_prototype get_param (
+    param{.get|.}
+);
+
+bind __call set_name (
+    name{:=|that{.get|.}{.eval|.}};
+    this{.get|.}
+);
+
+bind __call set_arg (
+    arg{:=|that{.get|.}{.eval|.}};
+    this{.get|.}
+);
+
+bind __call get_name (
+    name{.get|.}
+);
+
+bind __call get_arg (
+    arg{.get|.}
+);
+
+bind __function_prototype do ({do|
+    prot{:=|this{.get|.}};
+    body{:=|that{.get|.}};
+    prot{.get|.}{set_body|body{.get|.}};
+
+    __functions{.get|.}{register|prot{.get|.}};
+
+    bind __call_symbol (name{.get|.}) (
+        __functions{.get|.}({__call|.}
+            : set_name (sym{.get|.})
+            : set_arg  (arg{.get|.})
+        )
+    )
+}{.eval|.});
+
+bind __function_prototype symbol (
+    param{:=|that{.get|.}};
+    this{.get|.}
+);
+
+bind def symbol ({do|
+    name{:=|that{.get|.}};
+
+    (__new{.get|.} __function_prototype)
+        {set_name|name{.get|.}}
+}{.eval|.});
+
+################################################################################
+# Classes
+################################################################################
+
+def new(class) {do|
+    ($ __new)($ class)
+};
+
+################################################################################
+# Methods
+################################################################################
+
+__methods{:=|{__methods|.}};
+
+bind __vtable_constructor _ __create_vtable;
+
+bind __methods __create_vtable (
+    sym{:=|that{.get|.}{.eval|.}};
+    bind __vtable_constructor ($ sym) __vtable_already_exists;
+    ($ sym){:=|($ __new)(__vtable)}
+);
+
+bind __methods __vtable_already_exists (
+    sym{:=|that{.get|.}{.eval|.}};
+    ($ sym){.get|.}
+);
+
+bind __methods register (
+    self{:=|this{.get|.}};
+    prot{:=|that{.get|.}{.eval|.}};
+    sym{:=|($ prot){get_receiver|.}};
+
+    ($ self){{__vtable_constructor|.}{$ sym|.} | $ sym}
+        : register($ prot);
+    .
+);
+
+bind __methods __method_call ({do|
+    call{:=|that{.get|.}};
+    (($ call): get_receiver[]){.get|.}($ call)
+}{.eval|.});
+
+bind __vtable register (
+    __self{:=|this{.get|.}};
+    prot{:=|that{.get|.}{.eval|.}};
+    ($ prot){get_message|.}{:=|$ prot};
+    __self{.get|.}
+);
+
+bind __vtable __method_call ({do|
+    call{:=|that{.get|.}};
+
+    self <- (($ call): get_self[]);
+    arg <- (($ call): get_arg[]);
+
+    prot  <- ((($ call): get_message[]){.get|.});
+    body  <- (($ prot){get_body|.});
+    param <- (($ prot){get_param|.});
+
+     ($ body)
+        : __set_var (new __assign
+            : set_symbol(self)
+            : set_value($ self)
+        );
+
+    ($ body)
+        : __set_var (new __assign
+            : set_symbol($ param)
+            : set_value($ arg)
+        );
+
+    ($ body): run[]
+}{.eval|.});
+
+bind __method_call set_receiver (
+    __self{:=|this{.get|.}};
+    receiver{:=|that{.get|.}{.eval|.}};
+    __self{.get|.}
+);
+
+bind __method_call set_message (
+    __self{:=|this{.get|.}};
+    message{:=|that{.get|.}{.eval|.}};
+    __self{.get|.}
+);
+
+bind __method_call set_self (
+    __self{:=|this{.get|.}};
+    self{:=|that{.get|.}{.eval|.}};
+    __self{.get|.}
+);
+
+bind __method_call set_arg (
+    __self{:=|this{.get|.}};
+    arg{:=|that{.get|.}{.eval|.}};
+    __self{.get|.}
+);
+
+bind __method_call get_receiver (
+    receiver{.get|.}
+);
+
+bind __method_call get_message (
+    message{.get|.}
+);
+
+bind __method_call get_self (
+    self{.get|.}
+);
+
+bind __method_call get_arg (
+    arg{.get|.}
+);
+
+bind __method_prototype set_receiver (
+    self{:=|this{.get|.}};
+    receiver{:=|that{.get|.}{.eval|.}};
+    self{.get|.}
+);
+
+bind __method_prototype set_message (
+    self{:=|this{.get|.}};
+    message{:=|that{.get|.}{.eval|.}};
+    self{.get|.}
+);
+
+bind __method_prototype set_body (
+    self{:=|this{.get|.}};
+    body{:=|that{.get|.}{.eval|.}};
+    self{.get|.}
+);
+
+bind __method_prototype get_message (
+    message{.get|.}
+);
+
+bind __method_prototype get_receiver (
+    receiver{.get|.}
+);
+
+bind __method_prototype get_body (
+    body{.get|.}
+);
+
+bind __method_prototype get_param (
+    param{.get|.}
+);
+
+bind __method_prototype symbol (
+    param{:=|that{.get|.}};
+    this{.get|.}
+);
+
+bind __method_prototype do ({do|
+    prot{:=|this{.get|.}};
+    body{:=|that{.get|.}};
+    prot{.get|.}{set_body|body{.get|.}};
+    __methods{.get|.}{register|prot{.get|.}};
+
+    bind (receiver{.get|.}) (message{.get|.}) ({do|
+        self{:=|this{.get|.}};
+        msg{:=|that{.get|.}};
+        arg{:=|msg{.get|.}{.eval|.}};
+
+        __methods{.get|.}({__method_call|.}
+            {set_receiver|self{.get|.}{__class|.}}
+            {set_message|msg{.get|.}{__class|.}}
+            {set_self|self{.get|.}}
+            {set_arg|arg{.get|.}}
+        )
+    }{.eval|.})
+}{.eval|.});
+
+bind def __bound_method ({do|
+    bound{:=|that{.get|.}};
+
+    (__new{.get|.} __method_prototype)
+        {set_receiver|bound{.get|.}{__bound_method_get_receiver|.}}
+        {set_message|bound{.get|.}{__bound_method_get_message|.}}
+}{.eval|.});
+
+################################################################################
+# Fields
+################################################################################
+
+def field(bound) {do|
+    bind ($ bound{__bound_method_get_receiver|.}) ($ bound{__bound_method_get_message|.}) (
+        __field_message{:=|that{.get|.}};
+        __field_modify{:=|__field_message{.get|.}{.eval|.}};
+        __field_name{:=|__field_message{.get|.}{__class|.}};
+
+        __field_old{:=|__field_name{.get|.}{.get|.}};
+        __field_name{.get|.}{:=|__field_modify{.get|.}(__field_old{.get|.})};
+        __field_old{.get|.}
+    )
+};
+
+bind __bound_method_symbol_call __set_bound (
+    __self{:=|this{.get|.}};
+    bound{:=|that{.get|.}{.eval|.}};
+    __self{.get|.}
+);
+
+bind __bound_method_symbol_call __set_sym (
+    __self{:=|this{.get|.}};
+    sym{:=|that{.get|.}{.eval|.}};
+    __self{.get|.}
+);
+
+bind __bound_method_symbol_call <- (
+    __new{.get|.}__bound_field_set
+        {__set_bound|bound{.get|.}}
+);
+
+bind __bound_method_symbol_call __get(
+    __new{.get|.}__bound_field_get
+        {__set_bound|bound{.get|.}}
+);
+
+bind __bound_method_symbol_call _(
+    bound{.get|.}{__bound_method_call|sym{.get|.}}
+);
+
+bind __bound_method symbol ({do|
+    __bound{:=|this{.get|.}};
+    sym{:=|that{.get|.}};
+
+    __new{.get|.}__bound_method_symbol_call
+        {__set_bound|__bound{.get|.}}
+        {__set_sym|sym{.get|.}}
+        (__new{.get|.}(sym{.get|.}))
+}{.eval|.});
+
+bind __const __set_const (
+    __self{:=|this{.get|.}};
+    const{:=|that{.get|.}{.eval|.}};
+    __self{.get|.}
+);
+
+bind __const _ (
+    const{.get|.}
+);
+
+bind __bound_field_set __set_bound (
+    __self{:=|this{.get|.}};
+    bound{:=|that{.get|.}{.eval|.}};
+    __self{.get|.}
+);
+
+bind __bound_field_set _ ({do|
+    val{:=|that{.get|.}};
+    bound{.get|.}{__bound_method_call|
+        __new{.get|.}__const{__set_const|val{.get|.}}
+    }
+}{.eval|.});
+
+bind __id _ (
+    that{.get|.}
+);
+
+bind __bound_field_get __set_bound (
+    __self{:=|this{.get|.}};
+    bound{:=|that{.get|.}{.eval|.}};
+    __self{.get|.}
+);
+
+bind __bound_field_get _ (
+    bound{.get|.}{__bound_method_call|
+        __new{.get|.}__id
+    }
+);
+
+.

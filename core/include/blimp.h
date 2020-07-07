@@ -1261,6 +1261,17 @@ BlimpStatus BlimpMethod_PrimitiveSet(
     BlimpObject **result);
 
 /**
+ * \brief Method handler implementing the default behavior for `symbol <-`.
+ */
+BlimpStatus BlimpMethod_PrimitiveStore(
+    Blimp *blimp,
+    BlimpObject *context,
+    BlimpObject *receiver,
+    BlimpObject *message,
+    void *data,
+    BlimpObject **result);
+
+/**
  * \brief Method handler implementing the default behavior for `_ .eval`.
  */
 BlimpStatus BlimpMethod_PrimitiveEval(

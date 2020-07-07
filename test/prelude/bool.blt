@@ -1,0 +1,13 @@
+{import|.} std;
+
+(true and true)   {!expect|true};
+(true and false)  {!expect|false};
+(false and true)  {!expect|false};
+(false and false) {!expect|false};
+
+(true or true)    {!expect|true};
+(true or false)   {!expect|true};
+(false or true)   {!expect|true};
+(false or false)  {!expect|false};
+
+.

@@ -1,0 +1,5 @@
+{import|.} std;
+
+(x == y) {!expect|false};
+(x == x) {!expect|true};
+.

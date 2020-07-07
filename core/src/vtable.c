@@ -59,11 +59,12 @@ static inline Blimp *GetBlimp(const VTable *vtable)
 Status VTable_Init(Blimp *blimp, VTable *vtable)
 {
     // Get all of the symbols which have special meaning in the default vtable.
-    const Symbol *symbol, *get, *set, *eval;
+    const Symbol *symbol, *get, *set, *store, *eval;
     TRY(Blimp_GetSymbol(blimp, "_", &vtable->wildcard));
     TRY(Blimp_GetSymbol(blimp, "symbol", &symbol));
     TRY(Blimp_GetSymbol(blimp, ".get", &get));
     TRY(Blimp_GetSymbol(blimp, ":=", &set));
+    TRY(Blimp_GetSymbol(blimp, "<-", &store));
     TRY(Blimp_GetSymbol(blimp, ".eval", &eval));
 
     vtable->methods.capacity = 0;
@@ -84,6 +85,14 @@ Status VTable_Init(Blimp *blimp, VTable *vtable)
 
     // Bind the primitive method symbol :=.
     if (VTable_Bind(vtable, symbol, set, BlimpMethod_PrimitiveSet, NULL)
+            != BLIMP_OK)
+    {
+        VTable_Destroy(vtable);
+        return Blimp_Reraise(blimp);
+    }
+
+    // Bind the primitive method symbol <-.
+    if (VTable_Bind(vtable, symbol, store, BlimpMethod_PrimitiveStore, NULL)
             != BLIMP_OK)
     {
         VTable_Destroy(vtable);

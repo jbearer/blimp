@@ -395,9 +395,13 @@ Status Blimp_Send(
     Object *message,
     Object **result)
 {
-    Value v = {VALUE_OBJECT};
+    Value v;
+    v.type = result ? VALUE_OBJECT : VALUE_VOID;
     TRY(Send(blimp, context, receiver, message, &v));
-    *result = v.obj;
+
+    if (result) {
+        *result = v.obj;
+    }
     return BLIMP_OK;
 }
 
@@ -450,6 +454,31 @@ Status BlimpMethod_PrimitiveSet(
 
     TRY(BlimpObject_Eval(message, result));
     if (BlimpObject_Set(context, sym, *result) != BLIMP_OK) {
+        BlimpObject_Release(*result);
+        return Blimp_Reraise(blimp);
+    }
+
+    return BLIMP_OK;
+}
+
+Status BlimpMethod_PrimitiveStore(
+    Blimp *blimp,
+    Object *context,
+    Object *receiver,
+    Object *message,
+    void *data,
+    Object **result)
+{
+    (void)context;
+    (void)data;
+
+    const Symbol *sym;
+    TRY(BlimpObject_ParseSymbol(receiver, &sym));
+
+    TRY(BlimpObject_Eval(message, result));
+    if (BlimpObject_Set(
+            BlimpObject_Parent(receiver), sym, *result) != BLIMP_OK)
+    {
         BlimpObject_Release(*result);
         return Blimp_Reraise(blimp);
     }

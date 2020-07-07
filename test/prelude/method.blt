@@ -1,0 +1,19 @@
+{import|.} std;
+
+def (foo: bar)(param) {do|
+    $ param
+};
+
+def (foo: baz)(param) {do|
+    baz
+};
+
+def (symbol: clone)[] {do|
+    $ self
+};
+
+(new foo: bar(y)) {!expect|y};
+(new foo: baz(y)) {!expect|baz};
+(x: clone[]) {!expect|x};
+
+.

@@ -1,0 +1,40 @@
+{import|.} std;
+
+x <- a;
+
+{do|
+    ($ x) {!expect|a};
+
+    x <- b;
+    y <- c;
+
+    ($ x) {!expect|b};
+    ($ y) {!expect|c};
+
+    {do|
+        ($ x) {!expect|b};
+        ($ y) {!expect|c};
+
+        x <- c;
+        y <- d;
+        z <- e;
+
+        ($ x) {!expect|c};
+        ($ y) {!expect|d};
+        ($ z) {!expect|e};
+
+        .
+    }{run|.};
+
+    ($ x) {!expect|c};
+    ($ y) {!expect|d};
+    {do| ($ z)} {!expect_error|.};
+
+    .
+}{run|.};
+
+($ x) {!expect|c};
+{do| ($ y)}{!expect_error|.};
+{do| ($ z)}{!expect_error|.};
+
+.
