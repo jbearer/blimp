@@ -2,6 +2,21 @@
 
 #include "internal/expr.h"
 
+Status BlimpExpr_NewSymbol(Blimp *blimp, const Symbol *sym, Expr **expr)
+{
+    *expr = calloc(1, sizeof(Expr));
+    if (*expr == NULL) {
+        return Blimp_Error(blimp, BLIMP_OUT_OF_MEMORY);
+    }
+
+    (*expr)->tag      = EXPR_SYMBOL;
+    (*expr)->refcount = 1;
+    (*expr)->next     = NULL;
+    (*expr)->symbol   = sym;
+
+    return BLIMP_OK;
+}
+
 void Blimp_FreeExpr(Expr *expr)
 {
     while (expr) {

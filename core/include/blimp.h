@@ -525,6 +525,16 @@ BlimpStatus Blimp_RuntimeErrorFrom(
 BlimpStatus Blimp_Reraise(Blimp *blimp);
 
 /**
+ * \brief Return the error status for the last error recorded in `blimp`.
+ *
+ * If the error info associated with the status does not have a stack trace,
+ * then the current interpreter stack trace is attached.
+ *
+ * \pre One of the `Blimp_Error*` functions has been called.
+ */
+BlimpStatus Blimp_RuntimeReraise(Blimp *blimp);
+
+/**
  * \brief Print information about the last error recorded in `blimp`.
  */
 void Blimp_DumpLastError(Blimp *blimp, FILE *f);
@@ -581,6 +591,9 @@ BlimpStatus Blimp_GetSymbol(
 const char *BlimpSymbol_GetName(const BlimpSymbol *symbol);
 
 typedef struct BlimpExpr BlimpExpr;
+
+BlimpStatus BlimpExpr_NewSymbol(
+    Blimp *blimp, const BlimpSymbol *sym, BlimpExpr **expr);
 
 /**
  * \brief Free memory associated with an expression.

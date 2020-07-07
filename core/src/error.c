@@ -300,6 +300,15 @@ Status Blimp_Reraise(Blimp *blimp)
     return &blimp->last_error;
 }
 
+Status Blimp_RuntimeReraise(Blimp *blimp)
+{
+    if (blimp->last_error.trace == NULL) {
+        Blimp_SaveStackTrace(blimp, &blimp->last_error.trace);
+    }
+
+    return &blimp->last_error;
+}
+
 BlimpErrorCode Blimp_GetLastError(
     Blimp *blimp,
     const SourceRange **range,

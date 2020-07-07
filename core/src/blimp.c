@@ -180,7 +180,12 @@ static inline Status ReturnObject(Blimp *blimp, Object *obj, Value *result)
         case VALUE_SYMBOL: {
             Status ret = BlimpObject_ParseSymbol(obj, &result->sym);
             BlimpObject_Release(obj);
-            return ret;
+
+            if (ret != BLIMP_OK) {
+                return RuntimeReraise(blimp);
+            } else {
+                return BLIMP_OK;
+            }
         }
 
         case VALUE_VOID:
