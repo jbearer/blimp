@@ -9,6 +9,7 @@ const BlimpOptions DEFAULT_BLIMP_OPTIONS = {
     .gc_refcount          = true,
     .gc_cycle_detection   = true,
     .gc_max_clump_size    = 0,
+    .gc_heap_check        = false,
 };
 
 const char *BLIMP_OPTIONS_USAGE =
@@ -174,6 +175,19 @@ const char *BLIMP_OPTIONS_USAGE =
     "        objects from being freed.\n"
     "\n"
     "        This option is disabled by default.\n"
+    "\n"
+    "    [no-]gc-heap-check\n"
+    "        Enable or disable runtime heap checking.\n"
+    "\n"
+    "        If the bl:mp interpreter was built with debugging turned on and\n"
+    "        this option is set, then the interpreter will periodically sweep\n"
+    "        the heap looking for incosistencies and abort if it finds one.\n"
+    "        This can be used to detect bugs in the built-in garbage\n"
+    "        collector.\n"
+    "\n"
+    "        Enabling this option will significantly slow down execution.\n"
+    "\n"
+    "        This option is disabled by default.\n"
 ;
 
 static const char *ParseUInt(const char *value, size_t *result)
@@ -290,6 +304,9 @@ const char *Blimp_ParseOption(const char *str, BlimpOptions *options)
         } else {
             return ParseUInt(value, &options->gc_max_clump_size);
         }
+    } else if (strncmp("gc-heap-check", option, option_len) == 0) {
+        options->gc_heap_check = !negate;
+        return NULL;
     } else {
         return "unknown option";
     }

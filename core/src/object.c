@@ -902,11 +902,20 @@ static Status AllocRef(Blimp *blimp, Ref **ref)
 
         pool->free_refs = &pool->refs->refs[pool->refs->uninitialized++];
         pool->free_refs->next = NULL;
+        pool->free_refs->prev = NULL;
+        pool->free_refs->to = NULL;
+    } else {
+        assert(pool->free_refs->to == NULL);
     }
 
     assert(pool->free_refs != NULL);
     *ref = pool->free_refs;
     pool->free_refs = (*ref)->next;
+
+    assert((*ref)->prev == NULL);
+    assert((*ref)->to == NULL);
+    (*ref)->next = NULL;
+
     return BLIMP_OK;
 }
 
@@ -915,6 +924,9 @@ static void FreeRef(Blimp *blimp, Ref *ref)
     ObjectPool *pool = &blimp->objects;
 
     ref->next = pool->free_refs;
+    ref->prev = NULL;
+    ref->to = NULL;
+
     pool->free_refs = ref;
 }
 
@@ -1079,8 +1091,8 @@ static inline void ERC_BorrowRef(Object *from, Ref *ref)
 
         ref->prev = NULL;
         from_clump->clump_references = ref;
-
-        return;
+    } else {
+        assert(ERC_GetClump(from) == ERC_GetClump(ref->to));
     }
 }
 
@@ -1094,10 +1106,11 @@ static inline void ERC_ReleaseRef(Object *from, Ref *ref)
     // counted in the clump reference count, so we can't decrement the reference
     // count here.
     if (from_clump != to_clump) {
-        // Remove the references from `from_clump`s list of outgoing references.
+        // Remove the reference from `from_clump`s list of outgoing references.
         if (ref->next != NULL) {
             ref->next->prev = ref->prev;
         }
+
         if (ref->prev != NULL) {
             assert(ref != from_clump->clump_references);
             ref->prev->next = ref->next;
@@ -1106,10 +1119,16 @@ static inline void ERC_ReleaseRef(Object *from, Ref *ref)
             from_clump->clump_references = ref->next;
         }
 
+        ref->prev = NULL;
+        ref->next = NULL;
+
         // Decrement the reference count.
         if (--to_clump->clump_refcount == 0) {
             ERC_FreeClump(to_clump);
         }
+    } else {
+        assert(ref->next == NULL);
+        assert(ref->prev == NULL);
     }
 }
 
@@ -1332,9 +1351,12 @@ static void ERC_MergeClumps(Object *root, Object *child)
                 // now entangle.
         ) {
             // Discount the reference which was previously counted, now that it
-            // is between two obejcts in the same clump.
+            // is between two objects in the same clump.
             assert(root->clump_refcount > 0);
             --root->clump_refcount;
+
+            ref->next = NULL;
+            ref->prev = NULL;
         } else {
             // This is still an external reference to some other clump. Add it
             // to the list of outgoing references from the root so that we can
@@ -1351,6 +1373,8 @@ static void ERC_MergeClumps(Object *root, Object *child)
 
         ref = next;
     }
+
+    child->clump_references = NULL;
 }
 
 static inline void ERC_RemoveFromClump(Object *obj)
@@ -1510,6 +1534,47 @@ static void MarkReachable(ObjectPool *pool)
             stack = obj->parent;
         }
     }
+}
+
+#ifndef NDEBUG
+static void DoHeapCheck(Blimp *blimp)
+{
+    MarkReachable(&blimp->objects);
+        // Call MarkReachable() just for the assertions that it does.
+
+    // Reset all the `reached` fields.
+    for (ObjectBatch *batch = blimp->objects.batches;
+         batch;
+         batch = batch->next)
+    {
+        for (size_t i = 0; i < batch->uninitialized; ++i) {
+            batch->objects[i].reached = false;
+        }
+    }
+
+    // Check that the free references list is not circular.
+    for (Ref *ref = blimp->objects.free_refs; ref; ref = ref->next) {
+        assert(ref->to == NULL);
+        assert(ref->prev == NULL);
+        ref->prev = ref;
+    }
+    for (Ref *ref = blimp->objects.free_refs; ref; ref = ref->next) {
+        ref->prev = NULL;
+    }
+}
+#endif
+
+static inline void HeapCheck(Blimp *blimp)
+{
+    (void)blimp;
+
+#ifndef NDEBUG
+    if (!blimp->options.gc_heap_check) {
+        return;
+    }
+
+    DoHeapCheck(blimp);
+#endif
 }
 
 void ObjectPool_CollectGarbage(ObjectPool *pool)
@@ -1735,11 +1800,15 @@ Status BlimpObject_NewBlock(
     Expr *code,
     Object **obj)
 {
+    HeapCheck(blimp);
+
     TRY(NewObject(blimp, parent, obj));
     (*obj)->type = OBJ_BLOCK;
     (*obj)->tag  = tag;
     (*obj)->code = code;
     ++code->refcount;
+
+    HeapCheck(blimp);
     return BLIMP_OK;
 }
 
@@ -1749,6 +1818,8 @@ Status BlimpObject_NewSymbol(
     TRY(NewObject(blimp, parent, obj));
     (*obj)->type = OBJ_SYMBOL;
     (*obj)->symbol = sym;
+
+    HeapCheck(blimp);
     return BLIMP_OK;
 }
 
@@ -1756,6 +1827,8 @@ Status BlimpObject_NewGlobal(Blimp *blimp, Object **obj)
 {
     TRY(NewObject(blimp, NULL, obj));
     (*obj)->type = OBJ_GLOBAL;
+
+    HeapCheck(blimp);
     return BLIMP_OK;
 }
 
@@ -1783,6 +1856,7 @@ static Ref *Lookup(Object *obj, const Symbol *sym, Object **owner)
 
 Object *BlimpObject_Parent(const Object *obj)
 {
+    assert(obj->type != OBJ_FREE);
     return obj->parent;
 }
 
@@ -1894,6 +1968,7 @@ Status BlimpObject_Set(Object *obj, const Symbol *sym, Object *val)
         BorrowRef(obj, ref);
     }
 
+    HeapCheck(blimp);
     return BLIMP_OK;
 }
 
@@ -1942,4 +2017,6 @@ void BlimpObject_Release(Object *obj)
     {
         FreeObject(obj, true);
     }
+
+    HeapCheck(blimp);
 }

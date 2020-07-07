@@ -197,6 +197,21 @@ typedef struct {
      * The default is 0 (no limit on clump size or clump age difference).
      */
     size_t gc_max_clump_size;
+
+    /**
+     * \brief
+     *      Enables runtime heap checking.
+     *
+     * If the bl:mp interpreter was built with debugging turned on and this
+     * option is set, then the interpreter will periodically sweep the heap
+     * looking for incosistencies and abort if it finds one. This can be used to
+     * detect bugs in the built-in garbage collector.
+     *
+     * Enabling this option will significantly slow down execution.
+     *
+     * This option is disabled by default.
+     */
+    bool gc_heap_check;
 } BlimpOptions;
 
 extern const BlimpOptions DEFAULT_BLIMP_OPTIONS;
