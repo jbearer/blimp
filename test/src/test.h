@@ -32,9 +32,10 @@ typedef struct Group {
     // Inputs
     const char *name;
     Options options;
+    wordexp_t options_split;
     size_t num_tests;
     Test **tests;
-    char *import_path[2];
+    char *import_path[4];
 
     // Outputs
     size_t results[NUM_RESULT_TYPES];

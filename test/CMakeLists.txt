@@ -3,7 +3,9 @@ add_executable(blimp-test ${TEST_BLIMP_SRC})
 target_compile_options(blimp-test PRIVATE
     -Wall -Wextra -Werror -std=c99
     -DSEMANTICS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/src/semantics.rkt"
-    -DTEST_DIRECTORY="${CMAKE_CURRENT_SOURCE_DIR}")
+    -DTEST_DIRECTORY="${CMAKE_CURRENT_SOURCE_DIR}"
+    -DEXTENSIONS_PATH="${CMAKE_BINARY_DIR}"
+    -DPRELUDE_PATH="${CMAKE_SOURCE_DIR}/prelude")
 target_include_directories(blimp-test PRIVATE src)
 target_link_libraries(blimp-test blimp)
 target_link_libraries(blimp-test blimpmodule)

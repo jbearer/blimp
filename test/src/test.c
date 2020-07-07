@@ -721,13 +721,65 @@ static Suite *FindTests(const Options *options)
         group->tests = NULL;
         group->num_tests = 0;
         group->options = suite->options;
+        group->options_split = (wordexp_t) {0};
         group->import_path[0] = calloc(
             strlen(TEST_DIRECTORY) + 1 + strlen(group_de->d_name) + 1, 1);
         strcat(group->import_path[0], TEST_DIRECTORY);
         strcat(group->import_path[0], "/");
         strcat(group->import_path[0], group_de->d_name);
-        group->import_path[1] = NULL;
+        group->import_path[1] = strdup(PRELUDE_PATH);
+        group->import_path[2] = strdup(EXTENSIONS_PATH);
+        group->import_path[3] = NULL;
 
+        // Check for a group-specific options file.
+        FILE *group_options = fdopen(openat(
+            group_dir_fd, ".options", O_RDONLY), "r");
+        if (group_options != NULL) {
+            // The first line of the options file is an options string.
+            char *line = NULL;
+            size_t n = 0;
+            ssize_t line_len = getline(&line, &n, group_options);
+            if (line != NULL) {
+                // Strip the trailing newline.
+                if (line[line_len - 1] == '\n') {
+                    line[line_len - 1] = '\0';
+                }
+
+                // Split into words, using the same string splitting altgorithm
+                // as the shell to respect quoted words with whitespace.
+                group->options_split.we_offs = 1;
+                wordexp(line, &group->options_split, WRDE_NOCMD|WRDE_DOOFFS);
+                    // Flags:
+                    //  WRDE_NOCMD: don't do command substitution.
+                    //  WRDE_DOOFFS:
+                    //      insert an initial NULL before the split words in the
+                    //      resulting `we_wordv` array. We will replace this
+                    //      with a pointer to the name of the executable
+                    //      (blimp-test), since ParseOptions expects this to be
+                    //      the first argument.
+
+                // Prepend the name of the executable.
+                group->options_split.we_wordv[0] = "blimp-test";
+                group->options_split.we_wordc++;
+
+                // Parse the array of split words as options.
+                ParseOptions(
+                    group->options_split.we_wordc,
+                    group->options_split.we_wordv,
+                    &group->options,
+                    NULL
+                );
+
+                // Normally, after calling wordexp, we would call wordfree to
+                // free the memory that wordexp allocated. In this case, though,
+                // we want that memory to persist, since the Options structure
+                // might contain pointers to strings allocated by wordexp.
+                //
+                // We can, however, get rid of the raw line that we read from
+                // file.
+                free(line);
+            }
+        }
 
         DIR *group_dir = fdopendir(group_dir_fd);
         struct dirent *test_de;
@@ -859,6 +911,9 @@ static void DestroyGroup(Group *group)
     free(group->tests);
     for (char **str = group->import_path; *str; ++str) {
         free(*str);
+    }
+    if (group->options_split.we_offs) {
+        wordfree(&group->options_split);
     }
 
     free(group);
