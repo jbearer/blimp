@@ -922,7 +922,7 @@ static void FreeRef(Blimp *blimp, Ref *ref)
 // Reference counting
 //
 
-static void FreeObject(Object *obj);
+static void FreeObject(Object *obj, bool recursive);
 
 static inline void RC_BorrowRef(Object *from, Ref *ref)
 {
@@ -944,7 +944,7 @@ static inline void RC_ReleaseRef(Object *from, Ref *ref)
         if (--ref->to->internal_refcount == 0 &&
             ref->to->transient_refcount == 0)
         {
-            FreeObject(ref->to);
+            FreeObject(ref->to, true);
         }
     }
 }
@@ -963,7 +963,7 @@ static inline void RC_ReleaseParent(Object *obj)
     if (--obj->parent->internal_refcount == 0 &&
         obj->parent->transient_refcount == 0)
     {
-        FreeObject(obj->parent);
+        FreeObject(obj->parent, true);
     }
 }
 
@@ -1375,7 +1375,7 @@ static void ERC_FreeClump(Object *clump)
         assert(obj->transient_refcount == 0);
 
         Object *next = obj->clump_next;
-        FreeObject(obj);
+        FreeObject(obj, true);
         obj = next;
     } while (obj != clump);
 }
@@ -1528,7 +1528,12 @@ void ObjectPool_CollectGarbage(ObjectPool *pool)
                 obj->reached = false;
             } else if (obj->type != OBJ_FREE) {
                 assert(obj->transient_refcount == 0);
-                FreeObject(obj);
+                FreeObject(obj, false);
+                    // We don't need to free recursively, because with sweeping
+                    // GC, we are guaranteed to eventually call FreeObject() on
+                    // every dead object. In fact, freeing recursively would be
+                    // problematic here, since it's not necessarily safe to run
+                    // the reference counting GCs while a sweep is in progress.
             }
         }
     }
@@ -1683,7 +1688,7 @@ static Status NewObject(Blimp *blimp, Object *parent, Object **obj)
     return BLIMP_OK;
 }
 
-static void FreeObject(Object *obj)
+static void FreeObject(Object *obj, bool recursive)
 {
     if (obj->type == OBJ_FREE) {
         return;
@@ -1698,18 +1703,20 @@ static void FreeObject(Object *obj)
         ERC_RemoveFromClump(obj);
     }
 
-    // Release our references to all of the objects in this object's scope.
-    for (ScopeIterator entry = Scope_Begin(&obj->scope);
-         entry != Scope_End(&obj->scope);
-         entry = Scope_Next(&obj->scope, entry))
-    {
-        Ref *ref = Scope_GetValue(&obj->scope, entry);
-        ReleaseRef(obj, ref);
-        FreeRef(blimp, ref);
-    }
+    if (recursive) {
+        // Release our references to all of the objects in this object's scope.
+        for (ScopeIterator entry = Scope_Begin(&obj->scope);
+             entry != Scope_End(&obj->scope);
+             entry = Scope_Next(&obj->scope, entry))
+        {
+            Ref *ref = Scope_GetValue(&obj->scope, entry);
+            ReleaseRef(obj, ref);
+            FreeRef(blimp, ref);
+        }
 
-    // Release our reference to our parent.
-    ReleaseParent(obj);
+        // Release our reference to our parent.
+        ReleaseParent(obj);
+    }
 
     // Release our reference to the code expression if this is a block.
     if (obj->type == OBJ_BLOCK) {
@@ -1933,6 +1940,6 @@ void BlimpObject_Release(Object *obj)
         obj->internal_refcount == 0 &&
         blimp->options.gc_refcount)
     {
-        FreeObject(obj);
+        FreeObject(obj, true);
     }
 }
