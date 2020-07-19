@@ -238,6 +238,18 @@ static void RunGroup(Group *group)
         } else {
             Blimp_Check(BlimpModule_Init(
                 test->blimp, (const char **)group->import_path));
+
+            // Import pre-imports from options.
+            for (size_t i = 0; i < test->options.num_preimport; ++i) {
+                Blimp_Check(BlimpModule_Import(
+                    test->blimp,
+                    test->options.preimport[i],
+                    Blimp_GlobalObject(test->blimp),
+                    (const char **)group->import_path,
+                    NULL
+                ));
+            }
+
             RunTest(test);
         }
         ++group->results[test->result];
@@ -348,6 +360,13 @@ static void PrintUsage(FILE *f, int argc, char **argv)
     fprintf(f, "        is 1, unless it is overridden by setting the CMake variable\n");
     fprintf(f, "        TEST_PERF_FACTOR.\n");
     fprintf(f, "\n");
+    fprintf(f, "    -i, --import FILE\n");
+    fprintf(f, "        Implicitly import FILE at the start of each test (as if by `{import|.}\n");
+    fprintf(f, "        FILE')\n");
+    fprintf(f, "\n");
+    fprintf(f, "        This option can be passed more than once to import multiple files. Files\n");
+    fprintf(f, "        will be imported in the order the options are passed on the command line.\n");
+    fprintf(f, "\n");
     fprintf(f, "    -f [no-]OPTION[=VALUE]\n");
     fprintf(f, "        Specify values for tunable interpreter properties. See below for a list\n");
     fprintf(f, "        of interpreter options.\n");
@@ -389,6 +408,7 @@ typedef enum {
     FLAG_GROUP              = 'g',
     FLAG_TEST               = 't',
     FLAG_FILTER             = 'F',
+    FLAG_IMPORT             = 'i',
     FLAG_BLIMP_OPTION       = 'f',
     FLAG_PERF_REPORT        = 'p',
     FLAG_VERBOSE            = 'v',
@@ -423,6 +443,8 @@ static Options DefaultOptions(void)
         .perf_factor    = DEFAULT_PERF_FACTOR,
             // This default is defined by CMake, so that it can be overridden
             // for each build configuration.
+        .preimport      = NULL,
+        .num_preimport  = 0,
         .blimp_options  = DEFAULT_BLIMP_OPTIONS,
         .perf_report    = NULL,
     };
@@ -460,6 +482,7 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
         {"blimp-timeout",  required_argument, NULL, FLAG_BLIMP_TIMEOUT },
         {"perf-factor",    required_argument, NULL, FLAG_PERF_FACTOR },
         {"perf-report",    required_argument, NULL, FLAG_PERF_REPORT },
+        {"import",         required_argument, NULL, FLAG_IMPORT },
         {"verbose",        optional_argument, NULL, FLAG_VERBOSE },
         {"help",           no_argument,       NULL, FLAG_HELP },
         {0, 0, 0, 0},
@@ -470,7 +493,7 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
         // parse test-specific options) we need to reset this global variable
         // each time.
     int option, i = 1;
-    while ((option = getopt_long(argc, argv, "t:g:F:f:p:v::h", cli_options, &i)) != -1) {
+    while ((option = getopt_long(argc, argv, "t:g:F:i:f:p:v::h", cli_options, &i)) != -1) {
         switch (option) {
             case FLAG_TEST:
                 ++options->num_tests;
@@ -559,6 +582,15 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
                     return true;
                 }
                 options->perf_factor = factor;
+
+                break;
+            }
+
+            case FLAG_IMPORT: {
+                ++options->num_preimport;
+                options->preimport = realloc(
+                    options->preimport, options->num_preimport*sizeof(char *));
+                options->preimport[options->num_preimport - 1] = optarg;
 
                 break;
             }

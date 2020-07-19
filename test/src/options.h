@@ -31,6 +31,8 @@ typedef struct {
     size_t racket_timeout;  // ms
     size_t blimp_timeout;   // ms
     float perf_factor;
+    const char **preimport;
+    size_t num_preimport;
     BlimpOptions blimp_options;
     FILE *perf_report;
 } Options;
