@@ -4,5 +4,6 @@ field (foo: bar);
 
 f <- (new foo);
 ($ f: bar) <- y;
+($ f: bar){__get|.} {!expect|y};
 
 .

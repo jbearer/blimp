@@ -59,12 +59,14 @@ static inline Blimp *GetBlimp(const VTable *vtable)
 Status VTable_Init(Blimp *blimp, VTable *vtable)
 {
     // Get all of the symbols which have special meaning in the default vtable.
-    const Symbol *symbol, *get, *set, *store, *eval;
+    const Symbol *symbol, *get, *set, *store, *gms, *rmw, *eval;
     TRY(Blimp_GetSymbol(blimp, "_", &vtable->wildcard));
     TRY(Blimp_GetSymbol(blimp, "symbol", &symbol));
     TRY(Blimp_GetSymbol(blimp, ".get", &get));
     TRY(Blimp_GetSymbol(blimp, ":=", &set));
     TRY(Blimp_GetSymbol(blimp, "<-", &store));
+    TRY(Blimp_GetSymbol(blimp, "%~", &gms));
+    TRY(Blimp_GetSymbol(blimp, "%=", &rmw));
     TRY(Blimp_GetSymbol(blimp, ".eval", &eval));
 
     vtable->methods.capacity = 0;
@@ -91,8 +93,24 @@ Status VTable_Init(Blimp *blimp, VTable *vtable)
         return Blimp_Reraise(blimp);
     }
 
-    // Bind the primitive method symbol <-.
-    if (VTable_Bind(vtable, symbol, store, BlimpMethod_PrimitiveStore, NULL)
+    // // Bind the primitive method symbol <-.
+    // if (VTable_Bind(vtable, symbol, store, BlimpMethod_PrimitiveStore, NULL)
+    //         != BLIMP_OK)
+    // {
+    //     VTable_Destroy(vtable);
+    //     return Blimp_Reraise(blimp);
+    // }
+
+    // Bind the primitive method symbol %~.
+    if (VTable_Bind(vtable, symbol, gms, BlimpMethod_PrimitiveGetModifySet, NULL)
+            != BLIMP_OK)
+    {
+        VTable_Destroy(vtable);
+        return Blimp_Reraise(blimp);
+    }
+
+    // Bind the primitive method symbol %=.
+    if (VTable_Bind(vtable, symbol, rmw, BlimpMethod_PrimitiveReadModifyWrite, NULL)
             != BLIMP_OK)
     {
         VTable_Destroy(vtable);
@@ -144,13 +162,13 @@ PRIVATE Status VTable_Resolve(
     key = (SymbolPair) { receiver, message };
     BoundMethod *method = HashMap_Find(&vtable->methods, &key);
 
-    if (method == NULL && message != vtable->wildcard) {
-        key = (SymbolPair) { receiver, vtable->wildcard };
+    if (method == NULL && receiver != vtable->wildcard) {
+        key = (SymbolPair) { vtable->wildcard, message };
         method = HashMap_Find(&vtable->methods, &key);
     }
 
-    if (method == NULL && receiver != vtable->wildcard) {
-        key = (SymbolPair) { vtable->wildcard, message };
+    if (method == NULL && message != vtable->wildcard) {
+        key = (SymbolPair) { receiver, vtable->wildcard };
         method = HashMap_Find(&vtable->methods, &key);
     }
 

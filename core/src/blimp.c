@@ -19,13 +19,6 @@ Blimp *Blimp_New(const BlimpOptions *options)
         goto err_symbols;
     }
 
-    if (Blimp_GetSymbol(blimp, "this", &blimp->this_symbol) != BLIMP_OK) {
-        goto err_this_and_that;
-    }
-    if (Blimp_GetSymbol(blimp, "that", &blimp->that_symbol) != BLIMP_OK) {
-        goto err_this_and_that;
-    }
-
     if (ObjectPool_Init(blimp, &blimp->objects) != BLIMP_OK) {
         goto err_objects;
     }
@@ -52,8 +45,6 @@ err_stack:
 err_vtable:
     ObjectPool_Destroy(blimp, &blimp->objects);
 err_objects:
-err_this_and_that:
-    SymbolTable_Destroy(&blimp->symbols);
 err_symbols:
     free(blimp);
 err_malloc:
@@ -327,8 +318,6 @@ static Status Send(
         &blimp->vtable, receiver_tag, message_tag, &method, &data));
 
     if (method == BLIMP_METHOD_EVAL) {
-        TRY(BlimpObject_Set(receiver, blimp->this_symbol, receiver));
-        TRY(BlimpObject_Set(receiver, blimp->that_symbol, message));
         return EvalExpr(blimp, (const Expr *)data, receiver, result);
     } else {
         Object *obj;
@@ -414,9 +403,7 @@ Status BlimpMethod_Eval(
     Object **result)
 {
     (void)context;
-
-    TRY(BlimpObject_Set(receiver, blimp->this_symbol, receiver));
-    TRY(BlimpObject_Set(receiver, blimp->that_symbol, message));
+    (void)message;
     return Blimp_Eval(blimp, body, receiver, result);
 }
 
@@ -486,6 +473,98 @@ Status BlimpMethod_PrimitiveStore(
     return BLIMP_OK;
 }
 
+Status BlimpMethod_PrimitiveGetModifySet(
+    Blimp *blimp,
+    Object *context,
+    Object *receiver,
+    Object *message,
+    void *data,
+    Object **result)
+{
+    (void)data;
+
+    const Symbol *sym;
+    TRY(BlimpObject_ParseSymbol(receiver, &sym));
+
+    Object *modify;
+    TRY(BlimpObject_Eval(message, &modify));
+
+    if (BlimpObject_Get(context, sym, result) != BLIMP_OK) {
+        if (Blimp_GetLastError(blimp, NULL, NULL, NULL)
+                == BLIMP_NO_SUCH_SYMBOL) {
+            *result = receiver;
+        } else {
+            return Blimp_Reraise(blimp);
+        }
+    }
+    BlimpObject_Borrow(*result);
+
+    Object *new_value;
+    if (Blimp_Send(blimp, context, modify, *result, &new_value) != BLIMP_OK) {
+        BlimpObject_Release(*result);
+        return Blimp_Reraise(blimp);
+    }
+    if (BlimpObject_Set(context, sym, new_value) != BLIMP_OK) {
+        BlimpObject_Release(*result);
+        return Blimp_Reraise(blimp);
+    }
+
+    return BLIMP_OK;
+}
+
+
+BlimpStatus BlimpMethod_PrimitiveReadModifyWrite(
+    Blimp *blimp,
+    BlimpObject *context,
+    BlimpObject *receiver,
+    BlimpObject *message,
+    void *data,
+    BlimpObject **result)
+{
+    (void)context;
+    (void)data;
+
+    Object *scope = BlimpObject_Parent(receiver);
+    if (scope == Blimp_GlobalObject(blimp)) {
+        return Blimp_ErrorMsg(blimp, BLIMP_ILLEGAL_SCOPE,
+            "%%= is not allowed in the global scope");
+    }
+
+    const Symbol *sym;
+    TRY(BlimpObject_ParseSymbol(receiver, &sym));
+
+    Object *modify;
+    TRY(BlimpObject_Eval(message, &modify));
+
+    Object *old_value;
+    if (BlimpObject_Get(context, sym, &old_value) != BLIMP_OK) {
+        if (Blimp_GetLastError(blimp, NULL, NULL, NULL)
+                == BLIMP_NO_SUCH_SYMBOL) {
+            old_value = receiver;
+        } else {
+            return Blimp_Reraise(blimp);
+        }
+    }
+    BlimpObject_Borrow(old_value);
+
+    Object *new_value;
+    if (Blimp_Send(blimp, scope, modify, old_value, &new_value) != BLIMP_OK) {
+        BlimpObject_Release(old_value);
+        return Blimp_Reraise(blimp);
+    }
+    if (BlimpObject_Set(scope, sym, new_value) != BLIMP_OK) {
+        BlimpObject_Release(old_value);
+        return Blimp_Reraise(blimp);
+    }
+
+    BlimpObject_Release(old_value);
+    BlimpObject_Borrow(scope);
+
+    *result = scope;
+
+    return BLIMP_OK;
+}
+
 Status BlimpMethod_PrimitiveEval(
     Blimp *blimp,
     Object *context,
@@ -508,9 +587,15 @@ Status Blimp_Eval(
     Object *scope,
     Object **obj)
 {
-    Value v = {VALUE_OBJECT};
+    Value v;
+    v.type = obj ? VALUE_OBJECT : VALUE_VOID;
+
     TRY(EvalExpr(blimp, expr, scope, &v));
-    *obj = v.obj;
+
+    if (obj) {
+        *obj = v.obj;
+    }
+
     return BLIMP_OK;
 }
 

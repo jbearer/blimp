@@ -1,0 +1,13 @@
+# Test basic read-modify-write.
+x{%~|{const|y}} {!expect|x};
+    # Set a non-existent value.
+x{%~|{id|.}} {!expect|y};
+    # Get the value.
+x{%~|{id|.}} {!expect|y};
+    # Check that getting the value did not change it.
+x{%~|{const|z}} {!expect|y};
+    # Set an existing value.
+x{%~|{id|.}} {!expect|z};
+    # Get the value.
+
+.

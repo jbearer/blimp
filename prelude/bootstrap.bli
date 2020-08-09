@@ -345,6 +345,15 @@ bind do run (this{.get|.}{.eval|.});
 
 # Assign to a local variable.
 operator <-;
+bind symbol <- ({do|
+    __self{:=|this{.get|.}};
+    __val{:=|that{.get|.}{.eval|.}};
+    __self{.get|.}{%=|
+        __new{.get|.}__const
+            {__set_const|__val{.get|.}}
+    };
+    __val{.get|.}
+}{.eval|.});
 
 # Convenient syntax to get the value of the symbol in the scope where it was
 # created. This is usually the current scope (as in `$ x`) but creating symbols
@@ -639,9 +648,7 @@ def field(bound) {do|
         __field_modify{:=|__field_message{.get|.}{.eval|.}};
         __field_name{:=|__field_message{.get|.}{__class|.}};
 
-        __field_old{:=|__field_name{.get|.}{.get|.}};
-        __field_name{.get|.}{:=|__field_modify{.get|.}(__field_old{.get|.})};
-        __field_old{.get|.}
+        __field_name{.get|.}{%~|__field_modify{.get|.}}
     )
 };
 
@@ -662,9 +669,10 @@ bind __bound_method_symbol_call <- (
         {__set_bound|bound{.get|.}}
 );
 
-bind __bound_method_symbol_call __get(
-    __new{.get|.}__bound_field_get
-        {__set_bound|bound{.get|.}}
+bind __bound_method __get(
+    receiver{.get|.} {message{.get|.}|
+        __new{.get|.}__id
+    }
 );
 
 bind __bound_method_symbol_call _(
@@ -706,18 +714,6 @@ bind __bound_field_set _ ({do|
 
 bind __id _ (
     that{.get|.}
-);
-
-bind __bound_field_get __set_bound (
-    __self{:=|this{.get|.}};
-    bound{:=|that{.get|.}{.eval|.}};
-    __self{.get|.}
-);
-
-bind __bound_field_get _ (
-    bound{.get|.}{__bound_method_call|
-        __new{.get|.}__id
-    }
 );
 
 .

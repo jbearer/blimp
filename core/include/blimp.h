@@ -300,6 +300,7 @@ typedef enum BlimpErrorCode {
     BLIMP_MUST_BE_BLOCK,
     BLIMP_MUST_BE_SYMBOL,
     BLIMP_STACK_OVERFLOW,
+    BLIMP_ILLEGAL_SCOPE,
 
     // Internal consistency errors
     BLIMP_INVALID_EXPR,
@@ -1264,6 +1265,28 @@ BlimpStatus BlimpMethod_PrimitiveSet(
  * \brief Method handler implementing the default behavior for `symbol <-`.
  */
 BlimpStatus BlimpMethod_PrimitiveStore(
+    Blimp *blimp,
+    BlimpObject *context,
+    BlimpObject *receiver,
+    BlimpObject *message,
+    void *data,
+    BlimpObject **result);
+
+/**
+ * \brief Method handler implementing the default behavior for `symbol %~`.
+ */
+BlimpStatus BlimpMethod_PrimitiveGetModifySet(
+    Blimp *blimp,
+    BlimpObject *context,
+    BlimpObject *receiver,
+    BlimpObject *message,
+    void *data,
+    BlimpObject **result);
+
+/**
+ * \brief Method handler implementing the default behavior for `symbol %=`.
+ */
+BlimpStatus BlimpMethod_PrimitiveReadModifyWrite(
     Blimp *blimp,
     BlimpObject *context,
     BlimpObject *receiver,

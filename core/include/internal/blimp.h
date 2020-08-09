@@ -18,9 +18,6 @@ struct Blimp {
     CallStack stack;
     Object *global;
 
-    const Symbol *this_symbol;
-    const Symbol *that_symbol;
-
     struct BlimpErrorInfo {
         BlimpErrorCode code;
         StackTrace *trace;

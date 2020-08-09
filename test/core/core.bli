@@ -1,0 +1,58 @@
+bind __dummy _ .;
+bind _ __self__ (
+    __dummy{%=|{__dummy|.}}
+);
+
+bind symbol __parent__ (
+    __dummy{%=|{__dummy|.}}{%=|{__dummy|.}}
+);
+
+# Use like:
+#
+#   x{%~|{const|y}}
+#
+# to set `x` equal to `y`.
+bind const _ (
+    this{__parent__|.}{.eval|.}
+);
+
+# Use like:
+#
+#   x{%~|{id|.}}
+#
+# to get the value of `x` without changing it.
+bind id _ (
+    ^{__self__|.}
+);
+
+bind _ set_this (
+    this{%=|{const|x}}
+);
+
+bind _ preamble ({do|
+    ^{.eval|.}{__set_that|}
+}{.eval|.});
+
+bind getter __get (
+    value{%=|{id|.}}
+);
+
+bind getter _ (
+    value{%=|{const|^{__self__|.}}}
+);
+
+# Get the value of the symbol in the scope where it was created.
+bind symbol .get (
+^{preamble|.};
+{do|
+    getter{%=|{const|{getter|.}}};
+    this{__parent__|.}{%~|getter{%=|{id|.}}};
+    getter{__get|.}
+}{.eval|.});
+
+# Set the value of the symbol in the scope where it was created.
+bind symbol := (
+    this{__parent__|.}{%~|{const|^{.eval|.}}}
+);
+
+.
