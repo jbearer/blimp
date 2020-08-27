@@ -3,6 +3,7 @@
 
 #include "internal/bit_vector.h"
 #include "internal/common.h"
+#include "internal/debruijn.h"
 #include "internal/hash_map.h"
 #include "internal/random.h"
 
@@ -13,6 +14,15 @@ typedef struct Ref {
     struct Ref *next;
     struct Ref *prev;
 } Ref;
+
+typedef enum {
+    OBJ_SYMBOL,
+    OBJ_REFERENCE,
+    OBJ_BLOCK,
+    OBJ_EXTENSION,
+    OBJ_GLOBAL,
+    OBJ_FREE,
+} ObjectType;
 
 struct BlimpObject {
     // General object data.
@@ -86,18 +96,49 @@ struct BlimpObject {
         // traversal, it is the next pointer in the free list.
 
     // Type-specific data.
-    enum {
-        OBJ_SYMBOL,
-        OBJ_BLOCK,
-        OBJ_GLOBAL,
-        OBJ_FREE,
-    } type;
+    ObjectType type;
+
+    DeBruijnMap messages;
+        // Stack of Refs to message objects which the body of this object is
+        // closed over. This does not include the message currently being
+        // processed by this object (which is represented by the top of the
+        // bl:mp call stack) because the same object instance can be sent many
+        // messages at different times (or even at the same time in the presence
+        // of recursion) so it does not make sense to store this message with
+        // the object itself.
+        //
+        // However, even though the parent of this object may be send many
+        // different messages during its life this object was created while
+        // exactly one of those messages was in scope, and remains closed over
+        // that particular message for the duration of its life.
+        //
+        // Each object is closed over all of the objects its parent is closed
+        // over, plus the message in the top stack frame at the time it is
+        // created.
+        //
+        // Note that this field only applies for object types with custom
+        // message handlers (OBJ_BLOCK and OBJ_EXTENSION). Other object types
+        // have built-in message handlers which do not refer to captured
+        // messages from their parent, so this field is not used.
+
     union {
-        const Symbol *symbol;   // Symbol for symbol objects
+        const Symbol *symbol;
+            // Symbol for symbol objects and references to symbols.
+
         struct {
-            const Symbol *tag;  // Class of blocks
-            Expr *code;         // Body of blocks
+            const Symbol *msg_name;
+                // Name of the message bound in this block. This is only used
+                // for pretty-printing. Elsewhere, messages are referred to
+                // exclusively by DeBruijn index.
+            Expr *code;
+                // Body of the block.
         };
+
+        struct {
+            BlimpMethod method;
+            BlimpFinalizer finalize;
+            void *state;
+        } ext;
     };
 };
 
@@ -122,6 +163,10 @@ PRIVATE Status ObjectPool_Init(Blimp *blimp, ObjectPool *pool);
 PRIVATE void ObjectPool_Destroy(Blimp *blimp, ObjectPool *pool);
 PRIVATE void ObjectPool_CollectGarbage(ObjectPool *pool);
 PRIVATE BlimpGCStatistics ObjectPool_GetStats(ObjectPool *pool);
+PRIVATE void ObjectPool_DumpHeap(
+    FILE *f, ObjectPool *pool, bool include_reachable);
 PRIVATE Status BlimpObject_NewGlobal(Blimp *blimp, Object **object);
+PRIVATE Status BlimpObject_NewReference(
+    Blimp *blimp, Object *parent, const Symbol *symbol, Object **object);
 
 #endif

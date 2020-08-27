@@ -1,17 +1,53 @@
-bind true __negate false;
-bind false __negate true;
-bind ! symbol (that{.get|.}{__negate|.});
+true {
+    if_true {^{
+        {^if{^else
+            ^if[]
+        }}
+    }};
 
-operator and;
-bind true and (that{.get|.}{.eval|.});
-bind false and false;
+    and {^{
+        {^that
+            ^that
+        }
+    }};
 
-operator or;
-bind true or true;
-bind false or (that{.get|.}{.eval|.});
+    or {^{
+        {^that
+            true
+        }
+    }};
 
-bind true __check_assert .;
-bind false __check_assert (__assertion_failed{.get|.});
-bind assert symbol (that{.get|.}{__check_assert|.});
+    ^{^msg
+        ^msg[]
+    }
+};
+
+false {
+    if_true {^{
+        {^if{^else
+            ^else[]
+        }}
+    }};
+
+    and {^{
+        {^that
+            false
+        }
+    }};
+
+    or {^{
+        {^that
+            ^that
+        }
+    }};
+
+    ^{^msg
+        ^msg[]
+    }
+};
+
+not {^{^b
+    b if_true { false } { true }
+}};
 
 .

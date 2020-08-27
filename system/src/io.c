@@ -11,12 +11,10 @@ static BlimpStatus Print(
     BlimpObject *scope,
     BlimpObject *receiver,
     BlimpObject *message,
-    void *data,
     BlimpObject **result)
 {
     (void)scope;
     (void)receiver;
-    (void)data;
 
     BlimpObject_Print(stdout, message);
     fputc('\n', stdout);
@@ -32,10 +30,26 @@ static BlimpStatus InitSystemIO(
 
     VoidReturn(blimp, result);
 
-    return Blimp_BindVTableFragment(blimp, (BlimpVTableFragment){
-        {"print", "_", Print, NULL},
-        {0, 0, 0, 0}
-    });
+    const BlimpSymbol *print;
+    BlimpObject *print_method;
+    if (Blimp_GetSymbol(blimp, "print", &print) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+    if (BlimpObject_NewExtension(
+            blimp, Blimp_GlobalObject(blimp), NULL, Print, NULL, &print_method)
+        != BLIMP_OK)
+    {
+        return Blimp_Reraise(blimp);
+    }
+    if (BlimpObject_Set(
+            Blimp_GlobalObject(blimp), print, print_method) != BLIMP_OK)
+    {
+        BlimpObject_Release(print_method);
+        return Blimp_Reraise(blimp);
+    }
+    BlimpObject_Release(print_method);
+
+    return BLIMP_OK;
 }
 
 BLIMP_MODULE(InitSystemIO);

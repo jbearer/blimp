@@ -1,24 +1,22 @@
 #: --skip-racket
 
-# Symbols with keywords.
-`bind` {!expect|`bind`};
-
 # Symbols with spaces.
-`foo bar` {!expect|`foo bar`};
+!expect_eq `foo bar` `foo bar`;
 
 # Symbols with special characters.
-`|{}#` {!expect|`|{}#`};
+!expect_eq `^{}#` `^{}#`;
 
 # Symbols with newlines.
-`a
-multiline
-symbol` {!expect|
-`a
-multiline
-symbol`};
+!expect_eq
+    `a
+        multiline
+        symbol`
+    `a
+        multiline
+        symbol`;
 
 # Symbols with unicode.
-`∀ε>0. ∃δ>0. |x-x₀| < δ -> |f(x)-f(x₀)| < ε`{!expect|
-    `∀ε>0. ∃δ>0. |x-x₀| < δ -> |f(x)-f(x₀)| < ε`};
-
+!expect_eq
+    `∀ε>0. ∃δ>0. |x-x₀| < δ -> |f(x)-f(x₀)| < ε`
+    `∀ε>0. ∃δ>0. |x-x₀| < δ -> |f(x)-f(x₀)| < ε`;
 .

@@ -96,6 +96,11 @@ void Stack_Pop(Blimp *blimp, CallStack *stack)
     --stack->trace.next;
 }
 
+const StackFrame *Stack_CurrentFrame(const CallStack *stack)
+{
+    return StackTrace_CurrentFrame(&stack->trace);
+}
+
 Status Blimp_SaveStackTrace(Blimp *blimp, StackTrace **trace)
 {
     return Blimp_CopyStackTrace(blimp, &blimp->stack.trace, trace);
@@ -169,8 +174,10 @@ void BlimpStackTrace_Print(FILE *file, const StackTrace *trace, size_t limit)
             continue;
         }
 
-        fprintf(file, "#%zu at ", frame - trace->frames);
-        PrintSourceRange(file, &frame->range);
+        if (frame->has_range) {
+            fprintf(file, "#%zu at ", frame - trace->frames);
+            PrintSourceRange(file, &frame->range);
+        }
     }
 }
 

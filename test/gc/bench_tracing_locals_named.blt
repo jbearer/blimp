@@ -12,43 +12,29 @@
 # released. This means that it briefly becomes entangled with the long-lived
 # object, making it more difficult to collect.
 
-bind set symbol (
-    this{.get|.}{.eval|.}{:=|that{.get|.}}
-);
+long_lived {^{
+    {
+        # Create a local variable which is an immediate child of this block. We
+        # first initialize `direct_local` to a reference to itself, and then we
+        # use that reference to send it an object which is a child of this one.
+        direct_local{^ref ^ref};
+        direct_local {.};
 
-bind locals.create_locals_in_method (
-    method_direct_local{:=|uninitialized};
-    {set|method_direct_local} bar;
-    method_nested_local{:=|foo};
-    .
-);
+        # Create a local variable which is a descendant, but not an immediate
+        # child, of the owning object: the value of `nested_local` is an object
+        # which is a child of the block used to initialize `nested_local`, which
+        # in turn is a child of this object.
+        nested_local{^ref ^ref{.}};
 
-bind long_lived.do_test (
-    scope {:=| {locals|
-        direct_local{:=|uninitialized};
-        {set|direct_local} bar;
-            # Create a local variable which is an immediate child of this block.
-        nested_local{:=|foo};
-            # Create a local variable which is a descendant, but not an
-            # immediate child, of the owning object: foo is a child of the :=
-            # block, which is a child of this object.
         .
-    }};
-    scope{.get|.}{.eval|.};
-    scope{.get|.}{.create_locals_in_method|.};
+    }[]
+}};
 
-    scope{:=|.};
-        # Get rid of our reference to `scope`, which should free its locals.
-    .
-);
-
-long_lived{:=|{long_lived|.}};
-
-{!benchmark|n{:=|100000}} {erc_locals_named|
-    long_lived{.get|.}{.do_test|.}
+!benchmark{n{^ 100000}; tracing_locals_named} {
+    long_lived[]
 };
 
-{gc|.}{!collect|.};
-{gc|.}{!print_stats|.};
-{gc|.}{!check_collect|.};
+!gc_collect;
+!gc_print_stats;
+!gc_check_collect;
 .

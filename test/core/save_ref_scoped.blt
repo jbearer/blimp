@@ -1,0 +1,24 @@
+scope {^{
+    # Set `symbol` to a getter for a reference to `symbol`.
+    symbol {^ref
+        ^ref {(^ref)}
+    };
+
+    symbol[]
+}};
+
+# Use the getter to get a reference to symbol inside of `scope`.
+ref {^
+    ^ (scope[])
+};
+
+# Use the reference to set the value of `symbol`.
+ref {foo};
+
+# Check that symbol was set in `scope`.
+!expect_eq (scope[]) foo;
+
+# Check that symbol was not set in the global scope.
+symbol { ^{bar} };
+!expect_eq (symbol[]) bar
+

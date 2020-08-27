@@ -1,0 +1,13 @@
+# Set `symbol` to a getter for a reference to `symbol`.
+symbol {^ref
+    ^ref {(^ref)}
+};
+
+# Use the getter to get a reference to symbol in the global scope.
+ref {^
+    ^ (symbol[])
+};
+
+# Use the reference to set the value of `symbol`.
+ref {foo};
+!expect_eq (symbol[]) foo

@@ -5,25 +5,22 @@ This sub-project contains a number of `bl:mp` programs which have been annotated
 The sub-project contains both the source code for the test runner (located in `src`) and a variety of `bl:mp` test programs which make up the test suite (located in the other subdirectories).
 
 ## test files
-The `bl:mp` test runner, `blimp-test`, interprets "`bl:mp` test" files, denoted with the `.blt` extension. These files are almost normal `bl:mp` programs. The only difference is that they are designed to run in a patched `bl:mp` interpreter which has some additional primitive methods:
+The `bl:mp` test runner, `blimp-test`, interprets "`bl:mp` test" files, denoted with the `.blt` extension. These files are almost normal `bl:mp` programs. The only difference is that they are designed to run in a patched `bl:mp` interpreter which has some additional built-in functions:
 
- Receiver |     Message     |   Body   | Description
-:--------:|:---------------:|:--------:|---------------------------------------
-|`symbol` |    `!expect`    | `symbol` | Causes a test failure if the receiver and the body do not evaluate to the same symbol.
-|`symbol` |   `!expect_lt`  | `symbol` | Checks that a numeric symbol is less than another numeric symbol.
-|`symbol` | `!expect_percent`| block   | The receiver should be a numeric symbol. The body should be a block `{tolerance\|value}`, where `tolerance` and `value` are both numeric symbols. Checks that the receiver is approximately equal to `value` within a margin of `tolerance`%.
-|   _     | `!expect_error` |     _    | Causes a test failure unless the body of the receiver (which must be a block) fails to evaluate.
-| `!benchmark` |     _      |     _    | Runs the body of a message many times and displays performance statistics.
-|  `gc`   | `!print_stats`  |     _    | Prints GC statistics.
-|  `gc`   | `!allocated`    |     _    | Returns a symbol representing the number of currently allocated objects.
-|  `gc`   | `!reachable`    |     _    | Returns a symbol representing the number of reachable allocated objects.
-|  `gc`   | `!unreachable`  |     _    | Returns a symbol representing the number of unreacable allocated objects.
-|  `gc`   | `!high_water_mark` |     _    | Returns a symbol representing the maximum number of objects which were ever allocated simultaneously.
-|  `gc`   | `!expect_clean` |    _     | Checks that all allocated objects are reachable.
-|  `gc`   | `!check_collect` |   _     | Triggers a garbage collection sweep and then checks that all allocated objects are reachable.
-|  `gc`   | `!collect`     |     _     | Triggers a garbage collection sweep.
+  Function                | Description
+:------------------------:|:-------------------------------------------------------------------
+| `!expect_eq a b`        | Causes a test failure if `a` and `b` do not evaluate to the same symbol.
+| `!expect_lt a b`        | Checks that a numeric symbol is less than another numeric symbol.
+| `!expect_percent p a b` | `p`, `a`, and `b` should be numeric symbols, with `0 <= p <= 1`. Checks that the `a` is approximately equal to `b` within a margin of `p`%.
+| `!expect_error { ... }` | Causes a test failure unless the block fails to evaluate.
+| `!benchmark { [options]; name } { ... } ` | Runs a block many times and displays performance statistics.
+| `!gc_print_stats`       | Prints GC statistics.
+| `!gc_unreachable`       | Returns a symbol representing the number of unreachable allocated objects.
+| `!gc_expect_clean`      | Checks that all allocated objects are reachable.
+| `!gc_check_collect`     | Triggers a garbage collection sweep and then checks that all allocated objects are reachable.
+| `!gc_collect`           | Triggers a garbage collection sweep.
 
-The semantics of this extended `bl:mp` language are documented in `test-semantics.rkt`, which extends the `bl:mp-machine` semantics from `docs/semantics.rkt` to interpret these two additional primitives.
+The semantics of this extended `bl:mp` language are documented in `test-semantics.rkt`, which extends the `bl:mp-machine` semantics from `docs/semantics.rkt` to interpret these additional primitives.
 
 ## test suites
 A `bl:mp` test suite is a hierarchical division of test files. The hierarchy has three levels:

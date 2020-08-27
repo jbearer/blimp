@@ -4,18 +4,29 @@
 # check that the union-find module (used in several actual GC tests) is working
 # the way it's supposed to.
 
-{import|.} union_find;
+import union_find;
 
-a{:=|{node|a}};
-a{.get|.}{.insert|.};
-b{:=|{node|b}};
-b{.get|.}{.insert|.};
-c{:=|{node|c}};
-c{.get|.}{.insert|.};
-a{.get|.}{.union|b{.get|.}};
+module {
+    a := (node[]);
+    b := (node[]);
+    c := (node[]);
 
-a{.get|.}{.equiv|b{.get|.}} {!expect_true|.};
-b{.get|.}{.equiv|a{.get|.}} {!expect_true|.};
-a{.get|.}{.equiv|c{.get|.}} {!expect_false|.};
+    # Test basic union.
+    union ($a) ($b);
+    !expect_eq (equiv ($a) ($b)) true;
+    !expect_eq (equiv ($b) ($a)) true;
+    !expect_eq (equiv ($a) ($c)) false;
 
-.
+
+    # Test path compression.
+    !expect_eq (find ($a) is ($b)) true;
+    union ($c) ($a);
+    !expect_eq (equiv ($c) ($a)) true;
+    !expect_eq (equiv ($c) ($b)) true;
+    !expect_eq (equiv ($a) ($b)) true;
+    !expect_eq (equiv (($a) get_parent) ($b));
+    !expect_eq (equiv (($c) get_parent) ($b));
+
+    .
+}
+

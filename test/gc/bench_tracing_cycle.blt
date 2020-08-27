@@ -2,53 +2,59 @@
 
 # Tests garbage collection of 10 element simple cycles (C10).
 
-bind node.set_next (
-    next{:=|that{.get|.}{.eval|.}}
-);
+import runtime;
 
-unit{:=|.};
+node{^
+    {
+        {^cell
+            {^next
+                ^cell {(^next)}
+            }
+        }(__cell[])
+    }
+};
 
-{!benchmark|n{:=|100000}; ops{:=|10}} {refcount_cycle_broken|
+!benchmark{n{^ 10000}; ops{^ 10}; refcount_cycle_broken} {
     # Create 10 nodes.
-    1{:=|{node|.}};
-    2{:=|{node|.}};
-    3{:=|{node|.}};
-    4{:=|{node|.}};
-    5{:=|{node|.}};
-    6{:=|{node|.}};
-    7{:=|{node|.}};
-    8{:=|{node|.}};
-    9{:=|{node|.}};
-    10{:=|{node|.}};
+    1 := (node[]);
+    2 := (node[]);
+    3 := (node[]);
+    4 := (node[]);
+    5 := (node[]);
+    6 := (node[]);
+    7 := (node[]);
+    8 := (node[]);
+    9 := (node[]);
+    10 := (node[]);
 
     # Link them into a cycle.
-    1{.get|.}{.set_next|2{.get|.}};
-    2{.get|.}{.set_next|3{.get|.}};
-    3{.get|.}{.set_next|4{.get|.}};
-    4{.get|.}{.set_next|5{.get|.}};
-    5{.get|.}{.set_next|6{.get|.}};
-    6{.get|.}{.set_next|7{.get|.}};
-    7{.get|.}{.set_next|8{.get|.}};
-    8{.get|.}{.set_next|9{.get|.}};
-    9{.get|.}{.set_next|10{.get|.}};
-    10{.get|.}{.set_next|1{.get|.}};
+    ($1) ($2);
+    ($2) ($3);
+    ($3) ($4);
+    ($4) ($5);
+    ($5) ($6);
+    ($6) ($7);
+    ($7) ($8);
+    ($8) ($9);
+    ($9) ($10);
+    ($10) ($1);
 
     # Leak the nodes.
-    1{:=|unit{.get|.}};
-    2{:=|unit{.get|.}};
-    3{:=|unit{.get|.}};
-    4{:=|unit{.get|.}};
-    5{:=|unit{.get|.}};
-    6{:=|unit{.get|.}};
-    7{:=|unit{.get|.}};
-    8{:=|unit{.get|.}};
-    9{:=|unit{.get|.}};
-    10{:=|unit{.get|.}};
+    1 := nil;
+    2 := nil;
+    3 := nil;
+    4 := nil;
+    5 := nil;
+    6 := nil;
+    7 := nil;
+    8 := nil;
+    9 := nil;
+    10 := nil;
 
     .
 };
 
-{gc|.}{!collect|.};
-{gc|.}{!print_stats|.};
-{gc|.}{!check_collect|.};
+!gc_collect;
+!gc_print_stats;
+!gc_check_collect;
 .

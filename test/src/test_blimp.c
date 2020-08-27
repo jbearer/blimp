@@ -1,13 +1,18 @@
+#include <assert.h>
 #include <math.h>
+#include <string.h>
 
 #include "options.h"
 #include "test_blimp.h"
 #include "timing.h"
 
-static inline void VoidReturn(Blimp *blimp, BlimpObject **result)
+#define MAX_ARGUMENTS 4
+
+static inline BlimpStatus VoidReturn(Blimp *blimp, BlimpObject **result)
 {
     BlimpObject_Borrow(Blimp_GlobalObject(blimp));
     *result = Blimp_GlobalObject(blimp);
+    return BLIMP_OK;
 }
 
 static inline bool ParseUIntSymbol(const BlimpSymbol *sym, size_t *result)
@@ -25,151 +30,107 @@ static inline BlimpStatus MakeUIntSymbol(
     return Blimp_GetSymbol(blimp, buf, sym);
 }
 
-static BlimpStatus Expect(
-    Blimp *blimp,
-    BlimpObject *scope,
-    BlimpObject *receiver,
-    BlimpObject *message,
-    void *data,
-    BlimpObject **result)
+static BlimpStatus ExpectEQ(
+    Blimp *blimp, Test *test, BlimpObject **args, BlimpObject **result)
 {
-    (void)scope;
-    (void)data;
+    (void)test;
 
-    const BlimpSymbol *rec_sym;
-    if (BlimpObject_ParseSymbol(receiver, &rec_sym) != BLIMP_OK) {
+    const BlimpSymbol *sym1;
+    if (BlimpObject_ParseSymbol(args[0], &sym1) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
 
-    BlimpObject *arg;
-    if (BlimpObject_Eval(message, &arg) != BLIMP_OK) {
+    const BlimpSymbol *sym2;
+    if (BlimpObject_ParseSymbol(args[1], &sym2) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
 
-    const BlimpSymbol *msg_sym;
-    if (BlimpObject_ParseSymbol(arg, &msg_sym) != BLIMP_OK) {
-        return Blimp_Reraise(blimp);
-    }
-
-    if (rec_sym != msg_sym) {
+    if (sym1 != sym2) {
         return Blimp_ErrorMsg(blimp, BLIMP_ERROR,
             "expected `%s' to match `%s'",
-            BlimpSymbol_GetName(rec_sym),
-            BlimpSymbol_GetName(msg_sym)
+            BlimpSymbol_GetName(sym1),
+            BlimpSymbol_GetName(sym2)
         );
     }
 
-    BlimpObject_Borrow(receiver);
-    *result = receiver;
-
-    return BLIMP_OK;
+    return VoidReturn(blimp, result);
 }
 
 static BlimpStatus ExpectLT(
-    Blimp *blimp,
-    BlimpObject *scope,
-    BlimpObject *receiver,
-    BlimpObject *message,
-    void *data,
-    BlimpObject **result)
+    Blimp *blimp, Test *test, BlimpObject **args, BlimpObject **result)
 {
-    (void)scope;
-    (void)data;
+    (void)test;
 
-    const BlimpSymbol *rec_sym;
-    if (BlimpObject_ParseSymbol(receiver, &rec_sym) != BLIMP_OK) {
+    const BlimpSymbol *sym1;
+    if (BlimpObject_ParseSymbol(args[0], &sym1) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
 
-    size_t rec;
-    if (!ParseUIntSymbol(rec_sym, &rec)) {
+    size_t val1;
+    if (!ParseUIntSymbol(sym1, &val1)) {
         return Blimp_ErrorMsg(blimp, BLIMP_ERROR,
-            "receiver of !expect_lt must be a numeric symbol (got `%s')",
-            BlimpSymbol_GetName(rec_sym));
+            "!expect_lt: argument 1 must be a numeric symbol (got `%s')",
+            BlimpSymbol_GetName(sym1));
     }
 
-    BlimpObject *arg;
-    if (BlimpObject_Eval(message, &arg) != BLIMP_OK) {
+    const BlimpSymbol *sym2;
+    if (BlimpObject_ParseSymbol(args[1], &sym2) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
 
-    const BlimpSymbol *msg_sym;
-    if (BlimpObject_ParseSymbol(arg, &msg_sym) != BLIMP_OK) {
-        return Blimp_Reraise(blimp);
-    }
-
-    size_t msg;
-    if (!ParseUIntSymbol(msg_sym, &msg)) {
+    size_t val2;
+    if (!ParseUIntSymbol(sym2, &val2)) {
         return Blimp_ErrorMsg(blimp, BLIMP_ERROR,
-            "body of !expect_lt must be a numeric symbol (got `%s')",
-            BlimpSymbol_GetName(msg_sym));
+            "!expect_lt: argument 2 must be a numeric symbol (got `%s')",
+            BlimpSymbol_GetName(sym2));
     }
 
-    if (rec >= msg) {
+    if (val1 >= val2) {
         return Blimp_ErrorMsg(blimp, BLIMP_ERROR,
-            "expected `%zu' to be less than `%zu'", rec, msg);
+            "expected `%zu' to be less than `%zu'", val1, val2);
     }
 
-    BlimpObject_Borrow(receiver);
-    *result = receiver;
-
-    return BLIMP_OK;
+    return VoidReturn(blimp, result);
 }
 
 static BlimpStatus ExpectPercent(
-    Blimp *blimp,
-    BlimpObject *scope,
-    BlimpObject *receiver,
-    BlimpObject *message,
-    void *data,
-    BlimpObject **result)
+    Blimp *blimp, Test *test, BlimpObject **args, BlimpObject **result)
 {
-    (void)scope;
-    (void)data;
-
-    const BlimpSymbol *rec_sym;
-    if (BlimpObject_ParseSymbol(receiver, &rec_sym) != BLIMP_OK) {
-        return Blimp_Reraise(blimp);
-    }
-
-    size_t actual;
-    if (!ParseUIntSymbol(rec_sym, &actual)) {
-        return Blimp_ErrorMsg(blimp, BLIMP_ERROR,
-            "receiver of !expect_percent must be a numeric symbol (got `%s')",
-            BlimpSymbol_GetName(rec_sym));
-    }
-
-    BlimpObject *arg;
-    if (BlimpObject_Eval(message, &arg) != BLIMP_OK) {
-        return Blimp_Reraise(blimp);
-    }
+    (void)test;
 
     const BlimpSymbol *percent_sym;
-    if (BlimpObject_ParseBlock(arg, &percent_sym, NULL) != BLIMP_OK) {
+    if (BlimpObject_ParseSymbol(args[0], &percent_sym) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
 
     size_t percent;
     if (!ParseUIntSymbol(percent_sym, &percent)) {
         return Blimp_ErrorMsg(blimp, BLIMP_ERROR,
-            "tag of !expect_percent body must be a numeric symbol (got `%s')",
+            "!expect_percent: argument 1 must be a numeric symbol (got `%s')",
             BlimpSymbol_GetName(percent_sym));
     }
 
-    BlimpObject *expected_obj;
-    if (BlimpObject_Eval(arg, &expected_obj) != BLIMP_OK) {
+    const BlimpSymbol *actual_sym;
+    if (BlimpObject_ParseSymbol(args[1], &actual_sym) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
 
+    size_t actual;
+    if (!ParseUIntSymbol(actual_sym, &actual)) {
+        return Blimp_ErrorMsg(blimp, BLIMP_ERROR,
+            "!expect_percent: argument 2 must be a numeric symbol (got `%s')",
+            BlimpSymbol_GetName(actual_sym));
+    }
+
     const BlimpSymbol *expected_sym;
-    if (BlimpObject_ParseSymbol(expected_obj, &expected_sym) != BLIMP_OK) {
+    if (BlimpObject_ParseSymbol(args[2], &expected_sym) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
 
     size_t expected;
     if (!ParseUIntSymbol(expected_sym, &expected)) {
         return Blimp_ErrorMsg(blimp, BLIMP_ERROR,
-            "body of !expect_percent body must be a numeric symbol (got `%s')",
+            "!expect_percent: argument 3 must be a numeric symbol (got `%s')",
             BlimpSymbol_GetName(expected_sym));
     }
 
@@ -180,30 +141,20 @@ static BlimpStatus ExpectPercent(
         );
     }
 
-    BlimpObject_Borrow(receiver);
-    *result = receiver;
-
-    return BLIMP_OK;
+    return VoidReturn(blimp, result);
 }
 
 static BlimpStatus ExpectError(
-    Blimp *blimp,
-    BlimpObject *scope,
-    BlimpObject *receiver,
-    BlimpObject *message,
-    void *data,
-    BlimpObject **result)
+    Blimp *blimp, Test *test, BlimpObject **args, BlimpObject **result)
 {
-    (void)scope;
-    (void)message;
-    (void)data;
+    (void)test;
 
-    if (BlimpObject_Eval(receiver, result) == BLIMP_OK) {
+    // Send the object a message (any message will do) to evaluate its body.
+    if (Blimp_Send(blimp, args[0], args[0], args[0], result) == BLIMP_OK) {
         return Blimp_ErrorMsg(blimp, BLIMP_ERROR, "expected error");
     }
 
-    VoidReturn(blimp, result);
-    return BLIMP_OK;
+    return VoidReturn(blimp, result);
 }
 
 static void FormatNS(float *time, const char **unit)
@@ -223,34 +174,24 @@ static void FormatNS(float *time, const char **unit)
 }
 
 static BlimpStatus Benchmark(
-    Blimp *blimp,
-    BlimpObject *scope,
-    BlimpObject *receiver,
-    BlimpObject *message,
-    void *data,
-    BlimpObject **result)
+    Blimp *blimp, Test *test, BlimpObject **args, BlimpObject **result)
 {
-    (void)scope;
-
-    const Test    *test    = data;
     const Options *options = &test->options;
 
     size_t iter;
     size_t ops;
     size_t warmup;
 
-    // Get the name of the benchmark.
+    // The first argument is a block which evaluates to the name of the
+    // benchmark. When evaluated, it also (optionally) sets some symbols to
+    // control various parameters (n, ops, warmup).
+    BlimpObject *params = args[0];
     const BlimpSymbol *name;
-    if (BlimpObject_ParseBlock(message, &name, NULL) != BLIMP_OK) {
+    if (Blimp_SendAndParseSymbol(
+            blimp, params, params, params, &name) != BLIMP_OK)
+    {
         return Blimp_Reraise(blimp);
     }
-
-    // Evaluate the receiver for the side effects of setting up the `n`, `ops`,
-    // and `warmup` member variables.
-    if (BlimpObject_Eval(receiver, result) != BLIMP_OK) {
-        return Blimp_Reraise(blimp);
-    }
-    BlimpObject_Release(*result);
 
     // Get the number of iterations to run.
     const BlimpSymbol *iter_key;
@@ -259,7 +200,7 @@ static BlimpStatus Benchmark(
     }
     BlimpObject *iter_obj;
     const BlimpSymbol *iter_sym;
-    if (BlimpObject_Get(receiver, iter_key, &iter_obj) != BLIMP_OK ||
+    if (BlimpObject_Get(params, iter_key, &iter_obj) != BLIMP_OK ||
         BlimpObject_ParseSymbol(iter_obj, &iter_sym) != BLIMP_OK ||
         !ParseUIntSymbol(iter_sym, &iter))
     {
@@ -268,7 +209,7 @@ static BlimpStatus Benchmark(
     }
 
     // Clean up our reference to `n`.
-    BlimpObject_Set(receiver, iter_key, receiver);
+    BlimpObject_Set(params, iter_key, params);
 
     // Get the number of operations per iteration.
     const BlimpSymbol *ops_key;
@@ -277,7 +218,7 @@ static BlimpStatus Benchmark(
     }
     BlimpObject *ops_obj;
     const BlimpSymbol *ops_sym;
-    if (BlimpObject_Get(receiver, ops_key, &ops_obj) != BLIMP_OK ||
+    if (BlimpObject_Get(params, ops_key, &ops_obj) != BLIMP_OK ||
         BlimpObject_ParseSymbol(ops_obj, &ops_sym) != BLIMP_OK ||
         !ParseUIntSymbol(ops_sym, &ops))
     {
@@ -286,7 +227,7 @@ static BlimpStatus Benchmark(
     }
 
     // Clean up our reference to `ops`.
-    BlimpObject_Set(receiver, ops_key, receiver);
+    BlimpObject_Set(params, ops_key, params);
 
     // Get the number of warmup iterations.
     const BlimpSymbol *warmup_key;
@@ -295,7 +236,7 @@ static BlimpStatus Benchmark(
     }
     BlimpObject *warmup_obj;
     const BlimpSymbol *warmup_sym;
-    if (BlimpObject_Get(receiver, warmup_key, &warmup_obj) != BLIMP_OK ||
+    if (BlimpObject_Get(params, warmup_key, &warmup_obj) != BLIMP_OK ||
         BlimpObject_ParseSymbol(warmup_obj, &warmup_sym) != BLIMP_OK ||
         !ParseUIntSymbol(warmup_sym, &warmup))
     {
@@ -304,11 +245,13 @@ static BlimpStatus Benchmark(
     }
 
     // Clean up our reference to `warmup`.
-    BlimpObject_Set(receiver, warmup_key, receiver);
+    BlimpObject_Set(params, warmup_key, params);
 
     // Do warmup
     for (size_t i = 0; i < warmup; ++i) {
-        if (BlimpObject_Eval(message, result) != BLIMP_OK) {
+        // Send a message (any message will do) to the benchmark block to
+        // evaluate its body.
+        if (Blimp_Send(blimp, args[1], args[1], args[1], result) != BLIMP_OK) {
             return Blimp_Reraise(blimp);
         }
         BlimpObject_Release(*result);
@@ -329,7 +272,7 @@ static BlimpStatus Benchmark(
     for (size_t i = 0; i < iter; ++i) {
         uint64_t start = RDTSC();
 
-        if (BlimpObject_Eval(message, result) != BLIMP_OK) {
+        if (Blimp_Send(blimp, args[1], args[1], args[1], result) != BLIMP_OK) {
             return Blimp_Reraise(blimp);
         }
 
@@ -386,15 +329,14 @@ static BlimpStatus Benchmark(
         printf("  Iterations: %zu\n", iter);
         printf("  Cycles/ns:  %.2f\n", cycles_per_ns);
         printf("  Operations: %zu\n", iter*ops);
-        printf("  Total time: %.3fs\n", (float)total/1000000000);
+        printf("  Total time: %.3fs\n", (float)total/cycles_per_ns/1000000000);
         printf("  Time/Op:    %.3f%s +- %.3f%s\n", avg_time, avg_unit, std_dev, std_dev_unit);
         printf("  Min:        %.3f%s\n", min_time, min_unit);
         printf("  Max:        %.3f%s\n", max_time, max_unit);
     }
 
 
-    VoidReturn(blimp, result);
-    return BLIMP_OK;
+    return VoidReturn(blimp, result);
 }
 
 void PrintPerfReportHeader(FILE *perf_report)
@@ -402,184 +344,91 @@ void PrintPerfReportHeader(FILE *perf_report)
     fprintf(perf_report, "group,test,benchmark,iterations,ops/iteration,cycles/ns,avg,min,max\n");
 }
 
-static BlimpStatus GC_Allocated(
-    Blimp *blimp,
-    BlimpObject *scope,
-    BlimpObject *receiver,
-    BlimpObject *message,
-    void *data,
-    BlimpObject **result)
-{
-    (void)receiver;
-    (void)message;
-    (void)data;
-
-    const BlimpSymbol *sym;
-    if (MakeUIntSymbol(blimp, Blimp_GetGCStatistics(blimp).allocated, &sym)
-            != BLIMP_OK)
-    {
-        return Blimp_Reraise(blimp);
-    }
-    return BlimpObject_NewSymbol(blimp, scope, sym, result);
-}
-
-static BlimpStatus GC_Reachable(
-    Blimp *blimp,
-    BlimpObject *scope,
-    BlimpObject *receiver,
-    BlimpObject *message,
-    void *data,
-    BlimpObject **result)
-{
-    (void)receiver;
-    (void)message;
-    (void)data;
-
-    const BlimpSymbol *sym;
-    if (MakeUIntSymbol(blimp, Blimp_GetGCStatistics(blimp).reachable, &sym)
-            != BLIMP_OK)
-    {
-        return Blimp_Reraise(blimp);
-    }
-    return BlimpObject_NewSymbol(blimp, scope, sym, result);
-}
-
 static BlimpStatus GC_Unreachable(
-    Blimp *blimp,
-    BlimpObject *scope,
-    BlimpObject *receiver,
-    BlimpObject *message,
-    void *data,
-    BlimpObject **result)
+    Blimp *blimp, Test *test, BlimpObject **args, BlimpObject **result)
 {
-    (void)receiver;
-    (void)message;
-    (void)data;
+    (void)test;
+    (void)args;
 
     BlimpGCStatistics stats = Blimp_GetGCStatistics(blimp);
     size_t unreachable = stats.allocated - stats.reachable;
 
     const BlimpSymbol *sym;
-    if (MakeUIntSymbol(blimp, unreachable, &sym)
-            != BLIMP_OK)
-    {
+    if (MakeUIntSymbol(blimp, unreachable, &sym) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
-    return BlimpObject_NewSymbol(blimp, scope, sym, result);
-}
-
-static BlimpStatus GC_HighWaterMark(
-    Blimp *blimp,
-    BlimpObject *scope,
-    BlimpObject *receiver,
-    BlimpObject *message,
-    void *data,
-    BlimpObject **result)
-{
-    (void)receiver;
-    (void)message;
-    (void)data;
-
-    const BlimpSymbol *sym;
-    if (MakeUIntSymbol(blimp, Blimp_GetGCStatistics(blimp).max_allocated, &sym)
-            != BLIMP_OK)
-    {
-        return Blimp_Reraise(blimp);
-    }
-    return BlimpObject_NewSymbol(blimp, scope, sym, result);
+    return BlimpObject_NewSymbol(
+        blimp, Blimp_GlobalObject(blimp), sym, result);
 }
 
 static BlimpStatus GC_ExpectClean(
-    Blimp *blimp,
-    BlimpObject *scope,
-    BlimpObject *receiver,
-    BlimpObject *message,
-    void *data,
-    BlimpObject **result)
+    Blimp *blimp, Test *test, BlimpObject **args, BlimpObject **result)
 {
-    (void)scope;
-    (void)receiver;
-    (void)message;
-    (void)data;
+    (void)test;
+    (void)args;
 
     BlimpGCStatistics stats = Blimp_GetGCStatistics(blimp);
 
     // All allocated objects should be reachable.
     if (stats.reachable != stats.allocated) {
+        if (test->options.verbosity >= VERB_DEBUG) {
+            // At the highest verbosity level, print a description of all the
+            // unreachable objects and the references between them.
+            Blimp_DumpUnreachable(stderr, blimp);
+        }
+
         return Blimp_ErrorMsg(blimp, BLIMP_ERROR,
             "expected a clean heap, but found %zu unreachable objects",
             stats.allocated - stats.reachable);
     }
 
-    VoidReturn(blimp, result);
-    return BLIMP_OK;
+    return VoidReturn(blimp, result);
 }
 
 static BlimpStatus GC_CheckCollect(
-    Blimp *blimp,
-    BlimpObject *scope,
-    BlimpObject *receiver,
-    BlimpObject *message,
-    void *data,
-    BlimpObject **result)
+    Blimp *blimp, Test *test, BlimpObject **args, BlimpObject **result)
 {
-    (void)scope;
-    (void)receiver;
-    (void)message;
-    (void)data;
+    (void)test;
+    (void)args;
 
     Blimp_CollectGarbage(blimp);
     BlimpGCStatistics stats = Blimp_GetGCStatistics(blimp);
 
     // All allocated objects should be reachable.
     if (stats.reachable != stats.allocated) {
+        if (test->options.verbosity >= VERB_DEBUG) {
+            // At the highest verbosity level, print a description of all the
+            // unreachable objects and the references between them.
+            Blimp_DumpUnreachable(stderr, blimp);
+        }
+
         return Blimp_ErrorMsg(blimp, BLIMP_ERROR,
             "expected a clean heap, but found %zu unreachable objects",
             stats.allocated - stats.reachable);
     }
 
-    VoidReturn(blimp, result);
-    return BLIMP_OK;
+    return VoidReturn(blimp, result);
 }
 
 static BlimpStatus GC_Collect(
-    Blimp *blimp,
-    BlimpObject *scope,
-    BlimpObject *receiver,
-    BlimpObject *message,
-    void *data,
-    BlimpObject **result)
+    Blimp *blimp, Test *test, BlimpObject **args, BlimpObject **result)
 {
-    (void)scope;
-    (void)receiver;
-    (void)message;
-    (void)data;
+    (void)test;
+    (void)args;
 
     Blimp_CollectGarbage(blimp);
-
-    VoidReturn(blimp, result);
-    return BLIMP_OK;
+    return VoidReturn(blimp, result);
 }
 
 static BlimpStatus GC_PrintStats(
-    Blimp *blimp,
-    BlimpObject *scope,
-    BlimpObject *receiver,
-    BlimpObject *message,
-    void *data,
-    BlimpObject **result)
+    Blimp *blimp, Test *test, BlimpObject **args, BlimpObject **result)
 {
-    (void)scope;
-    (void)receiver;
-    (void)message;
+    (void)args;
 
-    const Test    *test    = data;
     const Options *options = &test->options;
 
-    VoidReturn(blimp, result);
-
     if (options->verbosity < VERB_STATS) {
-        return BLIMP_OK;
+        return VoidReturn(blimp, result);
     }
 
     BlimpGCStatistics stats = Blimp_GetGCStatistics(blimp);
@@ -595,36 +444,189 @@ static BlimpStatus GC_PrintStats(
         printf("  clump min:       %zu\n", stats.min_clump);
     }
     printf("  # of collections: %zu\n", stats.collections);
-    return BLIMP_OK;
+
+    return VoidReturn(blimp, result);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// The TestBlimp object (bound to ! in the global scope).
+//
+// The TestBlimp is an object which receives method names (which must be
+// symbols) and returns TestBlimpMethodCall objects, which collect method
+// arguments one at a time in curried fashion until there are enough arguments
+// to call the appropriate method handler (one of the functions defined above).
+//
+
+typedef struct {
+    const char *name;
+    size_t nargs;
+    BlimpStatus(*run)(
+        Blimp *blimp, Test *test, BlimpObject **args, BlimpObject **result);
+} TestBlimpMethod;
+
+typedef struct {
+    Test *test;
+    const TestBlimpMethod *method;
+    size_t nargs;
+    BlimpObject *args[MAX_ARGUMENTS];
+} TestBlimpMethodCall;
+
+static BlimpStatus TestBlimpMethodCall_Receive(
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject *receiver,
+    BlimpObject *message,
+    BlimpObject **result)
+{
+    (void)scope;
+
+    TestBlimpMethodCall *call;
+    if (BlimpObject_ParseExtension(
+            receiver, NULL, (void **)&call) != BLIMP_OK)
+    {
+        return Blimp_Reraise(blimp);
+    }
+
+    assert(call->nargs < call->method->nargs);
+    assert(call->nargs < MAX_ARGUMENTS);
+
+    // Save the message as an argument, which we will later pass to the
+    // method handler.
+    BlimpObject_Borrow(message);
+    call->args[call->nargs++] = message;
+
+    if (call->nargs >= call->method->nargs) {
+        // If we have enough arguments to call the method, do that and return
+        // the result.
+        BlimpStatus status = call->method->run(
+            blimp, call->test, call->args, result);
+
+        // Once we have called the method, we can release our references to its
+        // arguments.
+        while (call->nargs > 0) {
+            BlimpObject_Release(call->args[--call->nargs]);
+        }
+
+        return status;
+    } else {
+        // Return this object so we can collect the next argument.
+        BlimpObject_Borrow(receiver);
+        *result = receiver;
+        return BLIMP_OK;
+    }
+}
+
+static BlimpStatus TestBlimpMethodCall_New(
+    Blimp *blimp,
+    Test *test,
+    const TestBlimpMethod *method,
+    BlimpObject **result)
+{
+    if (method->nargs == 0) {
+        // Just call the method immediately and return the result.
+        return method->run(blimp, test, NULL, result);
+    }
+
+    // Create an object which will collect arguments as we receive them in
+    // curried fashion.
+    TestBlimpMethodCall *call = malloc(sizeof(TestBlimpMethodCall));
+    if (call == NULL) {
+        return Blimp_Error(blimp, BLIMP_OUT_OF_MEMORY);
+    }
+    call->method = method;
+    call->test   = test;
+    call->nargs  = 0;
+
+    // Create a new extension object which will consume arguments until it has
+    // enough, and the call the method.
+    return BlimpObject_NewExtension(
+        blimp,
+        Blimp_GlobalObject(blimp),
+        call,
+        TestBlimpMethodCall_Receive,
+        free,
+        result);
+}
+
+static const TestBlimpMethod methods[] = {
+    {"expect_eq",           2,  ExpectEQ        },
+    {"expect_lt",           2,  ExpectLT        },
+    {"expect_percent",      3,  ExpectPercent   },
+    {"expect_error",        1,  ExpectError     },
+    {"benchmark",           2,  Benchmark       },
+    {"gc_unreachable",      0,  GC_Unreachable  },
+    {"gc_collect",          0,  GC_Collect      },
+    {"gc_expect_clean",     0,  GC_ExpectClean  },
+    {"gc_check_collect",    0,  GC_CheckCollect },
+    {"gc_print_stats",      0,  GC_PrintStats   },
+};
+
+static BlimpStatus TestBlimp_Receive(
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject *receiver,
+    BlimpObject *message,
+    BlimpObject **result)
+{
+    (void)scope;
+
+    Test *test;
+    if (BlimpObject_ParseExtension(receiver, NULL, (void **)&test)
+            != BLIMP_OK)
+    {
+        return Blimp_Reraise(blimp);
+    }
+
+    // The message is supposed to be the name of one of the methods defined in
+    // the table above.
+    const BlimpSymbol *method_name;
+    if (BlimpObject_ParseSymbol(message, &method_name) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    // Search for a method with a matching name.
+    for (size_t i = 0; i < sizeof(methods)/sizeof(methods[0]); ++i) {
+        if (strcmp(BlimpSymbol_GetName(method_name), methods[i].name) == 0) {
+            return TestBlimpMethodCall_New(blimp, test, &methods[i], result);
+        }
+    }
+
+    return Blimp_ErrorMsg(blimp, BLIMP_ERROR, "no such method !%s",
+        BlimpSymbol_GetName(method_name));
 }
 
 Blimp *TestBlimp_New(Test *test)
 {
     Blimp *blimp = Blimp_New(&test->options.blimp_options);
     if (blimp == NULL) {
-        return blimp;
+        return NULL;
     }
 
-    BlimpVTableFragment table = {
-        { "symbol", "!expect",          Expect,           test },
-        { "symbol", "!expect_lt",       ExpectLT,         test },
-        { "symbol", "!expect_percent",  ExpectPercent,    test },
-        { "_",      "!expect_error",    ExpectError,      test },
-        { "!benchmark","_",             Benchmark,        test },
-        { "gc",     "!allocated",       GC_Allocated,     test },
-        { "gc",     "!reachable",       GC_Reachable,     test },
-        { "gc",     "!unreachable",     GC_Unreachable,   test },
-        { "gc",     "!high_water_mark", GC_HighWaterMark, test },
-        { "gc",     "!collect",         GC_Collect,       test },
-        { "gc",     "!expect_clean",    GC_ExpectClean,   test },
-        { "gc",     "!check_collect",   GC_CheckCollect,  test },
-        { "gc",     "!print_stats",     GC_PrintStats,    test },
-        { 0, 0, 0, 0}
-    };
-    if (Blimp_BindVTableFragment(blimp, table) != BLIMP_OK) {
+    // Create the TestBlimp.
+    BlimpObject *obj;
+    if (BlimpObject_NewExtension(
+            blimp,
+            Blimp_GlobalObject(blimp),
+            test,
+            TestBlimp_Receive,
+            NULL,
+            &obj) != BLIMP_OK)
+    {
         Blimp_Delete(blimp);
         return NULL;
     }
+
+    // Bind the TestBlimp to the global symbol `!'.
+    const BlimpSymbol *bang;
+    if (Blimp_GetSymbol(blimp, "!", &bang) != BLIMP_OK) {
+        Blimp_Delete(blimp);
+        return NULL;
+    }
+    if (BlimpObject_Set(Blimp_GlobalObject(blimp), bang, obj) != BLIMP_OK) {
+        Blimp_Delete(blimp);
+        return NULL;
+    }
+    BlimpObject_Release(obj);
 
     return blimp;
 }

@@ -1,7 +1,7 @@
 #: --skip-racket
 
 # Benchmark for symbol creation. Each line in this program causes a new symbol
-# to be created in the symbol table.
+# object to be created.
 #
 # Copied from /usr/share/dict/words. Added ; after each line. Removed ', which
 # is not a valid middle-of-symbol character in bl:mp, and then resorted and
@@ -9,7 +9,7 @@
 # Removed words with non-ASCII letters (e.g. umlauts and accents). Removed
 # "bind", which is not a valid symbol.
 
-{!benchmark|n{:=|1}; ops{:=|80071}} {symbol_create|
+!benchmark{n{^ 1000}; ops{^ 80071}; symbol_create} {
     A;
     a;
     Aachen;

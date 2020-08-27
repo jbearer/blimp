@@ -1,0 +1,40 @@
+import runtime;
+
+global{^ (__cell[]) };
+
+# Create an object which is just a setter for `self`.
+global {
+    {^self
+        self {^ (^self)}
+    }
+};
+
+# Create a self-cycle.
+global{^} (global{^});
+
+# Leak the object
+global{.};
+
+!gc_print_stats;
+!gc_expect_clean;
+
+module {
+    obj{^ (__cell[]) };
+
+    # Create an object which is just a setter for `self`.
+    obj {
+        {^self
+            self {^ (^self)}
+        }
+    };
+
+    # Create a self-cycle.
+    obj{^} (obj{^});
+
+    # Leak the object
+    obj{.}
+};
+
+!gc_print_stats;
+!gc_expect_clean;
+.

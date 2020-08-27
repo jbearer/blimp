@@ -161,8 +161,8 @@ static void RunTest(Test *test)
     if (test->options.use_racket) {
         FILE *command = Racket_BeginCommand(test->racket);
         fprintf(command, "(judgment-holds (test-eval ");
-        Blimp_DumpExpr(command, expr);
-        fprintf(command, " M v))");
+        Blimp_DumpExpr(test->blimp, command, expr);
+        fprintf(command, " H v))");
         char *output = Racket_CommitCommand(
             test->racket,
             test->options.perf_factor*test->options.racket_timeout
@@ -771,7 +771,7 @@ static Suite *FindTests(const Options *options)
             char *line = NULL;
             size_t n = 0;
             ssize_t line_len = getline(&line, &n, group_options);
-            if (line != NULL) {
+            if (line != NULL && line_len > 0) {
                 // Strip the trailing newline.
                 if (line[line_len - 1] == '\n') {
                     line[line_len - 1] = '\0';
@@ -801,16 +801,15 @@ static Suite *FindTests(const Options *options)
                     &group->options,
                     NULL
                 );
-
-                // Normally, after calling wordexp, we would call wordfree to
-                // free the memory that wordexp allocated. In this case, though,
-                // we want that memory to persist, since the Options structure
-                // might contain pointers to strings allocated by wordexp.
-                //
-                // We can, however, get rid of the raw line that we read from
-                // file.
-                free(line);
             }
+
+            // Normally, after calling wordexp, we would call wordfree to free
+            // the memory that wordexp allocated. In this case, though, we want
+            // that memory to persist, since the Options structure might contain
+            // pointers to strings allocated by wordexp.
+            //
+            // We can, however, get rid of the raw line that we read from file.
+            free(line);
         }
 
         DIR *group_dir = fdopendir(group_dir_fd);

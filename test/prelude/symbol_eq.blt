@@ -1,5 +1,5 @@
-{import|.} std;
+import std;
 
-(x == y) {!expect|false};
-(x == x) {!expect|true};
+!expect_eq (x == y) false;
+!expect_eq (z == z) true;
 .

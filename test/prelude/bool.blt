@@ -1,13 +1,16 @@
-{import|.} std;
+import std;
 
-(true and true)   {!expect|true};
-(true and false)  {!expect|false};
-(false and true)  {!expect|false};
-(false and false) {!expect|false};
+!expect_eq (true and true)   true;
+!expect_eq (true and false)  false;
+!expect_eq (false and true)  false;
+!expect_eq (false and false) false;
 
-(true or true)    {!expect|true};
-(true or false)   {!expect|true};
-(false or true)   {!expect|true};
-(false or false)  {!expect|false};
+!expect_eq (true or true)    true;
+!expect_eq (true or false)   true;
+!expect_eq (false or true)   true;
+!expect_eq (false or false)  false;
+
+!expect_eq (true  if_true {a} {b}) a;
+!expect_eq (false if_true {a} {b}) b;
 
 .

@@ -6,8 +6,7 @@
 
     eval
     new-machine
-    steps-to
-    class-of)
+    steps-to)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; the semantics of bl:mp
@@ -17,28 +16,29 @@
 ; language (excluding the concrete syntax and parsing) together with the abstract machine that bl:mp
 ; programs run in, which includes a few pieces of state not represented syntactically in the
 ; language. We define semantics for low-level operations in the machine, such as heap loads and
-; stores and vtable lookups, and then we use those low-level operations to define `eval`: the
-; semantics for how the machine evaluates expressions to produce values.
+; stores, and then we use those low-level operations to define `eval`: the semantics for how the
+; machine evaluates expressions to produce values.
 ;
 ; The semantics here are expressed in Racket using the Redex DSL. If you're not familiar with Redex,
 ; they have very thorough documentation at docs.racket-lang.org/redex. While Redex provides rich
 ; facilities for capturing operational semantics, such as reduction relations for expressing
 ; small-step semantics, we make use of only two:
 ;  * metafunctions, for helper functions and small, pure, total functions on the machine state
-;  * judgment forms, for big step semantics There are two reasons for restricting ourselves to
-;    judgment forms instead of reduction relations: 1. I find big-step semantics easier to
-;    understand than small-step semantics. 2. Judgment forms, as they are implemented in Redex, are
-;    a very natural way to express partial functions: the domain a partial function represented by a
-;    judgment form is just the set of input parameters for which the judgment holds, and the
-;    codomain is the set of output parameters for all input parameters in the domain. Several
-;    operations in bl:mp are defined to cause the abstract machine to "fault". For example, sending
-;    a .get message to a symbol which does not exist in the active scope faults the machine. Such
-;    operations that might fail can be nicely expressed using judgment forms in this way.
+;  * judgment forms, for big step semantics
+; There are two reasons for restricting ourselves to judgment forms instead of reduction relations:
+;  1. I find big-step semantics easier to understand than small-step semantics.
+;  2. Judgment forms, as they are implemented in Redex, are a very natural way to express partial
+;     functions: the domain of a partial function represented by a judgment form is just the set of
+;     input parameters for which the judgment holds, and the codomain is the set of output
+;     parameters for all input parameters in the domain. Some operations in bl:mp are defined to
+;     cause the abstract machine to "fault". For example, looking up a symbol which does not exist
+;     in the active scope faults the machine. Such operations that might fail can be nicely
+;     expressed using judgment forms in this way.
 ;
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; a note on formality
 ;;
-; Above, I referred to this document as a "semi-formal" semantics for bl:mp. What I mean
+; Above, I referred to this document as a "semi-formal" semantics for bl:mp. What I mean by
 ; "semi-formal" is "formal, with a caveat", the caveat being that the semantics is interpreted by an
 ; untrusted DSL (Redex) running in an untrusted language (Racket). If we assume that both Redex and
 ; Racket are completely correct, then this is a completely formal semantics which totally specifies
@@ -83,55 +83,49 @@
 ;;
 
 (define-language bl:mp
-  (e x             ; Symbol literal
-     (block e e)   ; Block literal
-     (e e)         ; Send
-     (bind e e e)  ; Bind
-     (seq e e)     ; Sequence
-  )
+    (e ::= x             ; Symbol literal
+           (block x e)   ; Block literal
+           (e e)         ; Message send
+           (seq e e)     ; Sequence
+    )
 
-  (x variable-not-otherwise-mentioned)
+    (x ::= variable-not-otherwise-mentioned)
+
+    #:binding-forms
+    (block x e #:refers-to x)
 )
 
 (define-extended-language bl:mp-machine bl:mp
     ; The bl:mp-machine extension to the bl:mp language defines the abstract machine which executes
-    ; bl:mp programs. The machine execution state consists of two parts:
-    ;   1. The vtable, which maps (receiver class, message class) pairs to methods to execute when a
-    ;      message of the message class is sent to an objet of the receiver class. It is modified by
-    ;      executing `bind` expressions.
-    ;   2. The heap, which maps references to scopes. It is modified whenever an object is created
-    ;      (by executing a symbol or object literal) and whenever a scope is modified (see below).
+    ; bl:mp programs. The machine execution state consists of a heap, which is conceptually an
+    ; infinite map from references to scopes. It is modified whenever an object is created (by
+    ; executing a block literal) and whenever a scope is modified (see below).
     ;
     ; The job of the abstract machine is to evaluate a given expression, producing a value and a new
-    ; machine state. In order to be able to execute all expressions, the machine also defines three
-    ; additional instructions:
-    ;   1. primitive-get: evaluates to the value of the receiving symbol in the active scope
-    ;   2. primitive-set: sets the value of the receiving symbol in the active scope to the result
-    ;                     of evaluating the code expression of the message block
-    ;   3. primitive-eval: evaluates the code expression of the receiving block
-    ; These instructions are accessed like normal methods, via the vtable, which is initialized as
-    ; follows:
-    ;       receiver class      message class       expression
-    ;          symbol               .get           primitive-get
-    ;          symbol               .set           primitive-set
-    ;          _                    .eval          primitive-eval
-    ; They must be accessed via the vtable (as opposed to being statically resolved whenever we see
-    ; a send of the appropriate class) because, like all methods, they can be overridden by the user
-    ; (although that would probably be unwise).
+    ; machine state. In order to be able to execute all expressions, the machine defines an
+    ; additional expression non-terminal to represent the primitive behavior of initailizing an
+    ; uninitialized symbol by sending it a constructor. The (primitive-set r x e) expression is the
+    ; result of sending a message `e` to the reference parameter to a constructor for the symbol `x`
+    ; in the scope `r`.
+
+    (e ::= ....
+        (value v)
+        (primitive-set r x e))
 
     ; Values: the final result of evaluating a bl:mp expression.
-    (v (block x e r)        ; A block with class:x body:e reference-to-scope:r
-       (symbol x r))        ; A symbol object with symbol:x reference-to-scope:r
+    (v ::=
+        x               ; A symbol object
+        (obj r x e))    ; A block with reference-to-scope:r parameter:x body:e
 
     ; Scope: map from symbols to values.
     ;
     ; A scope is structured as a log, so the same symbol may have more than one mapping. The most
-    ; recent one is valid (that is, contains the value which will be returned by `get`). This makes
-    ; updaing a value easier, since we don't have to traverse the scope to do so.
+    ; recent one is authoritative. This makes updaing a value easier, since we don't have to
+    ; traverse the scope to do so.
     ;
     ; For example, (a -> 0 : (b -> 0 : (a -> 1 : ε)) is a valid scope, which represents
     ;   a -> 0
-    ;   b > 0
+    ;   b -> 0
     (S r                    ; Reference to parent scope
        ε                    ; Null parent scope (indicates that this scope is global)
        (x -> v : S))        ; A list consisting of one mapping and then a scope, recursively
@@ -147,23 +141,8 @@
     (H r (r -> S : H))
     (r number)              ; References are just numbers
 
-
-    ; VTable: map from (receiver, message) pairs to methods.
-    ;
-    ; Like scopes and the heap, the vtable is log-structured to make updates easy.
-    (V ∅ (x x -> m : V))
-
-    ; Methods: entries in the vtable.
-    ;
-    ; A method is either a primitive instruction or a user-defined expression which evaluates when
-    ; the method is called.
-    (m primitive-get        ; Primitive methods
-       primitive-set
-       primitive-eval
-       e)                   ; Any expression can also be a method.
-
-
-    (M (H V)) ; The integrated machine
+    #:binding-forms
+    (obj r x e #:refers-to x)
 )
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -172,34 +151,33 @@
 
 (define-judgment-form bl:mp-machine
     #:mode     (load I I O)
-    #:contract (load M r S)
-    ; (load M r S) succeeds if `S` is the scope referenced by `r` in the heap of the
-    ; machine state `M`.
+    #:contract (load H r S)
+    ; (load H r S) succeeds if `S` is the scope referenced by `r` in the heap `H`.
 
     ; Check if the first mapping in the heap log is a match.
     [
     -------------------------------
-      (load ((r -> S : H) V) r  S)
+      (load (r -> S : H) r  S)
     ]
 
     ; If the first mapping doesn't match, check subsequent mappings recursively.
     [ (side-condition (distinct r r_2))
-      (load (H V) r S)
+      (load H r S)
     ------------------------------
-      (load ((r_2 -> S_2 : H) V) r S)
+      (load (r_2 -> S_2 : H) r S)
     ]
 
 )
 
 (define-judgment-form bl:mp-machine
     #:mode     (store I I I O)
-    #:contract (store M r S M)
-    ; (store M_1 r S M_2) holds if `M_2` is the machine state obtained by storing `S`
-    ; into heap location `r` in machine state `M_1.
+    #:contract (store H r S H)
+    ; (store H_1 r S H_2) holds if `H_2` is the heap obtained by storing `S` into heap location `r`
+    ; in heap `H_1`.
 
     [
     -------------------------------------
-      (store (H V) r S ((r -> S : H) V))
+      (store H r S (r -> S : H))
     ]
 )
 
@@ -217,20 +195,21 @@
 
 (define-judgment-form bl:mp-machine
     #:mode     (new I I O O)
-    #:contract (new M S M r)
-    ; (new M_1 S M_2 r) holds if `M_2` is the machine state obtained by allocating a new reference
-    ; `r` in `M_1` and storing the scope `S` there.
+    #:contract (new H S H r)
+    ; (new H_1 S H_2 r) holds if `H_2` is the heap obtained by allocating a new reference `r` in
+    ; `H_1` and storing the scope `S` there.
 
     [ (where (H_2 r) (alloc H))
-      (store (H_2 V) r S M_3)
+      (store H_2 r S H_3)
     ----------------------------------------
-      (new (H V) S M_3 r)
+      (new H S H_3 r)
     ]
 )
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Scope operations
 ;;
+
 
 (define-judgment-form bl:mp-machine
     #:mode     (scope-lookup I I O)
@@ -275,133 +254,79 @@
 
 (define-judgment-form bl:mp-machine
     #:mode     (get I I I O)
-    #:contract (get M r x v)
-    ; (get M r x v) holds if `v` is the current value of `x` in the scope pointed to by the
-    ; reference `r` in the machine state `M`.
+    #:contract (get H r x v)
+    ; (get H r x v) holds if `v` is the current value of `x` in the scope pointed to by the
+    ; reference `r` in the heap `H`.
     ;
     ; If the symbol `x` is not found in the scope referred to by `r`, but `r` has a parent scope,
     ; this mechanism will recursively try to `get` the value of `x` from the parent scope. If `x` is
     ; not found in the scope `r` or any of its parents, the machine faults.
 
     ; Try looking up `x` in the current scope.
-    [ (load M r S)
+    [ (load H r S)
       (scope-lookup S x v)
     -----------------------
-      (get M r x v)
+      (get H r x v)
     ]
 
     ; If that fails, get the parent of the current scope and get the value of `x` from there.
-    [ (load M r S)
+    [ (load H r S)
       (scope-parent S r_parent)
-      (get M r_parent x v)
+      (get H r_parent x v)
     -----------------------
-      (get M r x v)
+      (get H r x v)
     ]
 )
 
 (define-judgment-form bl:mp-machine
+    #:mode     (can-get I I I)
+    #:contract (can-get H r x)
+
+    [ (get H r x v)
+    -------------------
+      (can-get H r x)
+    ]
+)
+
+(define-metafunction bl:mp-machine
+    in-scope : H r x -> boolean
+
+    [(in-scope H r x) ,(judgment-holds (can-get H r x))]
+)
+
+(define-judgment-form bl:mp-machine
     #:mode     (set I I I I O)
-    #:contract (set M r x v M)
-    ; (set M_1 r x v M_2) holds if `M_2` is the machine state obtained by setting the value of `x`
-    ; to `v` in the scope referred to by `r` in the initial machine state `M_1`.
+    #:contract (set H r x v H)
+    ; (set H_1 r x v H_2) holds if `H_2` is the heap obtained by setting the value of `x` to `v` in
+    ; the scope referred to by `r` in the initial heap `H_1`.
     ;
     ; If `x` exists in the current scope or any parent of the current scope, it's value will be set
     ; in the scope closest to the current scope where it exists. If `x` does not exist in any scope,
     ; it will be added to the current scope and it's value will be set there.
 
     ; If the symbol exists in this scope, update it in this scope.
-    [ (load M r S)
+    [ (load H r S)
       (scope-lookup S x v_old)
-      (store M r (x -> v : S) M_2)
+      (store H r (x -> v : S) H_2)
     ----------------------------
-      (set M r x v M_2)
+      (set H r x v H_2)
     ]
 
     ; If it exists in a parent scope, store it there.
-    [ (load M r S)
+    [ (load H r S)
       (scope-parent S r_parent)
-      (get M r_parent x v_old)
-      (set M r_parent x v M_2)
+      (side-condition (in-scope H r_parent x))
+      (set H r_parent x v H_2)
     ---------------------------
-      (set M r x v M_2)
+      (set H r x v H_2)
     ]
 
     ; Otherwise, add it to the current scope.
-    [ (load M r S)
-      (store M r (x -> v : S) M_2)
+    [ (side-condition (¬ (in-scope H r x)))
+      (load H r S)
+      (store H r (x -> v : S) H_2)
     -------------------------------
-      (set M r x v M_2)
-    ]
-)
-
-(define-metafunction bl:mp-machine
-    value-scope : v -> r
-    ; Get a reference to the scope associated with a value.
-    [(value-scope (symbol x r))  r]
-    [(value-scope (block x e r)) r]
-)
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Vtable operations
-;;
-
-(define-metafunction bl:mp-machine
-    bind-method : M x x m -> M
-    ; Update the machine state `M` to store a new method binding `m` associated with the given
-    ; receiver and message symbols. The result is the new machine state.
-    [(bind-method (H V) x_rcv x_msg m) (H (x_rcv x_msg -> m : V))]
-)
-
-(define-metafunction bl:mp-machine
-    class-of : v -> x
-    ; Get the symbol for the class of a value. For symbols, this is always `symbol`. For blocks, it
-    ; is the tag of the block.
-    [(class-of (symbol x r)) |{symbol}|]
-    [(class-of (block x e r)) x]
-)
-
-(define-metafunction bl:mp-machine
-    ; Check if the symbol pair (receiver class, message class) exists in the given vtable.
-    [(vtable-contains (x_rcv  x_msg  -> m : V) x_rcv x_msg) #t]
-    [(vtable-contains (x_rcv2 x_msg2 -> m : V) x_rcv x_msg) (vtable-contains V x_rcv x_msg)]
-    [(vtable-contains ∅                        x_rcv x_msg) #f]
-)
-
-(define-judgment-form bl:mp-machine
-    #:mode     (resolves-to I I I O)
-    #:contract (resolves-to M x x m)
-    ; (resolves-to M x_rcv x_msg m) holds if `m` is the method that should be evaluate when a
-    ; message of class `x_msg` is sent to a receiver of class `x_rcv`.
-
-    ; Check the first mapping in the vtable.
-    [
-    ---------------------------------------------------------
-      (resolves-to (H (x_rcv x_msg -> m : V)) x_rcv x_msg m)
-    ]
-
-    ; Check remaining mappings recursively.
-    [ (resolves-to (H V) x_rcv x_msg m)
-      (side-condition (distinct (x_rcv x_msg) (x_rcv2 x_msg2)))
-    -------------------------------------------------------------
-      (resolves-to (H (x_rcv2 x_msg2 -> m_2 : V)) x_rcv x_msg m)
-    ]
-
-    ; If we didn't find (x_rcv, x_msg), look for (x_rcv, _) to check if the receiver has a fall-
-    ; through handler to process messages dynamically.
-    [ (side-condition (distinct x_msg |{{-}}|))
-      (side-condition (¬(vtable-contains V x_rcv x_msg)))
-      (resolves-to (H V) x_rcv |{{-}}| m)
-    ----------------------------------------------------------
-      (resolves-to (H V) x_rcv x_msg m)
-    ]
-
-    ; If that failed, look for (_, x_msg) to see if there is a global handler for this message.
-    [ (side-condition (distinct x_rcv |{{-}}|))
-      (side-condition (¬(vtable-contains V x_rcv x_msg)))
-      (side-condition (¬(vtable-contains V x_rcv |{{-}}|)))
-      (resolves-to (H V) |{{-}}| x_msg m)
-    ----------------------------------------------------------
-      (resolves-to (H V) x_rcv x_msg m)
+      (set H r x v H_2)
     ]
 )
 
@@ -411,138 +336,100 @@
 
 (define-judgment-form bl:mp-machine
     #:mode     (steps-to I I I O O)
-    #:contract (steps-to M r e M v)
-    ; (steps-to M_1 r e M_2 v) holds if `e` evaluates to `v` in the scope `r` given initial machine
-    ; state `M_1`, and the new state is `M_2`.
+    #:contract (steps-to H r e H v)
+    ; (steps-to H_1 r e H_2 v) holds if `e` evaluates to `v` in the scope `r` given initial heap
+    ; `H_1`, and the new heap is `H_2`.
 
-    ; A symbol is a primitive: just allocate a new object with the given symbol.
+    ; A symbol is a primitive: just create a new symbol object.
     [
-      (new M_1 r_parent M_2 r_scope)
     -----------------------------------------------------
-      (steps-to M_1 r_parent x M_2 (symbol x r_scope))
+      (steps-to H r x H x)
     ]
 
-    ; A block steps by evaluating its class tag, which must evaluate to a symbol. We do not evaluate
-    ; the expression in the body of the block; that will only be evaluated when the block receives a
-    ; `.eval` message.
-    [ (steps-to M_1 r_parent e_cls                   M_2 (symbol x_cls r_cls))
-      (new M_2 r_parent M_3 r_scope)
+    ; To evaluate a block, allocate a scope for it and return a new object.
+    [ (new H_1 r_parent                         H_2 r_scope)
     --------------------------------------------------------------------------
-      (steps-to M_1 r_parent (block e_cls e_bod)     M_3 (block x_cls e_bod r_scope))
+      (steps-to H_1 r_parent (block x e)    H_2 (obj r_scope x e))
     ]
 
-    ; To evaluate a message send,
-    [ (steps-to M_1 r e_rcv M_2 v_rcv)
+    ; To evaluate a message sent to an object,
+    [ (steps-to H_1 r e_rcv H_2 (obj r_scope x e))
             ; first evaluate the receier
-      (steps-to M_2 r e_msg M_3 v_msg)
+      (steps-to H_2 r e_msg H_3 v_msg)
             ; and then the message
-      (resolves-to M_3 (class-of v_rcv) (class-of v_msg) e_bod)
-            ; then look up the method in the vtable. It must exist, otherwise the overall judgment
-            ; does not hold, and the abstract machine faults. If it does exist, and we get back the
-            ; expression `e_bod`, then the evaluation of the overal send is the evaluation of
-            ; `e_bod` in the scope of `v_rcv`.
-      (set M_3 (value-scope v_rcv) |{this}| v_rcv M_4)
-      (set M_4 (value-scope v_rcv) |{that}| v_msg M_5)
-            ; Store the receiver object in `this` and the message in `that` so that the method can
-            ; access them.
-      (steps-to M_5 (value-scope v_rcv) e_bod M_6 v_bod)
+      (steps-to H_3 r_scope (substitute e x (value v_msg)) H_4 v_result)
             ; Evaluate the body.
     -------------------------------------------------------------------------
-      (steps-to M_1 r (e_rcv e_msg) M_6 v_bod)
+      (steps-to H_1 r (e_rcv e_msg) H_4 v_result)
     ]
 
-    ; Handle primitive-get.
-    [ (steps-to M_1 r e_rcv M_2 (symbol x_rcv r_rcv))
-            ; The receiver must evaluate to a symbol.
-      (steps-to M_2 r e_msg M_3 v_msg)
-      (resolves-to M_3 |{symbol}| (class-of v_msg) primitive-get)
-      (get M_3 r x_rcv v)
-            ; Look up the symbol in the active scope.
+    ; To evaluate a message sent to a symbol which is in scope,
+    [ (steps-to H_1 r e_rcv H_2 x)
+            ; first evaluate the receiver
+      (get H_2 r x v)
+            ; get the symbol's value
+      (steps-to H_2 r ((value v) e_msg) H_3 v_result)
+            ; and then send the message to that value
     -------------------------------------------------------------------------
-      (steps-to M_1 r (e_rcv e_msg) M_3 v)
+      (steps-to H_1 r (e_rcv e_msg) H_3 v_result)
     ]
 
-    ; Handle primitive-set.
-    [ (steps-to M_1 r e_rcv M_2 (symbol x_rcv r_rcv))
-            ; The receiver must evalute to a symbol.
-      (steps-to M_2 r e_msg M_3 (block x_msg e_bod r_msg))
-            ; The message must have a body.
-      (resolves-to M_3 |{symbol}| x_msg primitive-set)
-
-      (steps-to M_3 r_msg e_bod M_4 v_bod)
-            ; Evaluate the body of the message to find the new value of the symbol. We evaluate the
-            ; body in the context of the message, as if we were sending .eval to the message.
-      (set M_4 r x_rcv v_bod M_5)
-            ; Set the new value.
+    ; To evaluate a message sent to a symbol which is not in scope,
+    [ (steps-to H_1 r e_rcv H_2 x)
+            ; first evaluate the receier
+      (side-condition (¬ (in-scope H_2 r x)))
+            ; check that the symbol does not exist
+      (steps-to H_2 r (e_msg (block freshvar (primitive-set r x freshvar))) H_3 v_result)
+            ; create a reference which can be used to set the value of the symbol, and pass it to
+            ; the message, which will act as a constructor for the symbol
     -------------------------------------------------------------------------
-      (steps-to M_1 r (e_rcv e_msg) M_5 v_bod)
-            ; By convention, the result of a set expression is the value to which we set the symbol.
+      (steps-to H_1 r (e_rcv e_msg) H_3 v_result)
     ]
 
-    ; Handle primitive-eval
-    [ (steps-to M_1 r e_rcv M_2 (block x_rcv e_bod r_rcv))
-            ; The receiver must evalute to a block.
-      (steps-to M_2 r e_msg M_3 v_msg)
-      (resolves-to M_3 x_rcv (class-of v_msg) primitive-eval)
-
-      (steps-to M_3 r_rcv e_bod M_4 v_bod)
-            ; Evaluate the body in the scope of the receiver.
-    ------------------------------------------------------------
-      (steps-to M_1 r (e_rcv e_msg) M_4 v_bod)
+    [
+    ----------------------------------
+      (steps-to H r (value v) H v)
     ]
 
-    ; To evaluate a bind,
-    [ (steps-to M_1 r e_rcv                       M_2 v_rcv)
-      (where (symbol x_rcv r_rcv) v_rcv)
-            ; first evaluate the receiver class (it must evaluate to a symbol)
-      (steps-to M_2 r e_msg                       M_3 (symbol x_msg r_msg))
-            ; then evaluate the message class (it must evaluate to a symbol)
-     ; We do not evaluate the expression being bound; it will be evaluated each time the method is
-     ; called (see the evaluation rule for `send` above).
-    ---------------------------------------------------------------------------------------
-      (steps-to M_1 r (bind e_rcv e_msg e_bod)    (bind-method M_3 x_rcv x_msg e_bod) v_rcv)
-                                                    ; Insert the new mapping into the vtable
+    [
+      (set H_1 r_capture x v H_2)
+    ------------------------------------------------------------------
+      (steps-to H_1 r (primitive-set r_capture x (value v)) H_2 x)
     ]
 
     ; A `seq` evaluates the first expression only for its effects on the environment, and then
     ; evaluates the second expression for its result.
-    [ (steps-to M_1 r e_1                   M_2 v_1 )
-      (steps-to M_2 r e_2                   M_3 v_2 )
+    [ (steps-to H_1 r e_1                   H_2 v_1 )
+      (steps-to H_2 r e_2                   H_3 v_2 )
     ----------------------------------------------------------
-      (steps-to M_1 r (seq e_1 e_2)         M_3 v_2 )
+      (steps-to H_1 r (seq e_1 e_2)         H_3 v_2 )
     ]
 )
 
 (define-judgment-form bl:mp-machine
     #:mode     (new-machine O O)
-    #:contract (new-machine M r)
+    #:contract (new-machine H r)
 
-    [ ;; Initialize the vtable
-      (where V ( |{symbol}|     |{.get}|  -> primitive-get
-               :(|{symbol}|     |{:=}|    -> primitive-set
-               :(|{{-}}|        |{.eval}| -> primitive-eval
-               : ∅
-               ))))
-
+    [
       ;; Initialize the heap containing the global scope
-      (new (0 V) ε M r_global)
+      (new 0 ε H r_global)
     -----------------------------------------------------
-      (new-machine M r_global)
+      (new-machine H r_global)
     ]
 )
 
 (define-judgment-form bl:mp-machine
     #:mode     (eval I O O)
-    #:contract (eval e M v)
-    ; (eval e M v) holds if `e` evaluates to `v` in the global scope with the default machine state,
-    ; and the resulting machine state is `M`.
+    #:contract (eval e H v)
+    ; (eval e H v) holds if `e` evaluates to `v` in the global scope with an empty eap, and the
+    ; resulting Heap is `H`.
     ;
     ; This is the top-level entrypoint for evaluating complete bl:mp programs.
 
-    [ (new-machine M r_global)
-      (steps-to M r_global e M_2 v)
+    [ (new-machine H r_global)
+      (steps-to H r_global e H_2 v)
     ----------------------------------
-      (eval e M_2 v)
+      (eval e H_2 v)
     ]
 
 )

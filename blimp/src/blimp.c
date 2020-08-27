@@ -13,7 +13,7 @@
 #include "options.h"
 
 #define VERSION_MAJOR 0
-#define VERSION_MINOR 1
+#define VERSION_MINOR 2
 #define VERSION_PATCH 0
 
 static void PrintVersion(FILE *f)
@@ -81,7 +81,7 @@ static bool DoAction(Blimp *blimp, const BlimpExpr *expr, Action action)
         }
 
         case ACTION_DUMP: {
-            Blimp_DumpExpr(stdout, expr);
+            Blimp_DumpExpr(blimp, stdout, expr);
             putchar('\n');
             return true;
         }
@@ -271,7 +271,7 @@ int main(int argc, char *const *argv)
     DefaultOptions(&options);
 
     int option, i = 1;
-    while ((option = getopt_long(argc, argv, "f:hv", flags, &i)) != -1) {
+    while ((option = getopt_long(argc, argv, "f:I:a:hv", flags, &i)) != -1) {
         switch (option) {
             case FLAG_BLIMP_OPTION: {
                 const char *error = Blimp_ParseOption(

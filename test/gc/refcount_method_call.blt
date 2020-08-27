@@ -1,13 +1,7 @@
 #: --skip-racket -fno-gc-cycle-detection -fno-gc-tracing
 
-unit{:=|.};
+{.}{.};
 
-bind foo bar (
-    that{:=|unit{.get|.}}
-);
-
-{foo|.}{bar|.};
-
-{gc|.}{!expect_clean|.};
+!gc_expect_clean;
 
 .

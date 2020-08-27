@@ -5,20 +5,20 @@
 // bl:mp expression grammar:
 //
 //  <expr> ::= <symbol>
-//          |  '{' <expr> '|' <expr> '}'
+//          |  '{' ('^' <symbol>)? <expr> '}'
+//          | '^' <symbol>?
 //          | <expr> <expr>
-//          | 'bind' <expr> <expr> <expr>
 //          |  <expr> ';' <expr>
 //
-//  <symbol> ::= <operator-char>+<identifier-char>*
-//            |  <operator-char>*<identifier-char>+
+//  <symbol> ::= <operator-char>+
+//            |  <identifier-char>+
 //            |  '`' .* '`'
 //
 // This grammar is a fully adequate description of the bl:mp AST, in that any
 // valid bl:mp parse tree is produced by this grammar. However, the grammar as
 // given is not a sufficient description of the bl:mp concrete syntax, because
 // it is ambiguous: the associativity and precedence of the operators such as
-// "sequence" (;), "bind", and "send" (<expr> <expr>) are not specified.
+// "sequence" (;)  and "send" (<expr> <expr>) are not specified.
 //
 // To make the grammar unambiguous, this implementation adds two additional
 // non-terminals: `term`, which represents "atomic" expressions (e.g. literals
@@ -33,12 +33,12 @@
 //          |  <term>
 //
 //  <term> ::= <symbol>
-//          |  '{' <expr> '|' <expr> '}'
+//          |  '{' ('^' <symbol>)? <expr> '}'
+//          | '^' <symbol>?
 //          |  '(' <expr> ')'
-//          | 'bind' <term> <term> <term>
 //
 // With this extended grammar, it is possible to see that:
-//  * Precedence order is "bind", "send", "sequence"
+//  * Precedence order is "^", "send", "sequence"
 //  * Send is left-associative. This is required by bl:mp semantics.
 //  * Sequence is left-associative. This is arbitrary, as ; is semantically
 //    associativity. Left-associativity is easier to parse in an iterative way.
@@ -75,6 +75,16 @@
 // list (via the `next` field on the `Expr` datatype) which makes them a bit
 // easier to process without blowing up the stack.
 //
+// The parser's responsibilities also include resolving references to message
+// names (^name) to DeBruijn indices; that is, the parser must convert {^a {^b
+// ^a } } to {{1}}. To that end, we maintain a DeBruijnMap of the message names
+// which are in scope. A new name is pushed into the map whenever we enter a
+// block where the name is bound, and popped when we leave the block. This map
+// can be searched whenever we encounter a reference to a name to determine (1)
+// whether the name is in scope (otherwise it is a parse error) and (2) how many
+// nested scopes are between the binding of the name and the use (that is, the
+// DeBruijn index of the reference).
+//
 
 #include <assert.h>
 #include <ctype.h>
@@ -84,6 +94,7 @@
 #include <unistd.h>
 
 #include "internal/blimp.h"
+#include "internal/debruijn.h"
 #include "internal/error.h"
 #include "internal/expr.h"
 
@@ -296,13 +307,12 @@ static void Stream_Delete(Stream *stream)
 //
 
 typedef enum {
-    TOK_BIND,
     TOK_LBRACE,
     TOK_RBRACE,
     TOK_LPAREN,
     TOK_RPAREN,
-    TOK_PIPE,
     TOK_SEMI,
+    TOK_MSG_NAME,
     TOK_SYMBOL,
     TOK_EOF,
     TOK_INVALID,
@@ -318,6 +328,10 @@ typedef struct {
     Blimp *blimp;
     Stream *input;
     Token peek;
+    DeBruijnMap scopes;
+        // Stack of message names which are currently in scope.
+    size_t counter;
+        // Monotonic counter used for generating fresh names.
 } Lexer;
 
 static bool IsOperatorChar(int c)
@@ -328,7 +342,6 @@ static bool IsOperatorChar(int c)
         case '@':
         case '$':
         case '%':
-        case '^':
         case '&':
         case '*':
         case '-':
@@ -337,6 +350,7 @@ static bool IsOperatorChar(int c)
         case '[':
         case ']':
         case '\\':
+        case '|':
         case ':':
         case '\'':
         case '"':
@@ -363,16 +377,15 @@ static bool IsIdentifierChar(int c)
 static const char *StringOfTokenType(TokenType t)
 {
     switch (t) {
-        case TOK_BIND:   return "`bind'";
-        case TOK_LBRACE: return "`{'";
-        case TOK_RBRACE: return "`}'";
-        case TOK_LPAREN: return "`('";
-        case TOK_RPAREN: return "`)'";
-        case TOK_PIPE:   return "`|'";
-        case TOK_SEMI:   return "`;'";
-        case TOK_SYMBOL: return "symbol";
-        case TOK_EOF:    return "end of input";
-        default:         return "invalid token";
+        case TOK_LBRACE:    return "`{'";
+        case TOK_RBRACE:    return "`}'";
+        case TOK_LPAREN:    return "`('";
+        case TOK_RPAREN:    return "`)'";
+        case TOK_SEMI:      return "`;'";
+        case TOK_MSG_NAME:  return "^symbol";
+        case TOK_SYMBOL:    return "symbol";
+        case TOK_EOF:       return "end of input";
+        default:            return "invalid token";
     }
 }
 
@@ -381,6 +394,13 @@ static void Lexer_Init(Lexer *lex, Blimp *blimp, Stream *input)
     lex->blimp = blimp;
     lex->input = input;
     lex->peek.type = TOK_INVALID;
+    lex->counter = 0;
+    DBMap_Init(blimp, &lex->scopes);
+}
+
+static void Lexer_Destroy(Lexer *lex)
+{
+    DBMap_Destroy(&lex->scopes);
 }
 
 static Status Lexer_Peek(Lexer *lex, Token *tok)
@@ -393,8 +413,8 @@ static Status Lexer_Peek(Lexer *lex, Token *tok)
 
     // No peeked token available, read a new token from the stream.
     int c;
-    char *sym_name;
-    size_t sym_length = 0, sym_capacity = 8;
+    char *sym_name = NULL;
+    size_t sym_length = 0, sym_capacity = 0;
 
     tok->symbol = NULL;
 
@@ -408,22 +428,19 @@ static Status Lexer_Peek(Lexer *lex, Token *tok)
     switch (c) {
         case '{':
             tok->type = TOK_LBRACE;
-            goto success;
+            break;
         case '}':
             tok->type = TOK_RBRACE;
-            goto success;
+            break;
         case '(':
             tok->type = TOK_LPAREN;
-            goto success;
+            break;
         case ')':
             tok->type = TOK_RPAREN;
-            goto success;
-        case '|':
-            tok->type = TOK_PIPE;
-            goto success;
+            break;
         case ';':
             tok->type = TOK_SEMI;
-            goto success;
+            break;
         case '#':
             // # starts a line comment, which should be treated as whitespace
             // and skipped by the lexer. To accomplish this, we will consume
@@ -436,19 +453,58 @@ static Status Lexer_Peek(Lexer *lex, Token *tok)
                 // If the comment terminated with EOF rather than a newline,
                 // than we actually do produce a token here:
                 tok->type = TOK_EOF;
-                goto success;
+                break;
             }
 
             // Otherwise, recursively peek the next non-whitespace token.
             return Lexer_Peek(lex, tok);
         case EOF:
             tok->type = TOK_EOF;
-            goto success;
+            break;
+        case '^':
+            tok->type = TOK_MSG_NAME;
+
+            while (true) {
+                TRY(Stream_Peek(lex->input, &c));
+                    // We have to peek before consuming the character, because,
+                    // since ^ on its own is a valid token, we are not
+                    // definitely going to consume a character here. We only
+                    // want to consume it if it is part of a message name, which
+                    // is restricted to operator characters.
+                if (!IsIdentifierChar(c)) break;
+
+                // Now we know we're taking this character. Push the token
+                // source range one character farther and then consume the
+                // character from the stream.
+                tok->range.end = Stream_Location(lex->input);
+                Stream_Consume(lex->input, c);
+
+                if (sym_length >= sym_capacity) {
+                    sym_capacity = 2*sym_capacity + 1;
+                    TRY(Realloc(lex->blimp, sym_capacity, &sym_name));
+                }
+                sym_name[sym_length++] = c;
+            }
+
+            if (sym_length) {
+                // Append a null terminator.
+                if (sym_length >= sym_capacity) {
+                    TRY(Realloc(lex->blimp, sym_length + 1, &sym_name));
+                }
+                sym_name[sym_length++] = '\0';
+
+                // Create the symbol.
+                TRY(Blimp_GetSymbol(lex->blimp, sym_name, &tok->symbol));
+                assert(tok->symbol);
+                Free(lex->blimp, &sym_name);
+            } else {
+                tok->symbol = NULL;
+            }
+
+            break;
         case '`':
             // ` starts an escaped symbol literal. We will consume all non-`
             // characters until we get to another `.
-            TRY(Malloc(lex->blimp, sym_capacity, &sym_name));
-
             while (true) {
                 TRY(Stream_Next(lex->input, &c));
                 if (c == '`') {
@@ -463,7 +519,7 @@ static Status Lexer_Peek(Lexer *lex, Token *tok)
                 }
 
                 if (sym_length >= sym_capacity) {
-                    sym_capacity *= 2;
+                    sym_capacity = 2*sym_capacity + 1;
                     TRY(Realloc(lex->blimp, sym_capacity, &sym_name));
                 }
                 sym_name[sym_length++] = c;
@@ -481,87 +537,64 @@ static Status Lexer_Peek(Lexer *lex, Token *tok)
             assert(tok->symbol);
 
             Free(lex->blimp, &sym_name);
-            goto success;
+            break;
 
-        default:
-            // Any other character must be the start of a symbol or keyword. We
-            // will build up a string containing the text of the token, and then
-            // check if that string is a keyword (the only one is `bind`) or a
-            // symbol.
+        default: {
+            // Any other character must be part of a symbol (or it is invalid).
+            // Determine whether this symbols is an operator or an identifier.
+            bool(*predicate)(int);
+            if (IsOperatorChar(c)) {
+                predicate = IsOperatorChar;
+            } else if (IsIdentifierChar(c)) {
+                predicate = IsIdentifierChar;
+            } else {
+                // Invalid character.
+                return ErrorAt(lex->blimp, Stream_Location(lex->input),
+                    BLIMP_INVALID_CHARACTER,
+                    "invalid character in symbol: %c", c);
+            }
+
+            sym_capacity = 8;
             TRY(Malloc(lex->blimp, sym_capacity, &sym_name));
             sym_name[sym_length++] = c;
-    }
 
-    // We're lexing a symbol. A bl:mp symbol consists of any number of operator
-    // characters followed by any number of identifier characters.
-    if (IsOperatorChar(c)) {
-        // If the first character was an operator, consume as many more operator
-        // characters as we can.
-        while (true) {
-            TRY(Stream_Peek(lex->input, &c));
-                // We have to peek before consuming the character, because,
-                // unlike in the switch statement above, we are not definitely
-                // going to consume a character here. We only want to consume it
-                // if it is another operator character.
-            if (!IsOperatorChar(c)) break;
+            while (true) {
+                TRY(Stream_Peek(lex->input, &c));
+                    // We have to peek before consuming the character, because,
+                    // unlike in the `` case above, we are not definitely going
+                    // to consume a character here. We only want to consume it
+                    // if it is another operator/identifier character.
+                if (!predicate(c)) break;
 
-            tok->range.end = Stream_Location(lex->input);
-            Stream_Consume(lex->input, c);
+                tok->range.end = Stream_Location(lex->input);
+                Stream_Consume(lex->input, c);
 
-            if (sym_length >= sym_capacity) {
-                TRY(Realloc(lex->blimp, 2*sym_capacity, &sym_name));
-                sym_capacity *= 2;
+                if (sym_length >= sym_capacity) {
+                    TRY(Realloc(lex->blimp, 2*sym_capacity, &sym_name));
+                    sym_capacity *= 2;
+                }
+                sym_name[sym_length++] = c;
             }
-            sym_name[sym_length++] = c;
+
+            // Append a null terminator to the string.
+            if (sym_length >= sym_capacity) {
+                TRY(Realloc(lex->blimp, sym_capacity+1, &sym_name));
+                sym_capacity += 1;
+            }
+            sym_name[sym_length++] = '\0';
+
+            tok->type = TOK_SYMBOL;
+            TRY(Blimp_GetSymbol(lex->blimp, sym_name, &tok->symbol));
+            assert(tok->symbol);
+
+            Free(lex->blimp, &sym_name);
+                // We don't need the string anymore. We either ignore it (for
+                // keywords) or converted it to a Symbol (for symbols).
+
+            break;
         }
-
-    } else if (IsIdentifierChar(c)) {
-        // If the first character was an identifier character, than this symbol
-        // may not contain any operator characters. In this case, we just fall
-        // through to consuming the second part of the symbol: the remaining
-        // identifier characters.
-    } else {
-        // Invalid character.
-        return ErrorAt(lex->blimp, Stream_Location(lex->input),
-            BLIMP_INVALID_CHARACTER, "invalid character in symbol: %c", c);
     }
 
-    // Now that we've consumed the first part of the symbol (the operator
-    // characters) consume as many identifier characters as we can.
-    while (true) {
-        TRY(Stream_Peek(lex->input, &c));
-        if (!IsIdentifierChar(c)) break;
-
-        tok->range.end = Stream_Location(lex->input);
-        Stream_Consume(lex->input, c);
-
-        if (sym_length >= sym_capacity) {
-            TRY(Realloc(lex->blimp, 2*sym_capacity, &sym_name));
-            sym_capacity *= 2;
-        }
-        sym_name[sym_length++] = c;
-    }
-
-    // Append a null terminator to the string.
-    if (sym_length >= sym_capacity) {
-        TRY(Realloc(lex->blimp, sym_capacity+1, &sym_name));
-        sym_capacity += 1;
-    }
-    sym_name[sym_length++] = '\0';
-
-    // Check if we actually lexed a symbol, or if it was a keyword.
-    if (strcmp("bind", sym_name) == 0) {
-        tok->type = TOK_BIND;
-    } else {
-        tok->type = TOK_SYMBOL;
-        TRY(Blimp_GetSymbol(lex->blimp, sym_name, &tok->symbol));
-        assert(tok->symbol);
-    }
-    Free(lex->blimp, &sym_name);
-        // We don't need the string anymore. We either ignore it (for keywords) or
-        // converted it to a Symbol (for symbols).
-
-success:
     lex->peek = *tok;
     return BLIMP_OK;
 }
@@ -595,6 +628,47 @@ static Status Lexer_ConsumeWithLoc(
 static Status Lexer_Consume(Lexer *lex, TokenType expected_token)
 {
     return Lexer_ConsumeWithLoc(lex, expected_token, NULL);
+}
+
+static inline Status Lexer_PushScope(Lexer *lex, const Symbol *msg_name)
+{
+    return DBMap_Push(&lex->scopes, (void *)msg_name);
+}
+
+static inline void Lexer_PopScope(Lexer *lex)
+{
+    DBMap_Pop(&lex->scopes);
+}
+
+static inline bool Lexer_InBlock(const Lexer *lex)
+{
+    return !DBMap_Empty(&lex->scopes);
+}
+
+static bool Lexer_MessageNameEq(void *sym1, void *sym2)
+{
+    return SymbolEq((const Symbol **)&sym1, (const Symbol **)&sym2);
+}
+
+static inline Status Lexer_ResolveMessageName(
+    const Lexer *lex, const Symbol *msg_name, size_t *index)
+{
+    if (DBMap_Index(
+            &lex->scopes, (void *)msg_name, Lexer_MessageNameEq, index)
+        != BLIMP_OK)
+    {
+        return ErrorMsg(lex->blimp, BLIMP_INVALID_MESSAGE_NAME,
+            "no message named ^%s is in scope", msg_name->name);
+    }
+
+    return BLIMP_OK;
+}
+
+static Status Lexer_FreshSymbol(Lexer *lex, const Symbol **symbol)
+{
+    char buffer[32];
+    snprintf(buffer, sizeof(buffer), "^%zu^", lex->counter++);
+    return Blimp_GetSymbol(lex->blimp, buffer, symbol);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -693,9 +767,9 @@ static Status ParseTerm(Lexer *lex, Expr **term)
     // The <term> non-terminal consists of four productions:
     //
     //  <term> ::= <symbol>
-    //          |  '{' <expr> '|' <expr> '}'
+    //          | '^'<symbol>?
+    //          |  '{' ('^'<symbol>)? <expr> '}'
     //          |  '(' <expr> ')'
-    //          | 'bind' <term> <term> <term>
     //
     // Each of these productions is distinguished by its first token, so we can
     // go ahead and consume a token, and inspect it to see which production we
@@ -716,28 +790,55 @@ static Status ParseTerm(Lexer *lex, Expr **term)
             TRY(Lexer_ConsumeWithLoc(lex, TOK_RPAREN, &(*term)->range.end));
             return BLIMP_OK;
 
-        case TOK_LBRACE:
+        case TOK_LBRACE: {
             (*term)->tag = EXPR_BLOCK;
-            TRY(ParseExpr(lex, &(*term)->block.tag));
-            TRY(Lexer_Consume(lex, TOK_PIPE));
-            TRY(ParseExpr(lex, &(*term)->block.code));
-            TRY(Lexer_ConsumeWithLoc(lex, TOK_RBRACE, &(*term)->range.end));
 
+            // Check for an optional message name binder.
+            TRY(Lexer_Peek(lex, &tok));
+            if (tok.type == TOK_MSG_NAME && tok.symbol != NULL) {
+                (*term)->block.msg_name = tok.symbol;
+                Lexer_Consume(lex, TOK_MSG_NAME);
+            } else {
+                // Generate a fresh name for the messages passed to this block.
+                TRY(Lexer_FreshSymbol(lex, &(*term)->block.msg_name));
+            }
+
+            // Parse the body of the block with the new message name in scope.
+            Lexer_PushScope(lex, (*term)->block.msg_name);
+            Status status = ParseExpr(lex, &(*term)->block.code);
+            Lexer_PopScope(lex);
+            if (status != BLIMP_OK) {
+                return status;
+            }
+
+            TRY(Lexer_ConsumeWithLoc(lex, TOK_RBRACE, &(*term)->range.end));
             return BLIMP_OK;
+        }
 
         case TOK_SYMBOL:
             (*term)->tag = EXPR_SYMBOL;
             (*term)->symbol = tok.symbol;
             return BLIMP_OK;
 
-        case TOK_BIND:
-            (*term)->tag = EXPR_BIND;
+        case TOK_MSG_NAME:
+            (*term)->tag = EXPR_MSG;
 
-            TRY(ParseTerm(lex, &(*term)->bind.receiver));
-            TRY(ParseTerm(lex, &(*term)->bind.message));
-            TRY(ParseTerm(lex, &(*term)->bind.code));
-
-            (*term)->range.end = (*term)->bind.code->range.end;
+            if (tok.symbol == NULL) {
+                // A '^' with no name refers to the message name bound in the
+                // innermost containing block (DeBruijn index of 0).
+                if (!Lexer_InBlock(lex)) {
+                    return ErrorFrom(
+                        lex->blimp, tok.range, BLIMP_INVALID_MESSAGE_NAME,
+                        "^ cannot be used outside of a block");
+                }
+                (*term)->msg.index = 0;
+            } else {
+                if (Lexer_ResolveMessageName(
+                    lex, tok.symbol, &(*term)->msg.index) != BLIMP_OK)
+                {
+                    return ReraiseFrom(lex->blimp, tok.range);
+                }
+            }
 
             return BLIMP_OK;
 
@@ -757,7 +858,7 @@ static Status TryTerm(Lexer *lex, Expr **term)
         case TOK_LPAREN:
         case TOK_LBRACE:
         case TOK_SYMBOL:
-        case TOK_BIND:
+        case TOK_MSG_NAME:
             return ParseTerm(lex, term);
         default:
             *term = NULL;
@@ -809,6 +910,7 @@ Status Blimp_Parse(Blimp *blimp, Stream *input, Expr **output)
         }
     }
 
+    Lexer_Destroy(&lex);
     Stream_Delete(input);
     return ret;
 }

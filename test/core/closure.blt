@@ -1,0 +1,9 @@
+closure {
+    ^ ({^captured
+        {
+            (^captured)
+        }
+    } arg)
+};
+
+!expect_eq (closure[]) arg

@@ -13,16 +13,12 @@
 # checking if they share the same root. Note though that the representative of a
 # set can change when two sets are unioned.
 #
-# The data structure supports four operations:
-#   node.insert:
-#       Add a node into the data structure. It is initially in a singleton set
-#       of which it is the representative.
-#   node.union:
+# The data structure supports three operations:
+#   union node node:
 #       Merge the set containing one node with the set containing another.
-#   node.find:
-#       Find the representative node of the set containing the receiver. The
-#       receiver node must have already been inserted using `node.insert`.
-#   node.equiv:
+#   find node:
+#       Find the representative node of the set containing the receiver.
+#   equiv node node:
 #       Test if one node is in the same set as another.
 #
 
@@ -30,89 +26,139 @@
 # Booleans
 #
 
-bind true.if_false .;
-bind false.if_false (
-    that{.get|.}{.eval|.}{.eval|.}
-);
+import runtime;
 
-bind true!expect_true .;
-bind false!expect_true (false{!expect|true});
+true {
+    ^ {^method
+        if_true{^ {{^block
+            ^block[]
+        }}};
 
-bind true!expect_false (true{!expect|false});
-bind false!expect_false .;
+        if_false{^ {{^block
+            .
+        }}};
+
+        ^method[]
+    }
+};
+
+false {
+    ^ {^method
+        if_true{^ {{^block
+            .
+        }}};
+
+        if_false{^ {{^block
+            ^block[]
+        }}};
+
+        ^method[]
+    }
+};
 
 ################################################################################
 # Union-find data structure
 #
 
-bind node.set_parent (
-    parent{:=|that{.get|.}{.eval|.}}
-);
+nil {^
+    {^method
+        if_nil{^{
+            {^if
+                {^else
+                    ^if []
+                }
+            }
+        }};
 
-bind node.get_parent (
-    parent{.get|.}
-);
+        ^method[]
+    }
+};
 
-bind node.set_is_test (
-    is_test{:=|that{.get|.}{.eval|.}}
-);
+node {^{
+    {^method
+        parent {
+            ^({^cell {(^cell)}}(__cell[]));
+            parent[] {nil}
+        };
+        is_test {^({^cell {(^cell)}}(__cell[]))};
 
-bind node.get_is_test (
-    is_test{.get|.}
-);
+        set_parent{^{
+            {^val
+                parent[] { (^val) }
+            }
+        }};
 
-bind node.is ({do|
-    self{:=|this{.get|.}};
-    other{:=|that{.get|.}{.eval|.}};
+        get_parent{^{
+            parent[] {^}
+        }};
 
-    self{.get|.}{.set_is_test|{false|.}};
-    other{.get|.}{.set_is_test|{true|.}};
-    self{.get|.}{.get_is_test|.}
-}{.eval|.});
+        set_is_test{^{
+            {^val
+                is_test[] { (^val) }
+            }
+        }};
 
-bind node.insert ({do|
-    this{.get|.}{.set_parent|{nil|.}}
-}{.eval|.});
+        get_is_test{^{
+            is_test[] {^}
+        }};
 
-bind nil.find_with_default ({do|
-    that{.get|.}{.eval|.}
-}{.eval|.});
+        is{^{
+            {^that
+                set_is_test[] false;
+                ^that set_is_test true;
+                get_is_test[]
+            }
+        }};
 
-bind node.find_with_default ({do|
-    self{:=|this{.get|.}};
-    root{:=|parent{.get|.}{.find_with_default|self{.get|.}}};
+        if_nil{^{
+            {^if
+                {^else
+                    ^else []
+                }
+            }
+        }};
 
-    root{.get|.}{.is|self{.get|.}}{.if_false|{do|
-        # Path compression
-        parent{:=|root{.get|.}}
-    }};
+        ^method[]
+    }
+}};
 
-    root{.get|.}
-}{.eval|.});
+find{
+    ^{^node
+        ^node get_parent if_nil {
+            (^node)
+        } {
+            root {
+                ^ ({^root
+                    {(^root)}
+                } (find (^node get_parent)))
+            };
 
-bind node.find ({do|
-    this{.get|.}{.find_with_default|.}
-}{.eval|.});
+            ^node set_parent (root[]);
+            root[]
+        }
+    }
+};
 
-bind node.union ({do|
-    self{:=|this{.get|.}};
-    arg{:=|that{.get|.}{.eval|.}};
+union{
+    ^{^node1
+        {^node2
+            {^root1
+                {^root2
+                    (^root1 is ^root2) if_false {
+                        (^root1 set_parent ^root2)
+                    }
+                } (find ^node2)
+            } (find ^node1)
+        }
+    }
+};
 
-    this_root{:=|self{.get|.}{.find|.}};
-    that_root{:=|arg{.get|.}{.find|.}};
-
-    this_root{.get|.}{.is|that_root{.get|.}}{.if_false|{do|
-        this_root{.get|.}{.set_parent|that_root{.get|.}}
-    }};
-
-    .
-}{.eval|.});
-
-bind node.equiv ({do|
-    self{:=|this{.get|.}};
-    other{:=|that{.get|.}{.eval|.}};
-
-    self{.get|.}{.find|.}{.is|other{.get|.}{.find|.}}
-}{.eval|.});
+equiv{
+    ^{^node1
+        {^node2
+            (find ^node1) is (find ^node2)
+        }
+    }
+};
 
 .

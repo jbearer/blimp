@@ -1,26 +1,28 @@
 # Check that we can assign to a symbol in a scope and get the value back.
-non_capturing {:=| {do|
-    x{:=|y};
-    (x{.get|.}) {!expect|y}
+non_capturing {^ {
+    x{^ {y}};
+    x[]
 }};
-((non_capturing {.get|.}) {.eval|.}) {!expect|y};
+!expect_eq (non_capturing[]) y;
 
-# Check that assigning to `x` in the scope did not assign to `x` globally.
-{do| x{.get|.} } {!expect_error|.};
+# Check that assigning to `x` in the scope did not assign to `x` in the
+# outer scope.
+x {^ {z}};
+!expect_eq (x[]) z;
 
 # Check that the scope `non_capturing`, which already has its own version of
-# `x`, does not share with a globally defined `x`.
-x{:=|z};
-(non_capturing{.get|.}) {.eval|.};
-(x{.get|.}) {!expect|z};
+# `x`, does not share with a newly defined outer `x`.
+!expect_eq (non_capturing[]) y;
+!expect_eq (x[]) z;
 
-# Check that once `x` has been defined globally, subsequent scopes which assign
-# to `x` will update the global version (i.e. shadowing is not allowed).
-capturing {:=| {do|
-    x{:=|w}
+# Check that once `x` has been defined globally, subsequent scopes which
+# reference `x` will get the global version (i.e. shadowing is no longer
+# possible).
+capturing {^ {
+    x{^ {w}}
 }};
-(capturing{.get|.}) {.eval|.};
-(x{.get|.}) {!expect|w};
+!expect_eq (capturing[]]) z;
+!expect_eq (x[]) z;
 
-# Check that we can read a variable from the global scope in an inner scope.
-({do| x{.get|.} } {.eval|.}) {!expect|w}
+# Check that we can read a variable from the outer scope in an inner scope.
+!expect_eq ({ x[] }[]]) z

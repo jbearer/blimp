@@ -3,20 +3,60 @@
 # Tests garbage collection of trees, one of the most well-behaved data
 # structures, since every node is referenced exactly once, by its parent.
 
-bind tree.init (
-    this{.get|.}{.eval|.};
-    this{.get|.}
-);
+import runtime;
+
+nil{
+    if_nil{^{
+        {^if{^else
+            ^if[]
+        }}
+    }};
+
+    to_string{^{
+        nil
+    }};
+
+    ^ {^msg
+        ^msg[]
+    }
+};
+
+node{^
+    {^value{^left{^right
+        value{^ {(^value)}};
+        left{^ {(^left)}};
+        right{^ {(^right)}};
+
+        if_nil{^{
+            {^if{^else
+                ^else[]
+            }}
+        }};
+
+        to_string{^{
+            value[]
+        }};
+
+        {^msg
+            ^msg[]
+        }
+    }}}
+};
 
 # Depth-first traversal, just so that we actually use the trees we make.
-bind nil.dfs .;
-bind tree.dfs (
-    left{.get|.}{.dfs|.};
-    right{.get|.}{.dfs|.};
-    value{.get|.}
-);
+dfs{^
+    {^node
+        ^node if_nil {
+            .
+        } {
+            dfs (^node left);
+            dfs (^node right);
+            ^node value
+        }
+    }
+};
 
-{!benchmark|n{:=|100000}} {erc_tree|
+!benchmark{n{^ 10000}; tracing_tree} {
     # We'll build the following tree:
     #                   a
     #                  / \
@@ -25,42 +65,24 @@ bind tree.dfs (
     #               d
     # starting from the leaves and building up.
 
-    {do|
+    {
         # Level 0
-        d {:=|{tree|
-            value{:=|d};
-            left{:=|{nil|.}};
-            right{:=|{nil|.}}
-        }{.init|.}};
+        d := (node d nil nil);
 
         # Level 1
-        b {:=|{tree|
-            value{:=|b};
-            left{:=|d{.get|.}};
-            right{:=|{nil|.}}
-        }{.init|.}};
-        c {:=|{tree|
-            value{:=|c};
-            left{:=|{nil|.}};
-            right{:=|{nil|.}}
-        }{.init|.}};
+        b := (node b ($d) nil);
+        c := (node c nil nil);
 
         # Level 2 (root)
-        a {:=|{tree|
-            value{:=|a};
-            left{:=|b{.get|.}};
-            right{:=|c{.get|.}}
-        }{.init|.}};
+        a := (node a ($b) ($c));
 
-        a{.get|.}{.dfs|.};
-
-        .
-    }{.eval|.}
+        dfs ($a)
+    }[]
 };
 
-{gc|.}{!collect|.};
-{gc|.}{!print_stats|.};
-{gc|.}{!check_collect|.};
+!gc_collect;
+!gc_print_stats;
+!gc_check_collect;
 
 .
 

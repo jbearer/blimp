@@ -1,13 +1,8 @@
-bind class.set_x (
-    x{:=| (that{.get|.}){.eval|.} };
-    y
-);
-
 # Test unsanitary object creation
-{do|
-    x{:=| 0 };
-    {class|.}{.set_x|1};
-    (x{.get|.}) {!expect|1}
-} {.eval|.};
-
-.
+{
+    x{^ref
+        ^ref{(^ref)}
+    };
+    { x[] {1} }[];
+    !expect_eq (x[]) 1
+}[]

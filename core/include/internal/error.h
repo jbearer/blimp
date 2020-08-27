@@ -16,6 +16,7 @@
 #define RuntimeErrorFrom(...) Blimp_RuntimeErrorFrom(__VA_ARGS__)
 #define Reraise(...) Blimp_Reraise(__VA_ARGS__)
 #define RuntimeReraise(...) Blimp_RuntimeReraise(__VA_ARGS__)
+#define ReraiseFrom(...) Blimp_ReraiseFrom(__VA_ARGS__)
 
 // If `e` evalutes to an error, return that error from the function invoking
 // this macro.

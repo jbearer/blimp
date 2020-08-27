@@ -1,11 +1,9 @@
 #: --skip-racket -fno-gc-tracing -fno-gc-refcount
 
-bind symbol.foo .;
+{
+    x{^ {.}[]}
+}[];
 
-{scope|
-    x{:=|y{.foo|.}}
-}{.eval|.};
-
-{gc|.}{!expect_clean|.};
+!gc_expect_clean;
 
 .

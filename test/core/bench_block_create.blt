@@ -3,12 +3,12 @@
 # Block creation benchmark. Benchmarks the creation of 1 million blocks, some
 # of which have a non-empty scope and some of which do not.
 
-{!benchmark|n{:=|500000}}{empty|
-    {block|.}
+!benchmark {n{^ 500000}; empty} {
+    {.}
 };
 
-{!benchmark|n{:=|500000}}{nonempty|
-    {scope|x{:=|1};y{:=|2};z{:=|3}}{.eval|.}
+!benchmark {n{^ 500000}; nonempty} {
+    {x{^ 1}}[]
 };
 
 .

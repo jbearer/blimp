@@ -12,14 +12,13 @@
 ; For a more thorough test, use the bl:mp test suite (blimp-test).
 ;
 
-
 (module+ test
 
 ; Eval a symbol literal
 (check-equal?
     (judgment-holds
-        (eval foo M (symbol x r))
-        x
+        (eval foo H v)
+        v
     )
     '(foo)
 )
@@ -27,121 +26,82 @@
 ; Eval a block literal
 (check-equal?
     (judgment-holds
-        (eval (block a b) M (block x e r))
-        (x e)
+        (eval (block a b) H (obj r x e))
+        e
     )
-    '((a b))
+    '(b)
 )
-
 
 ; Check a sequence of expressions.
 (check-equal?
     (judgment-holds
-        (eval (seq foo (block a b)) M (block x e r))
-        (x e)
+        (eval (seq foo (block a b)) H (obj r x e))
+        e
     )
-    '((a b))
+    '(b)
 )
 
-; Test basic virtual dispatch:
-;   bind c m foo;
-;   {c|.} {m|.}
-; Should evaluate to
-;   foo
+; Check a trivial message send
 (check-equal?
     (judgment-holds
-        (eval (seq (bind c m foo) ((block c |.|) (block m |.|))) M (symbol x r))
-        x
-    )
+        (eval ((block a a) foo) H x)
+        x)
     '(foo)
 )
 
-; Test more complicated dispatch, where we have to evaluate the operands to get their classes.
-;   bind c m foo;
-;   (.; {c|.}) (.; {m|.})
-; Should evaluate to
-;   foo
+; Check defining a symbol
 (check-equal?
     (judgment-holds
-        (eval (seq (bind c m foo) ((seq |.| (block c |.|)) (seq |.| (block m |.|)))) M (symbol x r))
-        x
-    )
-    '(foo)
-)
-
-; Test rebinding.
-;   bind c m foo;
-;   bind c m bar;
-;   {c|.} {m|.}
-; Should evaluate to
-;   bar
-(check-equal?
-    (judgment-holds
-        (eval (seq (bind c m foo) (seq (bind c m bar) ((block c |.|) (block m |.|)))) M (symbol x r))
-        x
-    )
-    '(bar)
-)
-
-; Test dynamic binding, where we have to evaluate the operands of `bind`.
-;   bind (.; c) (.; m) (.; foo);
-;   {c|.} {m|.}
-; Should evaluate to
-;   foo
-(check-equal?
-    (judgment-holds
-        (eval (seq (bind (seq |.| c) (seq |.| m) (seq |.| foo)) ((block c |.|) (block m |.|))) M (symbol x r))
-        x
-    )
-    '(foo)
-)
-
-; Test primitive get and set
-;   foo{:=|bar};
-;   foo{.get|.}
-; Should evaluate to
-;   bar
-(check-equal?
-    (judgment-holds
-        (eval (seq (foo (block |{:=}| bar)) (foo (block |{.get}| |.|))) M (symbol x r))
+        (eval (seq (foo (block ref (ref (block a a))))
+                   (foo bar))
+            H x)
         x)
     '(bar)
 )
 
-; Test reset
-;   foo{:=|bar};
-;   foo{:=|baz};
-;   foo{.get|.}
-; Should evaluate to
-;   baz
+; Check accessing a symbol in a nested scope
 (check-equal?
     (judgment-holds
-        (eval (seq (seq (foo (block |{:=}| bar)) (foo (block |{:=}| baz))) (foo (block |{.get}| |.|))) M (symbol x r))
+        (eval (seq (foo (block ref (ref (block a a))))
+                   ((block a (a bar)) foo))
+            H x)
         x)
-    '(baz)
+    '(bar)
 )
 
-; Test primitive eval
-;   {do|foo}{.eval|.}
-; Should evaluate to
-;   foo
+; Check setting a symbol
 (check-equal?
     (judgment-holds
-        (eval ((block do foo) (block |{.eval}| |.|)) M (symbol x r))
+        (eval (seq (foo (block ref (ref ref)))
+              (seq (foo (block a bar))
+                   (foo get)))
+            H x)
         x)
-    '(foo)
+    '(bar)
 )
 
-; Test get from inner scope
-;   x{:=|0};
-;   {do|x{.get|.}}{.eval|.}
-; Should evaluate to
-;   0
+; Check setting a symbol in a nested scope
 (check-equal?
     (judgment-holds
-        (eval (seq (x (block |{:=}| |0|)) ((block do (x (block |{.get}| |.|))) (block |{.eval}| |.|))) M (symbol x r))
+        (eval (seq (foo (block ref (ref ref)))
+              (seq ((block a (foo (block a bar))) z)
+                   (foo get)))
+            H x)
         x)
-    '(|0|)
+    '(bar)
+)
+
+; Check setting a symbol from an unrelated scope
+(check-equal?
+    (judgment-holds
+        (eval (seq (scope (block scoperef
+                        (scoperef (block msg (foo msg)))))
+              (seq (scope (block fooref (fooref fooref)))
+              (seq (scope (block a a))
+                   (scope bar))))
+            H x)
+        x)
+    '(bar)
 )
 
 )

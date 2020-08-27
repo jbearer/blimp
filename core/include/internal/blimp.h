@@ -6,7 +6,6 @@
 #include "internal/object.h"
 #include "internal/stack.h"
 #include "internal/symbol.h"
-#include "internal/vtable.h"
 
 #define ERR_MSG_LEN 100
 
@@ -14,7 +13,6 @@ struct Blimp {
     BlimpOptions options;
     SymbolTable symbols;
     ObjectPool objects;
-    VTable vtable;
     CallStack stack;
     Object *global;
 

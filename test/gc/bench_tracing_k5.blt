@@ -2,58 +2,63 @@
 
 # Tests garbage collection of complete graphs (K5).
 
-bind node.link (
-    name{:=|that{.get|.}{.eval|.}{.eval|.}};
-    name{.get|.}{:=|that{.get|.}{.eval|.}}
-);
+import runtime;
 
-unit{:=|.};
+node{^
+    {
+        {^cell
+            {^next
+                ^cell {(^next)}
+            }
+        }(__cell[])
+    }
+};
 
-{!benchmark|n{:=|50000}; ops{:=|25}} {k_5|
+!benchmark{n{^ 5000}; ops{^ 25}; k_5} {
     # Create 5 nodes.
-    1{:=|{node|1}};
-    2{:=|{node|2}};
-    3{:=|{node|3}};
-    4{:=|{node|4}};
-    5{:=|{node|5}};
+    1 := (node[]);
+    2 := (node[]);
+    3 := (node[]);
+    4 := (node[]);
+    5 := (node[]);
 
     # Link them into a complete graph.
-    1{.get|.}{.link|2{.get|.}};
-    1{.get|.}{.link|3{.get|.}};
-    1{.get|.}{.link|4{.get|.}};
-    1{.get|.}{.link|5{.get|.}};
+    ($1) ($2);
+    ($1) ($3);
+    ($1) ($4);
+    ($1) ($5);
 
-    2{.get|.}{.link|1{.get|.}};
-    2{.get|.}{.link|3{.get|.}};
-    2{.get|.}{.link|4{.get|.}};
-    2{.get|.}{.link|5{.get|.}};
+    ($2) ($1);
+    ($2) ($3);
+    ($2) ($4);
+    ($2) ($5);
 
-    3{.get|.}{.link|1{.get|.}};
-    3{.get|.}{.link|2{.get|.}};
-    3{.get|.}{.link|4{.get|.}};
-    3{.get|.}{.link|5{.get|.}};
+    ($3) ($1);
+    ($3) ($2);
+    ($3) ($4);
+    ($3) ($5);
 
-    4{.get|.}{.link|1{.get|.}};
-    4{.get|.}{.link|2{.get|.}};
-    4{.get|.}{.link|3{.get|.}};
-    4{.get|.}{.link|5{.get|.}};
+    ($4) ($1);
+    ($4) ($2);
+    ($4) ($3);
+    ($4) ($5);
 
-    5{.get|.}{.link|1{.get|.}};
-    5{.get|.}{.link|2{.get|.}};
-    5{.get|.}{.link|3{.get|.}};
-    5{.get|.}{.link|4{.get|.}};
+    ($5) ($1);
+    ($5) ($2);
+    ($5) ($3);
+    ($5) ($4);
 
     # Leak the nodes.
-    1{:=|unit{.get|.}};
-    2{:=|unit{.get|.}};
-    3{:=|unit{.get|.}};
-    4{:=|unit{.get|.}};
-    5{:=|unit{.get|.}};
+    1 := .;
+    2 := .;
+    3 := .;
+    4 := .;
+    5 := .;
 
     .
 };
 
-{gc|.}{!collect|.};
-{gc|.}{!print_stats|.};
-{gc|.}{!check_collect|.};
+!gc_collect;
+!gc_print_stats;
+!gc_check_collect;
 .

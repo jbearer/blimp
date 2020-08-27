@@ -1,7 +1,6 @@
 #include "internal/blimp.h"
 #include "internal/expr.h"
 #include "internal/symbol.h"
-#include "internal/vtable.h"
 
 Blimp *Blimp_New(const BlimpOptions *options)
 {
@@ -14,6 +13,7 @@ Blimp *Blimp_New(const BlimpOptions *options)
         goto err_malloc;
     }
     blimp->options = *options;
+    memset(&blimp->last_error, 0, sizeof(blimp->last_error));
 
     if (SymbolTable_Init(blimp, &blimp->symbols) != BLIMP_OK) {
         goto err_symbols;
@@ -21,10 +21,6 @@ Blimp *Blimp_New(const BlimpOptions *options)
 
     if (ObjectPool_Init(blimp, &blimp->objects) != BLIMP_OK) {
         goto err_objects;
-    }
-
-    if (VTable_Init(blimp, &blimp->vtable) != BLIMP_OK) {
-        goto err_vtable;
     }
 
     if (Stack_Init(blimp, &blimp->stack) != BLIMP_OK) {
@@ -41,8 +37,6 @@ Blimp *Blimp_New(const BlimpOptions *options)
 err_global:
     Stack_Destroy(blimp, &blimp->stack);
 err_stack:
-    VTable_Destroy(&blimp->vtable);
-err_vtable:
     ObjectPool_Destroy(blimp, &blimp->objects);
 err_objects:
 err_symbols:
@@ -54,7 +48,6 @@ err_malloc:
 void Blimp_Delete(Blimp *blimp)
 {
     Stack_Destroy(blimp, &blimp->stack);
-    VTable_Destroy(&blimp->vtable);
     ObjectPool_Destroy(blimp, &blimp->objects);
     SymbolTable_Destroy(&blimp->symbols);
     free(blimp);
@@ -73,13 +66,6 @@ Object *Blimp_GlobalObject(Blimp *blimp)
 ////////////////////////////////////////////////////////////////////////////////
 // Evaluation
 //
-
-static const Method BLIMP_METHOD_EVAL = NULL;
-    // Sentinel method indicating that this method is bound to a bl:mp
-    // expression. Having this information available directly in `Send` is a bit
-    // more convenient than binding the method to BlimpMethod_Eval, because we
-    // can preserve the result type of the message send and potentially avoid
-    // the creation of temporary objects.
 
 // Dynamic result types. This structure allows the caller of an evaluation
 // function to request a specific kind of result from the callee, by setting the
@@ -132,13 +118,18 @@ static inline Status ReturnSymbol(
 static inline Status ReturnBlock(
     Blimp *blimp,
     Object *scope,
-    const Symbol *tag,
+    const Symbol *msg_name,
     Expr *code,
     Value *result)
 {
     switch (result->type) {
         case VALUE_OBJECT:
-            return BlimpObject_NewBlock(blimp, scope, tag, code, &result->obj);
+            return BlimpObject_NewBlock(
+                blimp,
+                scope,
+                msg_name,
+                code,
+                &result->obj);
 
         case VALUE_SYMBOL:
             return Error(blimp, BLIMP_MUST_BE_SYMBOL);
@@ -198,7 +189,8 @@ static Status Send(
     Object *scope,
     Object *receiver,
     Object *message,
-    Value *result);
+    Value *result,
+    const SourceRange *range);
 
 static Status EvalExpr(
     Blimp *blimp, const Expr *expr, Object *scope, Value *result)
@@ -225,21 +217,8 @@ static Status EvalStmt(
             return ReturnSymbol(blimp, scope, expr->symbol, result);
 
         case EXPR_BLOCK: {
-            Value tag = {.type=VALUE_SYMBOL};
-            TRY(EvalExpr(blimp, expr->block.tag, scope, &tag));
-            return ReturnBlock(blimp, scope, tag.sym, expr->block.code, result);
-        }
-
-        case EXPR_BIND: {
-            Value receiver = {.type=VALUE_SYMBOL};
-            Value message  = {.type=VALUE_SYMBOL};
-
-            TRY(EvalExpr(blimp, expr->bind.receiver, scope, &receiver));
-            TRY(EvalExpr(blimp, expr->bind.message,  scope, &message));
-            TRY(Blimp_BindExpr(
-                blimp, receiver.sym, message.sym, expr->bind.code));
-
-            return ReturnSymbol(blimp, scope, receiver.sym, result);
+            return ReturnBlock(
+                blimp, scope, expr->block.msg_name, expr->block.code, result);
         }
 
         case EXPR_SEND: {
@@ -260,23 +239,18 @@ static Status EvalStmt(
                 goto err_message;
             }
 
-            StackFrame frame = {
-                .range = expr->range,
-            };
-            if ((ret = Stack_Push(blimp, &blimp->stack, &frame, 128)) != BLIMP_OK)
-            {
-                goto err_push;
-            }
-
-            if ((ret = Send(blimp, scope, receiver.obj, message.obj, result))
-                    != BLIMP_OK)
+            if ((ret = Send(
+                    blimp,
+                    scope,
+                    receiver.obj,
+                    message.obj,
+                    result,
+                    &expr->range)) != BLIMP_OK)
             {
                 goto err_send;
             }
 
 err_send:
-            Stack_Pop(blimp, &blimp->stack);
-err_push:
             BlimpObject_Release(message.obj);
 err_message:
             BlimpObject_Release(receiver.obj);
@@ -292,6 +266,18 @@ err_receiver:
             return ret;
         }
 
+        case EXPR_MSG: {
+            Object *msg;
+            if (expr->msg.index == 0) {
+                msg = Stack_CurrentFrame(&blimp->stack)->message;
+            } else {
+                TRY(BlimpObject_GetMessage(scope, expr->msg.index - 1, &msg));
+            }
+
+            BlimpObject_Borrow(msg);
+            return ReturnObject(blimp, msg, result);
+        }
+
         default:
             assert(false);
             return ErrorFrom(
@@ -304,281 +290,96 @@ err_receiver:
 
 static Status Send(
     Blimp *blimp,
-    Object *scope,
+    Object *context,
     Object *receiver,
     Object *message,
-    Value *result)
+    Value *result,
+    const SourceRange *range)
 {
-    const Symbol *receiver_tag = BlimpObject_Tag(receiver);
-    const Symbol *message_tag  = BlimpObject_Tag(message);
+    Status status = Stack_Push(blimp, &blimp->stack, &(StackFrame){
+        .range     = range ? *range : ((SourceRange){{0},{0}}),
+        .has_range = range != NULL,
+        .message   = message,
+    }, 128);
 
-    Method method;
-    void *data;
-    TRY(VTable_Resolve(
-        &blimp->vtable, receiver_tag, message_tag, &method, &data));
-
-    if (method == BLIMP_METHOD_EVAL) {
-        return EvalExpr(blimp, (const Expr *)data, receiver, result);
-    } else {
-        Object *obj;
-        TRY(method(blimp, scope, receiver, message, data, &obj));
-        return ReturnObject(blimp, obj, result);
-    }
-}
-
-Status Blimp_Bind(
-    Blimp *blimp,
-    const Symbol *receiver,
-    const Symbol *message,
-    const Method method,
-    void *data)
-{
-    return VTable_Bind(&blimp->vtable, receiver, message, method, data);
-}
-
-Status Blimp_BindVTableFragment(Blimp *blimp, BlimpVTableFragment fragment)
-{
-    for (BlimpVTableEntry *entry = fragment; entry->receiver; ++entry) {
-        const Symbol *receiver;
-        TRY(Blimp_GetSymbol(blimp, entry->receiver, &receiver));
-
-        const Symbol *message;
-        TRY(Blimp_GetSymbol(blimp, entry->message, &message));
-
-        TRY(Blimp_Bind(blimp, receiver, message, entry->method, entry->data));
+    if (status != BLIMP_OK) {
+        return status;
     }
 
-    return BLIMP_OK;
-}
+    switch (receiver->type) {
+        case OBJ_SYMBOL: {
+            // The behavior of a symbol when it receives a message depends on
+            // whether the symbol is already in scope or not:
+            Object *value;
+            if(BlimpObject_Get(context, receiver->symbol, &value) == BLIMP_OK) {
+                // If the symbol already has a value in this scope, we simply
+                // forward the message on to the value of the symbol.
+                status = Send(blimp, context, value, message, result, NULL);
+            } else {
+                // Otherwise, the message is treated as an initializer for the
+                // symbol. We create a new reference object, which can be used
+                // to write a value to the symbol by sending a message to the
+                // reference, and we send the reference as a message to the
+                // message received by the symbol.
+                Object *reference;
+                if ((status = BlimpObject_NewReference(
+                        blimp, context, receiver->symbol, &reference))
+                    != BLIMP_OK)
+                {
+                    break;
+                }
+                status = Send(blimp, context, message, reference, result, NULL);
+                BlimpObject_Release(reference);
+            }
 
-Status Blimp_BindExpr(
-    Blimp *blimp,
-    const Symbol *receiver,
-    const Symbol *message,
-    Expr *expr)
-{
-    ++expr->refcount;
-    return VTable_Bind(
-        &blimp->vtable,
-        receiver,
-        message,
-        BLIMP_METHOD_EVAL,
-        (void *)expr
-    );
-}
+            break;
+        }
 
-Status Blimp_Resolve(
-    Blimp *blimp,
-    const Symbol *receiver,
-    const Symbol *message,
-    Method *method,
-    void **data)
-{
-    return VTable_Resolve(&blimp->vtable, receiver, message, method, data);
-}
+        case OBJ_REFERENCE: {
+            // When a reference object (created in the previous case) receives a
+            // message, it sets the value of the associated symbol to the
+            // message.
+            if ((status = BlimpObject_Set(
+                    receiver->parent, receiver->symbol, message))
+                != BLIMP_OK)
+            {
+                break;
+            }
 
-Status Blimp_Send(
-    Blimp *blimp,
-    Object *context,
-    Object *receiver,
-    Object *message,
-    Object **result)
-{
-    Value v;
-    v.type = result ? VALUE_OBJECT : VALUE_VOID;
-    TRY(Send(blimp, context, receiver, message, &v));
+            // The result is the symbol associated with the reference.
+            status = ReturnSymbol(blimp, context, receiver->symbol, result);
+            break;
+        }
 
-    if (result) {
-        *result = v.obj;
-    }
-    return BLIMP_OK;
-}
+        case OBJ_BLOCK: {
+            status = EvalExpr(blimp, receiver->code, receiver, result);
+            break;
+        }
 
-Status BlimpMethod_Eval(
-    Blimp *blimp,
-    Object *context,
-    Object *receiver,
-    Object *message,
-    const Expr *body,
-    Object **result)
-{
-    (void)context;
-    (void)message;
-    return Blimp_Eval(blimp, body, receiver, result);
-}
+        case OBJ_EXTENSION: {
+            Object *obj;
+            if ((status = receiver->ext.method(
+                    blimp,
+                    context,
+                    receiver,
+                    message,
+                    &obj))
+                != BLIMP_OK)
+            {
+                break;
+            }
 
-Status BlimpMethod_PrimitiveGet(
-    Blimp *blimp,
-    Object *context,
-    Object *receiver,
-    Object *message,
-    void *data,
-    Object **result)
-{
-    (void)blimp;
-    (void)message;
-    (void)data;
+            status = ReturnObject(blimp, obj, result);
+            break;
+        }
 
-    const Symbol *sym;
-    TRY(BlimpObject_ParseSymbol(receiver, &sym));
-    TRY(BlimpObject_Get(context, sym, result));
-    BlimpObject_Borrow(*result);
-    return BLIMP_OK;
-}
-
-Status BlimpMethod_PrimitiveSet(
-    Blimp *blimp,
-    Object *context,
-    Object *receiver,
-    Object *message,
-    void *data,
-    Object **result)
-{
-    (void)data;
-
-    const Symbol *sym;
-    TRY(BlimpObject_ParseSymbol(receiver, &sym));
-
-    TRY(BlimpObject_Eval(message, result));
-    if (BlimpObject_Set(context, sym, *result) != BLIMP_OK) {
-        BlimpObject_Release(*result);
-        return Blimp_Reraise(blimp);
-    }
-
-    return BLIMP_OK;
-}
-
-Status BlimpMethod_PrimitiveStore(
-    Blimp *blimp,
-    Object *context,
-    Object *receiver,
-    Object *message,
-    void *data,
-    Object **result)
-{
-    (void)context;
-    (void)data;
-
-    const Symbol *sym;
-    TRY(BlimpObject_ParseSymbol(receiver, &sym));
-
-    TRY(BlimpObject_Eval(message, result));
-    if (BlimpObject_Set(
-            BlimpObject_Parent(receiver), sym, *result) != BLIMP_OK)
-    {
-        BlimpObject_Release(*result);
-        return Blimp_Reraise(blimp);
-    }
-
-    return BLIMP_OK;
-}
-
-Status BlimpMethod_PrimitiveGetModifySet(
-    Blimp *blimp,
-    Object *context,
-    Object *receiver,
-    Object *message,
-    void *data,
-    Object **result)
-{
-    (void)data;
-
-    const Symbol *sym;
-    TRY(BlimpObject_ParseSymbol(receiver, &sym));
-
-    Object *modify;
-    TRY(BlimpObject_Eval(message, &modify));
-
-    if (BlimpObject_Get(context, sym, result) != BLIMP_OK) {
-        if (Blimp_GetLastError(blimp, NULL, NULL, NULL)
-                == BLIMP_NO_SUCH_SYMBOL) {
-            *result = receiver;
-        } else {
-            return Blimp_Reraise(blimp);
+        default: {
+            status = Error(blimp, BLIMP_INVALID_OBJECT_TYPE);
         }
     }
-    BlimpObject_Borrow(*result);
 
-    Object *new_value;
-    if (Blimp_Send(blimp, context, modify, *result, &new_value) != BLIMP_OK) {
-        BlimpObject_Release(*result);
-        return Blimp_Reraise(blimp);
-    }
-    if (BlimpObject_Set(context, sym, new_value) != BLIMP_OK) {
-        BlimpObject_Release(*result);
-        return Blimp_Reraise(blimp);
-    }
-
-    return BLIMP_OK;
-}
-
-
-BlimpStatus BlimpMethod_PrimitiveReadModifyWrite(
-    Blimp *blimp,
-    BlimpObject *context,
-    BlimpObject *receiver,
-    BlimpObject *message,
-    void *data,
-    BlimpObject **result)
-{
-    (void)context;
-    (void)data;
-
-    Object *scope = BlimpObject_Parent(receiver);
-    if (scope == Blimp_GlobalObject(blimp)) {
-        return Blimp_ErrorMsg(blimp, BLIMP_ILLEGAL_SCOPE,
-            "%%= is not allowed in the global scope");
-    }
-
-    const Symbol *sym;
-    TRY(BlimpObject_ParseSymbol(receiver, &sym));
-
-    Object *modify;
-    TRY(BlimpObject_Eval(message, &modify));
-
-    Object *old_value;
-    if (BlimpObject_Get(context, sym, &old_value) != BLIMP_OK) {
-        if (Blimp_GetLastError(blimp, NULL, NULL, NULL)
-                == BLIMP_NO_SUCH_SYMBOL) {
-            old_value = receiver;
-        } else {
-            return Blimp_Reraise(blimp);
-        }
-    }
-    BlimpObject_Borrow(old_value);
-
-    Object *new_value;
-    if (Blimp_Send(blimp, scope, modify, old_value, &new_value) != BLIMP_OK) {
-        BlimpObject_Release(old_value);
-        return Blimp_Reraise(blimp);
-    }
-    if (BlimpObject_Set(scope, sym, new_value) != BLIMP_OK) {
-        BlimpObject_Release(old_value);
-        return Blimp_Reraise(blimp);
-    }
-
-    BlimpObject_Release(old_value);
-    BlimpObject_Borrow(scope);
-
-    *result = scope;
-
-    return BLIMP_OK;
-}
-
-Status BlimpMethod_PrimitiveEval(
-    Blimp *blimp,
-    Object *context,
-    Object *receiver,
-    Object *message,
-    void *data,
-    Object **result)
-{
-    (void)blimp;
-    (void)context;
-    (void)message;
-    (void)data;
-
-    return BlimpObject_Eval(receiver, result);
+    Stack_Pop(blimp, &blimp->stack);
+    return status;
 }
 
 Status Blimp_Eval(
@@ -611,9 +412,46 @@ Status Blimp_EvalSymbol(
     return BLIMP_OK;
 }
 
+BlimpStatus Blimp_Send(
+    Blimp *blimp,
+    Object *scope,
+    Object *receiver,
+    Object *message,
+    Object **result)
+{
+    Value v = {.type=VALUE_OBJECT};
+    TRY(Send(blimp, scope, receiver, message, &v, NULL));
+    *result = v.obj;
+    return BLIMP_OK;
+}
+
+BlimpStatus Blimp_SendAndParseSymbol(
+    Blimp *blimp,
+    Object *scope,
+    Object *receiver,
+    Object *message,
+    const Symbol **sym)
+{
+    Object *obj;
+    TRY(Blimp_Send(blimp, scope, receiver, message, &obj));
+    BlimpStatus status = BlimpObject_ParseSymbol(obj, sym);
+    BlimpObject_Release(obj);
+    return status;
+}
+
 BlimpGCStatistics Blimp_GetGCStatistics(Blimp *blimp)
 {
     return ObjectPool_GetStats(&blimp->objects);
+}
+
+void Blimp_DumpHeap(FILE *f, Blimp *blimp)
+{
+    ObjectPool_DumpHeap(f, &blimp->objects, true);
+}
+
+void Blimp_DumpUnreachable(FILE *f, Blimp *blimp)
+{
+    ObjectPool_DumpHeap(f, &blimp->objects, false);
 }
 
 void Blimp_CollectGarbage(Blimp *blimp)

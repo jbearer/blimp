@@ -1,12 +1,13 @@
 #: --skip-racket -fno-gc-refcount -fno-gc-tracing
 
-scope{:=|{do|
-    x{:=|y}
+scope{^ref {
+    x{^ y};
+    ^ref
 }};
 
-scope{.get|.}{.eval|.};
-scope{:=|.};
+ref{^ (scope[])};
+ref .;
 
-{gc|.}{!expect_clean|.};
+!gc_expect_clean;
 
 .

@@ -6,7 +6,7 @@ file_extensions: [bli, blt]
 scope: source.blimp
 
 variables:
- symbol: '[~@$%^&\*\[\]\-\+=:",\.<>/\?!]*[a-zA-Z0-9_]*'
+ symbol: '[~@$%&\*\[\]\|\-\+=:",\.<>/\?!]*[a-zA-Z0-9_]*'
 
 contexts:
   main:
@@ -21,32 +21,41 @@ contexts:
     - include: comment
 
     - match: '{'
+      scope: punctuation.section.block.begin
       push: block
 
-    - match: '\b(bind)\b'
-      scope: keyword.control
-      push: method
+    - match: '(\^)({{symbol}})'
+      captures:
+        1: punctuation.definition.variable
+        2: variable.other
+
+    - match: '{{symbol}}'
+      scope: variable.other.constant
 
     - match: '`'
       scope: string.quoted.other
       push: symbol
 
-  method:
-    - match: '{{symbol}}'
-      scope: entity.name.function
-
-    - match: '$'
-      pop: true
-
   block:
-    - match: '({{symbol}})\s*\|'
+    - meta_scope: meta.block
+
+    - match: '(\^)({{symbol}})'
       captures:
-        1: variable.function
+        1: punctuation.definition.variable
+        2: variable.parameter
+      set: block_body
+
+    - include: comment
+
+    - match: '(?=[^\s])'
+      set: block_body
+
+  block_body:
+    - include: expr
 
     - match: '}'
+      scope: punctuation.section.block.end
       pop: true
-
-    - include: expr
 
   symbol:
     - meta_scope: string.quoted.other

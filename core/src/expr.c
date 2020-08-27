@@ -33,17 +33,15 @@ void Blimp_FreeExpr(Expr *expr)
                 // until the entire bl:mp is destroyed.
                 break;
             case EXPR_BLOCK:
-                Blimp_FreeExpr(expr->block.tag);
+                // We don't have to clean up the `msg_name` symbol, for the same
+                // reason as above.
                 Blimp_FreeExpr(expr->block.code);
                 break;
             case EXPR_SEND:
                 Blimp_FreeExpr(expr->send.receiver);
                 Blimp_FreeExpr(expr->send.message);
                 break;
-            case EXPR_BIND:
-                Blimp_FreeExpr(expr->bind.receiver);
-                Blimp_FreeExpr(expr->bind.message);
-                Blimp_FreeExpr(expr->bind.code);
+            case EXPR_MSG:
                 break;
         }
 
@@ -53,7 +51,37 @@ void Blimp_FreeExpr(Expr *expr)
     }
 }
 
-void Blimp_DumpExpr(FILE *file, const Expr *expr)
+static void DumpSymbol(FILE *file, const Symbol *sym)
+{
+    // Certain valid bl:mp symbols are given special meaning in the Redex
+    // semantics; for example, `obj` is a keyword that indicates a block values.
+    // Therefore, symbol literals need to be escaped somehow. We will surround
+    // all symbol literals with {} -- neither valid bl:mp characters nor
+    // meaningful Redex characters.
+    //
+    // Redex also assigns _ semantic meaning if it appears anywhere in a Redex
+    // term. We need to replace all occurences of _ in this bl:mp symbol with an
+    // escape identifier which is not otherwise a valid bl:mp identifier. We
+    // will use {-}.
+    //
+    // Of course, braces are not allowed in Racket symbols either, so we also
+    // wrap the whole symbol in ||. Technically we only need to do this if we
+    // actually find an underscore in the symbol name, but it's simpler to
+    // always do it. This also automatically takes care of characters which are
+    // interpreted by Racket but not Redex, such as `.`. It also has the nice
+    // side-effect of making it clear in the output what is a symbol.
+    fputs("|{", file);
+    for (const char *c = sym->name; *c; ++c) {
+        if (*c == '_') {
+            fputs("{-}", file);
+        } else {
+            fputc(*c, file);
+        }
+    }
+    fputs("}|", file);
+}
+
+static void DumpExpr(FILE *file, const Expr *expr, DeBruijnMap *scopes)
 {
     size_t seq_length = 0;
     while (expr) {
@@ -64,58 +92,29 @@ void Blimp_DumpExpr(FILE *file, const Expr *expr)
 
         switch (expr->tag) {
             case EXPR_SYMBOL:
-                // Certain valid bl:mp symbols are given special meaning in the
-                // Redex semantics; for example, `symbol` and `block` are keywords
-                // that indicate symbol and block values. Therefore, symbol literals
-                // need to be escaped somehow. We will surround all symbol literals
-                // with {} -- neither valid bl:mp characters nor meaningful Redex
-                // characters.
-                //
-                // Redex also assigns _ semantic meaning if it appears anywhere in a
-                // Redex term. We need to replace all occurences of _ in this bl:mp
-                // symbol with an escape identifier which is not otherwise a valid
-                // bl:mp identifier. We will use {-}.
-                //
-                // Of course, braces are not allowed in Racket symbols either, so we
-                // also wrap the whole symbol in ||. Technically we only need to do
-                // this if we actually find an underscore in the symbol name, but
-                // it's simpler to always do it. This also automatically takes care
-                // of characters which are interpreted by Racket but not Redex, such
-                // as `.`. It also has the nice side-effect of making it clear in
-                // the output what is a symbol.
-                fputs("|{", file);
-                for (const char *c = expr->symbol->name; *c; ++c) {
-                    if (*c == '_') {
-                        fputs("{-}", file);
-                    } else {
-                        fputc(*c, file);
-                    }
-                }
-                fputs("}|", file);
-
+                DumpSymbol(file, expr->symbol);
                 break;
             case EXPR_BLOCK:
-                fputs("(block ", file);
-                Blimp_DumpExpr(file, expr->block.tag);
+                fputs("(block ^", file);
+                DumpSymbol(file, expr->block.msg_name);
                 fputc(' ', file);
-                Blimp_DumpExpr(file, expr->block.code);
+
+                DBMap_Push(scopes, (void *)expr->block.msg_name);
+                DumpExpr(file, expr->block.code, scopes);
+                DBMap_Pop(scopes);
+
                 fputc(')', file);
                 break;
             case EXPR_SEND:
                 fputc('(', file);
-                Blimp_DumpExpr(file, expr->send.receiver);
+                DumpExpr(file, expr->send.receiver, scopes);
                 fputc(' ', file);
-                Blimp_DumpExpr(file, expr->send.message);
+                DumpExpr(file, expr->send.message, scopes);
                 fputc(')', file);
                 break;
-            case EXPR_BIND:
-                fputs("(bind ", file);
-                Blimp_DumpExpr(file, expr->bind.receiver);
-                fputc(' ', file);
-                Blimp_DumpExpr(file, expr->bind.message);
-                fputc(' ', file);
-                Blimp_DumpExpr(file, expr->bind.code);
-                fputc(')', file);
+            case EXPR_MSG:
+                fputc('^', file);
+                DumpSymbol(file, DBMap_Resolve(scopes, expr->msg.index));
                 break;
             default:
                 assert(false);
@@ -133,7 +132,15 @@ void Blimp_DumpExpr(FILE *file, const Expr *expr)
     }
 }
 
-void Blimp_PrintExpr(FILE *f, const Expr *expr)
+void Blimp_DumpExpr(Blimp *blimp, FILE *file, const Expr *expr)
+{
+    DeBruijnMap scopes;
+    DBMap_Init(blimp, &scopes);
+    DumpExpr(file, expr, &scopes);
+    DBMap_Destroy(&scopes);
+}
+
+void PrintClosure(FILE *f, const Expr *expr, DeBruijnMap *scopes)
 {
     while (expr) {
         switch (expr->tag) {
@@ -141,28 +148,29 @@ void Blimp_PrintExpr(FILE *f, const Expr *expr)
                 fputs(expr->symbol->name, f);
                 break;
             case EXPR_BLOCK:
-                fputc('{', f);
-                Blimp_PrintExpr(f, expr->block.tag);
-                fputc('|', f);
-                Blimp_PrintExpr(f, expr->block.code);
+                fputs("{^", f);
+                fputs(expr->block.msg_name->name, f);
+                fputc(' ', f);
+
+                DBMap_Push(scopes, (void *)expr->block.msg_name);
+                PrintClosure(f, expr->block.code, scopes);
+                DBMap_Pop(scopes);
+
                 fputc('}', f);
                 break;
             case EXPR_SEND:
                 fputc('(', f);
-                Blimp_PrintExpr(f, expr->send.receiver);
+                PrintClosure(f, expr->send.receiver, scopes);
                 fputs(") (", f);
-                Blimp_PrintExpr(f, expr->send.message);
+                PrintClosure(f, expr->send.message, scopes);
                 fputc(')', f);
                 break;
-            case EXPR_BIND:
-                fputs("bind (", f);
-                Blimp_PrintExpr(f, expr->bind.receiver);
-                fputs(") (", f);
-                Blimp_PrintExpr(f, expr->bind.message);
-                fputs(") (", f);
-                Blimp_PrintExpr(f, expr->bind.code);
-                fputc(')', f);
+            case EXPR_MSG: {
+                const Symbol *msg_name = DBMap_Resolve(scopes, expr->msg.index);
+                fputc('^', f);
+                fputs(msg_name->name, f);
                 break;
+            }
             default:
                 assert(false);
         }
@@ -172,4 +180,12 @@ void Blimp_PrintExpr(FILE *f, const Expr *expr)
         }
         expr = expr->next;
     }
+}
+
+void Blimp_PrintExpr(Blimp *blimp, FILE *f, const Expr *expr)
+{
+    DeBruijnMap scopes;
+    DBMap_Init(blimp, &scopes);
+    PrintClosure(f, expr, &scopes);
+    DBMap_Destroy(&scopes);
 }

@@ -1,0 +1,23 @@
+#: -fno-gc-tracing
+
+import runtime;
+!gc_expect_clean;
+
+__cell[];
+!gc_expect_clean;
+
+x{^ (__cell[])};
+!gc_expect_clean;
+
+# Create a reference to a reference.
+x { __cell[] };
+x{^} {foo};
+!expect_eq (x{^}{^}) foo;
+
+# Clear the reference.
+x{.};
+!expect_eq (x{^}) .;
+
+!gc_print_stats;
+!gc_expect_clean;
+.

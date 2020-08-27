@@ -72,6 +72,11 @@ static inline ScopeIterator Scope_End(Scope *scope)
     return HashMap_End(scope);
 }
 
+static inline const Symbol *Scope_GetKey(Scope *scope, ScopeIterator it)
+{
+    return *(const Symbol **)HashMap_GetKey(scope, it);
+}
+
 static inline Ref *Scope_GetValue(Scope *scope, ScopeIterator it)
 {
     return *(Ref **)HashMap_GetValue(scope, it);
@@ -310,20 +315,20 @@ static inline Ref *Scope_GetValue(Scope *scope, ScopeIterator it)
 // simple, yet very common, motivating example: a humble local variable. Here's
 // some bl:mp code:
 //
-//      {scope|
-//          x{:=|y}
-//      }{.eval|.}
+//      {
+//          x{^ y}
+//      }
 //
-// After evaluating this piece of code, it is quite clear that the `scope`
+// After evaluating this piece of code, it is quite clear that the outer block
 // object has a reference to a symbol object `y`. That is, after all, the sole
 // observable effect of this program. Less obvious is that the object `y` has a
-// reference to the would-be temporary `:=` object, via its parent pointer.
-// Likewise, that `:=` object has a reference to the `scope` object via _its_
-// parent pointer, so the chain of references looks like this:
+// reference to the would-be-temporary {^ y} object, via its parent pointer.
+// Likewise, that object has a reference to the outer object via _its_ parent
+// pointer, so the chain of references looks like this:
 //
 //                             ---------
 //                             |       |
-//                        .<---| scope |
+//                        .<---| outer |
 //                        |    |   1   |
 //                        |    ----^----
 //                        |        |
@@ -331,7 +336,7 @@ static inline Ref *Scope_GetValue(Scope *scope, ScopeIterator it)
 //                        |        |
 //                        |    ---------
 //                        |    |       |
-//    scope (through `x`) |    |  :=   |
+//    scope (through `x`) |    | {^ y} |
 //                        |    |   1   |
 //                        |    ----^----
 //                        |        |
@@ -1526,6 +1531,21 @@ static void MarkReachable(ObjectPool *pool)
             }
         }
 
+        // Push messages captured by this object onto the stack.
+        if ((obj->type == OBJ_BLOCK || obj->type == OBJ_EXTENSION) &&
+            !DBMap_Empty(&obj->messages))
+        {
+            Ref *ref = DBMap_Resolve(&obj->messages, 0);
+            Object *captured = ref->to;
+            assert(captured->type != OBJ_FREE);
+
+            if (!captured->reached) {
+                captured->reached = true;
+                captured->next = stack;
+                stack = captured;
+            }
+        }
+
         // Push this object's parent onto the stack.
         if (obj->parent && !obj->parent->reached) {
             assert(obj->parent->type != OBJ_FREE);
@@ -1653,6 +1673,7 @@ BlimpGCStatistics ObjectPool_GetStats(ObjectPool *pool)
                 assert(obj->type != OBJ_FREE);
                 ++stats.reachable;
             }
+
             obj->reached = false;
         }
     }
@@ -1660,6 +1681,72 @@ BlimpGCStatistics ObjectPool_GetStats(ObjectPool *pool)
     stats.collections = pool->gc_collections;
 
     return stats;
+}
+
+void ObjectPool_DumpHeap(FILE *f, ObjectPool *pool, bool include_reachable)
+{
+    MarkReachable(pool);
+
+    // Print all the objects, with an asterisk next to the unreachable ones.
+    for (ObjectBatch *batch = pool->batches; batch; batch = batch->next) {
+        for (size_t i = 0; i < batch->uninitialized; ++i) {
+            Object *obj = &batch->objects[i];
+
+            if (obj->type != OBJ_FREE && (include_reachable || !obj->reached)) {
+                fprintf(f, "%c%p (%p): ",
+                    obj->reached ? ' ' : '*', obj, ERC_GetClump(obj));
+                BlimpObject_Print(f, obj);
+                fputc('\n', f);
+            }
+        }
+    }
+
+    // Print the graph of references between objects.
+    for (ObjectBatch *batch = pool->batches; batch; batch = batch->next) {
+        for (size_t i = 0; i < batch->uninitialized; ++i) {
+            Object *obj = &batch->objects[i];
+
+            if (obj->type != OBJ_FREE && (include_reachable || !obj->reached)) {
+                // Print the name of the object.
+                fprintf(f, "\n%p:\n", obj);
+
+                // If it has a parent reference, print a graph edge for it.
+                if (obj->parent && (include_reachable || !obj->parent->reached)) {
+                    fprintf(f, "    %-10s -> %p\n", "<parent>", obj->parent);
+                }
+
+                // If it has captured a message from its parent, print that.
+                if ((obj->type == OBJ_BLOCK || obj->type == OBJ_EXTENSION) &&
+                    !DBMap_Empty(&obj->messages))
+                {
+                    Ref *ref = DBMap_Resolve(&obj->messages, 0);
+                    if (include_reachable || !ref->to->reached) {
+                        fprintf(f, "    %-10s -> %p\n", "<capture>", ref->to);
+                    }
+                }
+
+                // Print an edge for each entry in its scope.
+                for (ScopeIterator it = Scope_Begin(&obj->scope);
+                     it != Scope_End(&obj->scope);
+                     it = Scope_Next(&obj->scope, it))
+                {
+                    const Symbol *sym = Scope_GetKey(&obj->scope, it);
+                    Object *child = Scope_GetValue(&obj->scope, it)->to;
+
+                    if (include_reachable || !child->reached) {
+                        fprintf(f, "    %-10s -> %p\n", sym->name, child);
+                    }
+                }
+            }
+        }
+    }
+
+    // Clear the `reached` flags on all the objects.
+    for (ObjectBatch *batch = pool->batches; batch; batch = batch->next) {
+        for (size_t i = 0; i < batch->uninitialized; ++i) {
+            batch->objects[i].reached = false;
+        }
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1726,8 +1813,9 @@ static Status NewObject(Blimp *blimp, Object *parent, Object **obj)
             *obj = &batch->objects[batch->uninitialized++];
             if (Scope_Init(blimp, &(*obj)->scope) != BLIMP_OK) {
                 --batch->uninitialized;
-                return Blimp_Reraise(blimp);
+                return Reraise(blimp);
             }
+            DBMap_Init(blimp, &(*obj)->messages);
             (*obj)->reached = false;
 
             if (blimp->options.gc_cycle_detection) {
@@ -1760,7 +1848,12 @@ static void FreeObject(Object *obj, bool recursive)
     }
 
     assert(obj->transient_refcount == 0);
+    ObjectType type = obj->type;
     obj->type = OBJ_FREE;
+
+    if (type == OBJ_EXTENSION && obj->ext.finalize != NULL) {
+        obj->ext.finalize(obj->ext.state);
+    }
 
     Blimp *blimp = GetBlimp(obj);
 
@@ -1779,6 +1872,15 @@ static void FreeObject(Object *obj, bool recursive)
             FreeRef(blimp, ref);
         }
 
+        // Release our reference to our message.
+        if ((type == OBJ_BLOCK || type == OBJ_EXTENSION) &&
+            !DBMap_Empty(&obj->messages))
+        {
+            Ref *ref = DBMap_Resolve(&obj->messages, 0);
+            ReleaseRef(obj, ref);
+            FreeRef(blimp, ref);
+        }
+
         // Release our reference to our parent.
         ReleaseParent(obj);
     }
@@ -1793,10 +1895,48 @@ static void FreeObject(Object *obj, bool recursive)
     blimp->objects.free_list = obj;
 }
 
+// Make this object a closure in its parent scope. After this function succeeds,
+// `obj->messages` will contain all the messages captured by `obj->parent`, as
+// well as the message which is currently in scope, indicated by the top frame
+// of the interpreter stack.
+static Status MakeClosure(Object *obj)
+{
+    Blimp *blimp = GetBlimp(obj);
+
+    // Copy the references from the parent' closure. It is safe to literally
+    // copy the pointers to the Ref objects, without borrowing the referred-to
+    // Objects on behalf of `obj`, because `obj` has a reference to its parent
+    // which will last for the duration of `obj`s lifetime, and the parent has a
+    // reference to its captured messages which last the duration of its
+    // lifetime.
+    DBMap_Clear(&obj->messages);
+    if (obj->parent->type == OBJ_BLOCK || obj->parent->type == OBJ_EXTENSION) {
+        TRY(DBMap_Append(&obj->messages, &obj->parent->messages));
+    }
+
+    // Get the currently in-scope message from the top of the stack.
+    const StackFrame *frame = Stack_CurrentFrame(&blimp->stack);
+    if (frame != NULL) {
+        // Our parent does not capture this object, so we need to create a new
+        // Ref and borrow it.
+        Ref *ref;
+        TRY(AllocRef(blimp, &ref));
+        if (DBMap_Push(&obj->messages, ref) != BLIMP_OK) {
+            FreeRef(blimp, ref);
+            return Reraise(blimp);
+        }
+
+        ref->to = frame->message;
+        BorrowRef(obj, ref);
+    }
+
+    return BLIMP_OK;
+}
+
 Status BlimpObject_NewBlock(
     Blimp *blimp,
     Object *parent,
-    const Symbol *tag,
+    const Symbol *msg_name,
     Expr *code,
     Object **obj)
 {
@@ -1804,9 +1944,40 @@ Status BlimpObject_NewBlock(
 
     TRY(NewObject(blimp, parent, obj));
     (*obj)->type = OBJ_BLOCK;
-    (*obj)->tag  = tag;
+    (*obj)->msg_name = msg_name;
     (*obj)->code = code;
     ++code->refcount;
+
+    if (MakeClosure(*obj) != BLIMP_OK) {
+        FreeObject(*obj, true);
+        return Reraise(blimp);
+    }
+
+    HeapCheck(blimp);
+    return BLIMP_OK;
+}
+
+Status BlimpObject_NewExtension(
+    Blimp *blimp,
+    Object *parent,
+    void *state,
+    BlimpMethod method,
+    BlimpFinalizer finalize,
+    Object **obj)
+{
+    HeapCheck(blimp);
+
+    TRY(NewObject(blimp, parent, obj));
+    (*obj)->type = OBJ_EXTENSION;
+
+    (*obj)->ext.method   = method;
+    (*obj)->ext.finalize = finalize;
+    (*obj)->ext.state    = state;
+
+    if (MakeClosure(*obj) != BLIMP_OK) {
+        FreeObject(*obj, true);
+        return Reraise(blimp);
+    }
 
     HeapCheck(blimp);
     return BLIMP_OK;
@@ -1827,6 +1998,17 @@ Status BlimpObject_NewGlobal(Blimp *blimp, Object **obj)
 {
     TRY(NewObject(blimp, NULL, obj));
     (*obj)->type = OBJ_GLOBAL;
+
+    HeapCheck(blimp);
+    return BLIMP_OK;
+}
+
+Status BlimpObject_NewReference(
+    Blimp *blimp, Object *parent, const Symbol *sym, Object **obj)
+{
+    TRY(NewObject(blimp, parent, obj));
+    (*obj)->type = OBJ_REFERENCE;
+    (*obj)->symbol = sym;
 
     HeapCheck(blimp);
     return BLIMP_OK;
@@ -1860,31 +2042,36 @@ Object *BlimpObject_Parent(const Object *obj)
     return obj->parent;
 }
 
-const Symbol *BlimpObject_Tag(const Object *obj)
-{
-    switch (obj->type) {
-        case OBJ_BLOCK:
-            return obj->tag;
-        case OBJ_SYMBOL:
-            return GetBlimp(obj)->objects.symbol_tag;
-        case OBJ_GLOBAL:
-            return NULL;
-        default:
-            assert(false);
-            return NULL;
-    }
-}
-
 void BlimpObject_Print(FILE *f, const Object *obj)
 {
+    Blimp *blimp = GetBlimp(obj);
+
     switch (obj->type) {
         case OBJ_SYMBOL:
             fputs(obj->symbol->name, f);
             break;
-        case OBJ_BLOCK:
-            fprintf(f, "{%s|", obj->tag->name);
-            Blimp_PrintExpr(f, obj->code);
+        case OBJ_BLOCK: {
+            DeBruijnMap scopes;
+            DBMap_Init(blimp, &scopes);
+
+            for (const Object *cur = obj; cur != NULL; cur = cur->parent) {
+                if (cur->type == OBJ_BLOCK) {
+                    DBMap_Shift(&scopes, (void *)cur->msg_name);
+                }
+            }
+
+            fprintf(f, "{^%s ", obj->msg_name->name);
+            PrintClosure(f, obj->code, &scopes);
             fprintf(f, "}");
+
+            DBMap_Destroy(&scopes);
+            break;
+        }
+        case OBJ_EXTENSION:
+            fprintf(f, "<extension>");
+            break;
+        case OBJ_REFERENCE:
+            fprintf(f, "<ref:%s>", obj->symbol->name);
             break;
         case OBJ_GLOBAL:
             fprintf(f, "<global>");
@@ -1894,18 +2081,30 @@ void BlimpObject_Print(FILE *f, const Object *obj)
     }
 }
 
-Status BlimpObject_ParseBlock(
-    const Object *obj, const Symbol **tag, const Expr **code)
+Status BlimpObject_ParseBlock(const Object *obj, const Expr **code)
 {
     if (obj->type != OBJ_BLOCK) {
         return Error(GetBlimp(obj), BLIMP_MUST_BE_BLOCK);
     }
 
-    if (tag) {
-        *tag = obj->tag;
-    }
     if (code) {
         *code = obj->code;
+    }
+    return BLIMP_OK;
+}
+
+Status BlimpObject_ParseExtension(
+    const Object *obj, BlimpMethod *method, void **state)
+{
+    if (obj->type != OBJ_EXTENSION) {
+        return Error(GetBlimp(obj), BLIMP_MUST_BE_EXTENSION);
+    }
+
+    if (method) {
+        *method = obj->ext.method;
+    }
+    if (state) {
+        *state = obj->ext.state;
     }
     return BLIMP_OK;
 }
@@ -1972,19 +2171,16 @@ Status BlimpObject_Set(Object *obj, const Symbol *sym, Object *val)
     return BLIMP_OK;
 }
 
-Status BlimpObject_Eval(Object *obj, Object **ret)
+Status BlimpObject_GetMessage(Object *obj, size_t index, Object **message)
 {
-    if (obj->type != OBJ_BLOCK) {
-        return ErrorMsg(
-            GetBlimp(obj),
-            BLIMP_MUST_BE_BLOCK,
-            "can only evaluate a block object");
+    if (obj->type != OBJ_BLOCK && obj->type != OBJ_EXTENSION) {
+        return Error(GetBlimp(obj), BLIMP_INVALID_OBJECT_TYPE);
     }
 
-    return Blimp_Eval(GetBlimp(obj), obj->code, obj, ret);
-        // Evaluate the code expression in `obj`s scope.
+    Ref *ref = DBMap_Resolve(&obj->messages, index);
+    *message = ref->to;
+    return BLIMP_OK;
 }
-
 
 Object *BlimpObject_Borrow(Object *obj)
 {

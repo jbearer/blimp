@@ -1,9 +1,11 @@
 #: --skip-racket
 
-overflow{:=|{do|
-    overflow{.get|.}{.eval|.}
+overflow{^{
+    overflow[]
 }};
 
-overflow{.get|.}{!expect_error|.};
+!expect_error {
+    overflow[]
+};
 
 .

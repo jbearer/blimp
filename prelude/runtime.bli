@@ -1,0 +1,113 @@
+# A simple runtime for an imperative language hosted in bl:mp.
+
+__cell {(^){
+    {
+        value{^ref
+            ^ref {undefined};
+
+            {^M
+                {^new_val
+                    ^ref {(^new_val)};
+                    ^new_val
+                } (^M (value[]))
+            }
+        }
+    }[]
+}};
+
+__mem {
+    (^){^sym
+        # If `__new_stack_frame` is not in scope, send it a constructor to
+        # initialize it to a getter function for a function which returns a new
+        # stack frame which is a lexical child of the `__mem` object.
+        #
+        # If `__new_stack_frame` is already in scope, this will
+        # simply call the previously initialized getter, which does nothing.
+        __new_stack_frame {
+            # The getter function
+            (^){
+                # The actual stack frame creator
+                {
+                    # Just return a stack frame
+                    {^sym
+                        ^sym {
+                            # The getter function
+                            (^)({^cell
+                                {
+                                    (^cell)
+                                }
+                            } (__cell[]))
+                        };
+
+                        # Return the cell
+                        ^sym get_cell
+                    }
+                }
+            }
+        };
+
+        # If `sym` is not in scope, send it a constructor to initialize it to a
+        # getter function for a cell. If `sym` is already in scope, this will
+        # simply call the previously initialized getter, which does nothing.
+        ^sym {
+            # The getter function
+            (^)({^cell
+                {
+                    (^cell)
+                }
+            } (__cell[]))
+        };
+
+        # Return the cell
+        ^sym get_cell
+    }
+};
+
+__stack { (^)(__cell[]) };
+__stack { __mem };
+
+__push_stack_frame {(^){
+    {^frame
+        ^frame __caller { __stack{^} };
+        __stack { (^frame) }
+    }(__mem __new_stack_frame[])
+}};
+
+__pop_stack_frame {(^){
+    {^frame
+        __stack { (^frame) }
+    } (__stack{^} __caller {^})
+}};
+
+$ {
+    (^){^sym
+        __stack{^} ^sym{^}
+    }
+};
+
+:= {
+    (^){^symref
+
+        {^sym
+            {^val
+                __stack{^} ^sym {(^val)};
+                ^val
+            }
+        } (^symref ({^sym
+            { # Consume :=
+                {^val
+                    __stack{^} ^sym {(^val)};
+                    ^val
+                }
+            }
+        } (^symref .)))
+    }
+};
+
+module {
+    (^){^code
+        ^code[]
+    }
+};
+
+.

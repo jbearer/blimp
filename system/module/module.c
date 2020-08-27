@@ -151,12 +151,13 @@ static BlimpStatus ImportMethod(
     BlimpObject *context,
     BlimpObject *receiver,
     BlimpObject *message,
-    void *data,
     BlimpObject **result)
 {
-    (void) receiver;
-
-    const char **path = (const char **)data;
+    const char **path;
+    if (BlimpObject_ParseExtension(
+            receiver, NULL, (void **)&path) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
 
     const BlimpSymbol *module;
     if (BlimpObject_ParseSymbol(message, &module) != BLIMP_OK) {
@@ -169,10 +170,32 @@ static BlimpStatus ImportMethod(
 
 BlimpStatus BlimpModule_Init(Blimp *blimp, const char **path)
 {
-    return Blimp_BindVTableFragment(blimp, (BlimpVTableFragment){
-        {"import", "symbol", ImportMethod, (void *)path},
-        {0, 0, 0, 0}
-    });
+    const BlimpSymbol *import;
+    if (Blimp_GetSymbol(blimp, "import", &import) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    BlimpObject *method;
+    if (BlimpObject_NewExtension(
+            blimp,
+            Blimp_GlobalObject(blimp),
+            (void *)path,
+            ImportMethod,
+            NULL,
+            &method) != BLIMP_OK)
+    {
+        return Blimp_Reraise(blimp);
+    }
+
+    if (BlimpObject_Set(
+            Blimp_GlobalObject(blimp), import, method) != BLIMP_OK)
+    {
+        BlimpObject_Release(method);
+        return Blimp_Reraise(blimp);
+    }
+    BlimpObject_Release(method);
+
+    return BLIMP_OK;
 }
 
 BlimpStatus BlimpModule_Import(

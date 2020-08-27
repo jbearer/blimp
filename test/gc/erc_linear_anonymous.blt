@@ -1,24 +1,24 @@
 #: --skip-racket -fno-gc-refcount -fno-gc-tracing
 
-# This object creates a cycle involving parent pointers, where the outer `do`
-# block has a reference to `y`, whose parent is the inner `:=` block, whose
-# parent is the `do` block, like so:
+# This object creates a cycle involving parent pointers, where the outer block
+# has a reference to `y`, whose parent is the inner block, whose parent is the
+# outer block, like so:
 #
 #                                  ---------
 #                                  |       |
-#                             .<---|  do   |
+#                             .<---| outer |
 #                             |    |       |
 #                             |    ----^----
 #                             |        |
-#                             |        | parent (r)
+#                             |        | parent
 #                             |        |
 #                             |    ---------
 #                             |    |       |
-#                   scope (e) |    |  :=   |
+#                       scope |    | inner |
 #                             |    |       |
 #                             |    ----^----
 #                             |        |
-#                             |        | parent (r)
+#                             |        | parent
 #                             |        |
 #                             |    ---------
 #                             V    |       |
@@ -27,10 +27,10 @@
 #                                  ---------
 #
 #
-{do|
-    x{:=|y}
-};
+{
+    x{^ y}
+}[];
 
-{gc|.}{!expect_clean|.};
+!gc_expect_clean;
 
 .

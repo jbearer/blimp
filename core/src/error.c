@@ -309,6 +309,13 @@ Status Blimp_RuntimeReraise(Blimp *blimp)
     return &blimp->last_error;
 }
 
+Status Blimp_ReraiseFrom(Blimp *blimp, SourceRange range)
+{
+    blimp->last_error.range = range;
+    blimp->last_error.has_range = true;
+    return &blimp->last_error;
+}
+
 BlimpErrorCode Blimp_GetLastError(
     Blimp *blimp,
     const SourceRange **range,

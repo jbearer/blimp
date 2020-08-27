@@ -9,7 +9,7 @@ struct BlimpExpr {
         EXPR_SYMBOL,
         EXPR_BLOCK,
         EXPR_SEND,
-        EXPR_BIND,
+        EXPR_MSG,
     } tag;
 
     size_t refcount;
@@ -32,7 +32,12 @@ struct BlimpExpr {
         const Symbol *symbol;
 
         struct {
-            Expr *tag;
+            const Symbol *msg_name;
+                // The name of the free variable in `code` representing a
+                // message passed to this object. Uses of the free variable in
+                // code are represented as DeBruijn indices resolved at parse
+                // time, not as names, so this name is only used for debugging
+                // and pretty-printing.
             Expr *code;
         } block;
 
@@ -42,11 +47,43 @@ struct BlimpExpr {
         } send;
 
         struct {
-            Expr *receiver;
-            Expr *message;
-            Expr *code;
-        } bind;
+            size_t index;
+                // DeBruijn index of the message being referred to by this
+                // expression.
+                //
+                // `index` refers to the depth in lexical scopes from the object
+                // which received the referred-to message, to the reference to
+                // the message. For example:
+                //
+                // {^msg
+                //      ^msg
+                // }
+                //
+                // The reference to ^msg in the body of the object occurs in the
+                // same lexical scope where ^msg is bound; there are 0 lexical
+                // scopes between the two, so the body of this object would be
+                // represented by an EXPR_MSG with an index of 0.
+                //
+                // In another example:
+                //
+                // {^msg
+                //      {
+                //          ^msg
+                //      }
+                // }
+                //
+                // ^msg in the body of the inner object refers to the message
+                // being received by the outer object; there is one lexical
+                // scope in between (the anonymous inner scope) so `index` here
+                // is 1.
+                //
+                // The parser ensures that all EXPR_MSG expressions have a valid
+                // index; that is, if `index` is `n`, then the expression is a
+                // lexical child of at least `n + 1` nested scopes.
+        } msg;
     };
 };
+
+PRIVATE void PrintClosure(FILE *f, const Expr *expr, DeBruijnMap *scopes);
 
 #endif
