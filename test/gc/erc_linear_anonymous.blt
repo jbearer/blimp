@@ -1,4 +1,4 @@
-#: --skip-racket -fno-gc-refcount -fno-gc-tracing
+#: --skip-racket -fno-gc-tracing
 
 # This object creates a cycle involving parent pointers, where the outer block
 # has a reference to `y`, whose parent is the inner block, whose parent is the

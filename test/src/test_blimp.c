@@ -357,8 +357,7 @@ static BlimpStatus GC_Unreachable(
     if (MakeUIntSymbol(blimp, unreachable, &sym) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
-    return BlimpObject_NewSymbol(
-        blimp, Blimp_GlobalObject(blimp), sym, result);
+    return BlimpObject_NewSymbol(blimp, sym, result);
 }
 
 static BlimpStatus GC_ExpectClean(

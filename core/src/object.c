@@ -1,12 +1,8 @@
 #include "internal/blimp.h"
 #include "internal/expr.h"
 #include "internal/hash_map.h"
+#include "internal/pool_alloc.h"
 #include "internal/symbol.h"
-
-static inline Blimp *GetBlimp(const Object *obj)
-{
-    return HashMap_GetBlimp(&obj->scope);
-}
 
 ////////////////////////////////////////////////////////////////////////////////
 // Scopes: just a wrapper around a hash map mapping symbols to objects
@@ -82,144 +78,182 @@ static inline Ref *Scope_GetValue(Scope *scope, ScopeIterator it)
     return *(Ref **)HashMap_GetValue(scope, it);
 }
 
+
 ////////////////////////////////////////////////////////////////////////////////
-// Object pool
+// ObjectPool
 //
-////////////////////////////////////////////////////////////////////////////////
-// Motivation
-//
-// A typical bl:mp program can put quite a heavy load on the memory allocator,
-// making lots of short-lived allocations. For example, every time a symbol
-// literal expression is evaluated, it produces a new symbol object. Very often,
-// that symbol is only used as the receiver of a message and then discarded, or
-// else it is used as the tag of the message itself, which is frequently
-// discarded as soon as the message is finished being processed. This kind of
-// rapid cycling can be a pain point for many general purpose allocators (such
-// as the one provided by your favorite distribution of libc).
-//
-// In addition, the language needs to support garbage collection, since the
-// allocation of new objects (and thus their destruction as well) is not exposed
-// in the abstract machine. Thus, it makes a lot of sense that we would have a
-// custom allocator for objects.
-//
-// Once we have an allocator dedicate specifically for allocating objects, we
-// can take advantage of the ways in which the problem is much more constrained
-// than for a general allocator. For example, all objects are the same size.
-// This fact on its own drastically simplifies the problem of writing an
-// allocator, because we can permanently divide the memory owned by the
-// allocator into object-sized chunks, which means we never have to search for
-// an appropriately sized region of memory (since all regions are the correct
-// size) and we never have to split or coalesce regions of memory.
-//
-// Beyond that, not only are all of our allocations object-sized, they are all
-// actually objects. This means that we can save some of the cost of
-// initializing new objects by not fully deinitializing old objects when they
-// are returned to the free list. For example, if we happen to get an object
-// that is not short-lived, then the program may have spent a fair amount of
-// work initializing and allocating memory for the hash map representing that
-// object's scope. When we free that object, instead of destroying its hash map,
-// we can simply empty it (which is pretty cheap) and we can then reuse its
-// memory the next time that object is reused. A more complete scheme might even
-// try to predict when an allocation is going to see heavy use of the hash map,
-// and try to serve such allocations with an object which already has a large
-// hash map allocated. The current implementation does not do this.
-//
-////////////////////////////////////////////////////////////////////////////////
-// Architecture
-//
-// The memory managed by the allocator is divided into large contiguous slabs,
-// or batches. Each batch consists of a small header and an array of batch_size
-// objects. Each batch is itself allocated from the system allocator using
-// `malloc`. Allocating space for many objects at once using batches allow us to
-// amortize the cost of the system allocator.
-//
-// When a batch is first allocated, it constains space for batch_size objects,
-// but none of those objects are initialized. When an object is first allocated
-// from a batch, it is fully initialized, but when it is returned to the
-// allocator, it is only partially deinitialized. As discussed above, this
-// allows us to minimize some of the expensive work of initalization, such as
-// allocating memory for hash maps. This scheme does require some extra
-// accounting, though: we need to know which free objects are partially
-// initialized, so we don't waste time reinitializing them, and which are
-// uninitialized so we can initialize them before allocating them. The
-// initialized free objects are linked together in a free object list which may
-// traverse objects in all the batches in the system, in an arbitrary order. The
-// uninitialized objects are handled per batch: each batch allocates
-// uninitialized objects in order, starting from the first object in its array
-// of objects, and it keeps track of the offset of the first object in its
-// array.
-//
-// Finally, all the batches themselves are linked together in another list, in
-// the order in which they were allocated from the system allocator, with the
-// most recently allocated batch first. Since we only allocate a new batch when
-// there are no free objects to allocate out of the existing batches, all of the
-// batches in this list except possibly the first contain only initialized
-// objects; their uninitialized offsets are equal to the batch size. We refer to
-// these as the saturated batches. The first batch in the list may contain
-// uninitialized object which can be allocated; if it does, we call it the
-// active batch. We never actually use the list of batches for allocation; if we
-// want to allocate an uninitialized object we always do it out of the active
-// batch, and if we want an initialized object that may come from a saturated
-// batch, we access it via the free list, not the list of batches. However, the
-// list of batches is used at system teardown to return each of the allocated
-// batches to the system allocator.
-//
-//  batch list                                          free list
-//   |                                                   |
-//  _V____________________________       ________________|________________
-// | Next: -----------------------|---->| Next: ---------|----------------|->...
-// | Uninitialized:--.            |     | Uninitialized:-|--------------. |
-// | Objects:________V__________  |     | Objects:_______V____________ _V |
-// |   | FREE | SYM | ??? | ??? | |     |   | BLOCK | FREE | SYM | FREE | |
-// |   |_|__^_|____ |_____|_____| |     |   |_______|__|___|_____|__^___| |
-// |_____|__|_____________________|     |______________|____________|_____|
-//       |  |__________________________________________V            |
-//       V__________________________________________________________|
-//
-// |-------Active Batch-----------|     |-------Saturated batches-------------->
-//
-////////////////////////////////////////////////////////////////////////////////
-// Allocating
-//
-// To allocate an object out of this architecture, we use a tiered algorithm:
-// there are three tiers of objects from which we can allocate, each more
-// expensive than the last. We try each tier in succession until we succeed in
-// allocating an object.
-//
-// The tiers, in order of most preferred (least expensive) to least preferred
-// (most expensive) are:
-//  1. The free list: cheapest allocation strategy, just take an already
-//     partially initialized object off the head of a linked list. We have to
-//     clear, but not reinitialize, its hash map, since the map may have stale
-//     data from the last time it was allocated.
-//  2. The active batch: slightly more expensive, requires initializing the hash
-//     map for the object's scope, but does not require a malloc.
-//  3. Allocating a new batch: expensive, requires calling malloc (though note
-//     that we do not have to initalize the whole batch, since we do that lazily
-//     when we allocate from the batch in tier 2). Done very rarely because of
-//     batching.
-//
-////////////////////////////////////////////////////////////////////////////////
-// Deallocating
-//
-// Deallocating is very simple: we put the object to be deallocated as is on the
-// front of the free list. We do not have to do any deinitialization, such as
-// emptying out the scope, since that is performed lazily if and when that
-// object is later reallocated from tier 1.
-//
-// Note that we never return memory to the system allocator until the entire
-// ObjectPool is torn down -- even if a batch becomes completely free at some
-// point during its life.
-//
+
+typedef struct {
+    // The PoolAllocator we're currently iterating over.
+    enum {
+        REFERENCE_OBJECT_POOL,
+        SCOPED_OBJECT_POOL,
+        END
+    } pool;
+
+    PoolAllocatorIterator it;
+        // Current position in the pool we're iterating over.
+} ObjectPoolIterator;
+
+static inline ObjectPoolIterator ObjectPool_Begin(ObjectPool *pool)
+{
+    return (ObjectPoolIterator) {
+        REFERENCE_OBJECT_POOL,
+        PoolAllocator_Begin(&pool->reference_object_pool)
+    };
+}
+
+static inline GC_Object *ObjectPool_Next(
+    ObjectPool *pool, ObjectPoolIterator *it)
+{
+    PoolAllocator *alloc;
+    switch (it->pool) {
+        case REFERENCE_OBJECT_POOL:
+            alloc = &pool->reference_object_pool;
+            break;
+        case SCOPED_OBJECT_POOL:
+            alloc = &pool->scoped_object_pool;
+            break;
+        default:
+            return NULL;
+    }
+
+    GC_Object *obj = NULL;
+    while (true) {
+        obj = PoolAllocator_Next(alloc, &it->it);
+
+        if (obj == NULL) {
+            // Advance to the next pool.
+            if (it->pool == REFERENCE_OBJECT_POOL) {
+                alloc = &pool->scoped_object_pool;
+                it->pool = SCOPED_OBJECT_POOL;
+                it->it = PoolAllocator_Begin(alloc);
+                continue;
+            } else {
+                // We're out of pools, we've reached the end of the heap.
+                break;
+            }
+        }
+
+        if (!Object_IsFree((Object *)obj)) {
+            break;
+        }
+    }
+
+    return obj;
+}
+
+void Blimp_ForEachObject(
+    Blimp *blimp,
+    void(*func)(Blimp *blimp, Object *obj, void *arg),
+    void *arg)
+{
+    GC_Object *obj;
+    for (ObjectPoolIterator it = ObjectPool_Begin(&blimp->objects);
+         (obj = ObjectPool_Next(&blimp->objects, &it)) != NULL; )
+    {
+        func(blimp, (Object *)obj, arg);
+    }
+}
+
+static Status ScopedObject_OneTimeInit(ScopedObject *obj, Blimp *blimp);
+
+Status ObjectPool_Init(Blimp *blimp, ObjectPool *pool)
+{
+    // Initialize the ReferenceObject allocation pool.
+    PoolAllocator_Init(&pool->reference_object_pool,
+        sizeof(ReferenceObject),
+        blimp->options.gc_batch_size,
+        blimp->options.gc_batches_per_trace,
+        NULL, // No one-time initializer
+        blimp->options.gc_tracing
+            ? (PoolGCFunc)ObjectPool_CollectGarbage
+            : NULL,
+        pool
+    );
+
+    // Initialize the ScopedObject allocation pool.
+    PoolAllocator_Init(&pool->scoped_object_pool,
+        sizeof(BlockObject) > sizeof(ExtensionObject)
+            ? sizeof(BlockObject)
+            : sizeof(ExtensionObject),
+        blimp->options.gc_batch_size,
+        blimp->options.gc_batches_per_trace,
+        (PoolInitFunc)ScopedObject_OneTimeInit,
+        blimp->options.gc_tracing
+            ? (PoolGCFunc)Blimp_CollectGarbage
+            : NULL,
+        blimp
+    );
+
+    // Initialize the Ref allocation pool.
+    PoolAllocator_Init(&pool->ref_pool,
+        sizeof(Ref),
+        // No GC or one-time initializer
+        0, 0, NULL, NULL, NULL);
+
+    Random_Init(&pool->random, 42);
+    pool->seq = 0;
+    pool->gc_collections = 0;
+
+    return BLIMP_OK;
+}
+
+void ObjectPool_Destroy(ObjectPool *pool)
+{
+    GC_Object *obj;
+
+    // Free any remaining allocated objects.
+    for (ObjectPoolIterator it = ObjectPool_Begin(pool);
+         (obj = ObjectPool_Next(pool, &it)) != NULL; )
+    {
+        // Destroy concrete class data.
+        switch (Object_Type((Object *)obj)) {
+            case OBJ_BLOCK:
+                Blimp_FreeExpr(((BlockObject *)obj)->code);
+                break;
+            case OBJ_EXTENSION:
+                if (((ExtensionObject *)obj)->finalize != NULL) {
+                    ((ExtensionObject *)obj)->finalize(
+                        ((ExtensionObject *)obj)->state);
+                }
+                break;
+            default:
+                break;
+        }
+
+        // Destroy abstract base class data.
+        if (IsScopedObject((Object *)obj)) {
+            Scope_Destroy(&((ScopedObject *)obj)->scope);
+        }
+    }
+
+    PoolAllocator_Destroy(&pool->reference_object_pool);
+    PoolAllocator_Destroy(&pool->scoped_object_pool);
+    PoolAllocator_Destroy(&pool->ref_pool);
+}
+
+static inline Status AllocRef(Blimp *blimp, Ref **ref)
+{
+    if ((*ref = PoolAllocator_Alloc(&blimp->objects.ref_pool)) != NULL) {
+        return BLIMP_OK;
+    } else {
+        return Error(blimp, BLIMP_OUT_OF_MEMORY);
+    }
+}
+
+static void FreeRef(Blimp *blimp, Ref *ref)
+{
+    PoolAllocator_Free(&blimp->objects.ref_pool, ref);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Garbage collection
 //
-// Of course, to make use of our nice and simple deallocation algorithm, we have
-// to know when to deallocate an object. Since bl:mp does not expose a detailed
-// memory model to the user (objects are allocated implicitly as needed, and
-// there is no explicit "free" operation) it is impossible for the user to tell
-// us when an object can safely be deallocated. Therefore, we need some form of
-// garbage collection.
+// Since bl:mp does not expose a detailed memory model to the user (objects are
+// allocated implicitly as needed, and there is no explicit "free" operation) it
+// is impossible for the user to tell us when an object can safely be
+// deallocated. Therefore, we need some form of garbage collection.
 //
 // In fact, we have three independent garbage collection algorithms, each of
 // which can collect different kind of garbage at varying performance cost.
@@ -807,180 +841,70 @@ static inline Ref *Scope_GetValue(Scope *scope, ScopeIterator it)
 // The garbage collector can be started explicitly by calling
 // Blimp_CollectGarbage(). By default, it also runs automatically whenever we
 // need a new object, we don't have any free ones available, and we have
-// allocated `gc_batches_per_collection` since the last collection.
+// allocated `gc_batches_per_trace` since the last collection.
 //
-
-typedef struct ObjectBatch {
-    size_t uninitialized;
-    struct ObjectBatch *next;
-    Object objects[];
-} ObjectBatch;
-
-typedef struct RefBatch {
-    size_t uninitialized;
-    struct RefBatch *next;
-    Ref refs[];
-} RefBatch;
-
-Status ObjectPool_Init(Blimp *blimp, ObjectPool *pool)
-{
-    TRY(Blimp_GetSymbol(blimp, "symbol", &pool->symbol_tag));
-
-    // Compute batch size in terms of number of objects, rather than bytes, and
-    // round up to ensure we get at least one object per batch.
-    pool->batch_size = (blimp->options.gc_batch_size/sizeof(Object)) + 1;
-
-    TRY(Malloc(
-        blimp,
-        sizeof(ObjectBatch) + sizeof(Object)*pool->batch_size,
-        &pool->batches
-    ));
-    pool->batches->uninitialized = 0;
-    pool->batches->next = NULL;
-    pool->free_list = NULL;
-    pool->batches_since_last_gc = 1;
-    pool->gc_collections = 0;
-    pool->seq = 0;
-    pool->free_refs = NULL;
-    pool->refs = NULL;
-
-    Random_Init(&pool->random, 42);
-
-    return BLIMP_OK;
-}
-
-void ObjectPool_Destroy(Blimp *blimp, ObjectPool *pool)
-{
-    // Free any remaining allocated objects.
-    for (ObjectBatch *batch = pool->batches; batch; batch = batch->next) {
-        for (size_t i = 0; i < batch->uninitialized; ++i) {
-            Object *obj = &batch->objects[i];
-
-            if (obj->type == OBJ_BLOCK) {
-                Blimp_FreeExpr(obj->code);
-            }
-
-            Scope_Destroy(&obj->scope);
-        }
-    }
-
-    // Free object batches.
-    ObjectBatch *batch = pool->batches;
-    while (batch) {
-        ObjectBatch *next = batch->next;
-        Free(blimp, &batch);
-        batch = next;
-    }
-
-    // Free ref batches.
-    RefBatch *ref_batch = pool->refs;
-    while (ref_batch) {
-        RefBatch *next = ref_batch->next;
-        Free(blimp, &ref_batch);
-        ref_batch = next;
-    }
-}
-
-static Status AllocRef(Blimp *blimp, Ref **ref)
-{
-    ObjectPool *pool = &blimp->objects;
-
-    if (pool->free_refs == NULL) {
-        // If the free list is empty, try to allocate from a partial batch.
-        if (pool->refs == NULL ||
-            pool->refs->uninitialized >= blimp->options.gc_batch_size)
-        {
-            // If the first batch is fully allocated, allocate a new batch.
-            RefBatch *batch;
-            TRY(Malloc(
-                blimp,
-                sizeof(RefBatch) + blimp->options.gc_batch_size*sizeof(Ref),
-                &batch));
-
-            batch->uninitialized = 0;
-            batch->next = pool->refs;
-            pool->refs = batch;
-        }
-
-        assert(pool->refs != NULL);
-        assert(pool->refs->uninitialized < blimp->options.gc_batch_size);
-
-        pool->free_refs = &pool->refs->refs[pool->refs->uninitialized++];
-        pool->free_refs->next = NULL;
-        pool->free_refs->prev = NULL;
-        pool->free_refs->to = NULL;
-    } else {
-        assert(pool->free_refs->to == NULL);
-    }
-
-    assert(pool->free_refs != NULL);
-    *ref = pool->free_refs;
-    pool->free_refs = (*ref)->next;
-
-    assert((*ref)->prev == NULL);
-    assert((*ref)->to == NULL);
-    (*ref)->next = NULL;
-
-    return BLIMP_OK;
-}
-
-static void FreeRef(Blimp *blimp, Ref *ref)
-{
-    ObjectPool *pool = &blimp->objects;
-
-    ref->next = pool->free_refs;
-    ref->prev = NULL;
-    ref->to = NULL;
-
-    pool->free_refs = ref;
-}
 
 ////////////////////////////////////////////////////////////////////////////////
 // Reference counting
 //
 
-static void FreeObject(Object *obj, bool recursive);
+static void FreeObject(GC_Object *obj, bool recursive);
 
-static inline void RC_BorrowRef(Object *from, Ref *ref)
+static inline void RC_Init(GC_Object *obj)
 {
-    if (from != ref->to) {
+    obj->internal_refcount = 0;
+    obj->transient_refcount = 1;
+}
+
+static inline void RC_BorrowRef(GC_Object *from, Ref *ref)
+{
+    if (!IsGC_Object(ref->to)) {
+        return;
+    }
+    GC_Object *to = (GC_Object *)ref->to;
+
+    if (from != to) {
         // Only increment the referece count if the destination object is
         // different from the source object. There's no need to count
         // references-to-self, because it is impossible for an object to be
         // destroyed before itself is destroyed.
-        ++ref->to->internal_refcount;
+        ++to->internal_refcount;
     }
 }
 
-static inline void RC_ReleaseRef(Object *from, Ref *ref)
+static inline void RC_ReleaseRef(GC_Object *from, Ref *ref)
 {
+    if (!IsGC_Object(ref->to)) {
+        return;
+    }
+    GC_Object *to = (GC_Object *)ref->to;
+
     // If `from == to`, we didn't acquire a reference in InternalBorrow(), so
     // there's nothing to release.
-    if (from != ref->to) {
-        assert(ref->to->internal_refcount > 0);
-        if (--ref->to->internal_refcount == 0 &&
-            ref->to->transient_refcount == 0)
+    if (from != to) {
+        assert(to->internal_refcount > 0);
+        if (--to->internal_refcount == 0 && to->transient_refcount == 0)
         {
-            FreeObject(ref->to, true);
+            FreeObject(to, true);
         }
     }
 }
 
-static inline void RC_BorrowParent(Object *obj)
+static inline void RC_BorrowParent(ScopedObject *obj)
 {
     assert(obj->parent != NULL);
     assert(obj->parent != obj);
-    ++obj->parent->internal_refcount;
+    ++((GC_Object *)obj->parent)->internal_refcount;
 }
 
-static inline void RC_ReleaseParent(Object *obj)
+static inline void RC_ReleaseParent(ScopedObject *obj)
 {
     assert(obj->parent != NULL);
     assert(obj->parent != obj);
-    if (--obj->parent->internal_refcount == 0 &&
-        obj->parent->transient_refcount == 0)
+    if (--((GC_Object *)obj->parent)->internal_refcount == 0 &&
+        ((GC_Object *)obj->parent)->transient_refcount == 0)
     {
-        FreeObject(obj->parent, true);
+        FreeObject((GC_Object *)obj->parent, true);
     }
 }
 
@@ -988,10 +912,10 @@ static inline void RC_ReleaseParent(Object *obj)
 // Enhanced reference counting
 //
 
-static inline Object *ERC_GetClump(Object *obj);
-static void ERC_FreeClump(Object *clump);
-static inline bool ERC_Entangle(Object *from, Object *to);
-static void ERC_MergeClumps(Object *root, Object *child);
+static inline ScopedObject *ERC_GetClump(ScopedObject *obj);
+static void ERC_FreeClump(ScopedObject *clump);
+static inline bool ERC_Entangle(ScopedObject *from, ScopedObject *to);
+static void ERC_MergeClumps(ScopedObject *root, ScopedObject *child);
 
 #define BLOOM_FILTER_NUM_HASHES 4
     // Number of hash functions, or number of bits set for each object in a 128-
@@ -1002,7 +926,7 @@ static void ERC_MergeClumps(Object *root, Object *child);
 // Perform one-time initialization of the ERC data in an object. This function
 // is called once, the first time an object is allocated from a batch.
 // Everything it does must be reusable when the object is reused.
-static void ERC_StaticInit(ObjectPool *pool, Object *obj)
+static void ERC_StaticInit(ObjectPool *pool, ScopedObject *obj)
 {
     // Give the object its own bit pattern which will be used to represent this
     // object in Bloom filters. The bit pattern should be unique with high
@@ -1028,16 +952,19 @@ static void ERC_StaticInit(ObjectPool *pool, Object *obj)
 
 // Reinitialize the ERC data in an object. Unlike ERC_StaticInit, this function
 // will be called each time the object is reused.
-static void ERC_Init(Object *obj)
+static void ERC_Init(ObjectPool *pool, ScopedObject *obj)
 {
     // Make this object the representative of a trivial clump.
+    obj->seq = pool->seq++;
     obj->entangled = NULL;
-    obj->clump_refcount = 0;
+    obj->clump_refcount = 1;
+        // Every clump starts out with one external reference.
     obj->clump_next = obj;
     obj->clump_prev = obj;
     obj->clump_references = NULL;
 
-    if (obj->parent && obj->parent->type != OBJ_GLOBAL) {
+    if (obj->parent != NULL && Object_Type((Object *)obj->parent) != OBJ_GLOBAL)
+    {
         // The objects predecessors set consists of its parent together with its
         // parent's predecessors. To compute this set, we union (bitwise-or) the
         // parent's predecessors Bloom filter with the parent's self_mask.
@@ -1054,24 +981,28 @@ static void ERC_Init(Object *obj)
     }
 }
 
-static inline void ERC_ExternalBorrow(Object *obj)
+static inline void ERC_ExternalBorrow(ScopedObject *obj)
 {
     ++ERC_GetClump(obj)->clump_refcount;
 }
 
-static inline void ERC_ExternalRelease(Object *obj)
+static inline void ERC_ExternalRelease(ScopedObject *obj)
 {
-    Object *clump = ERC_GetClump(obj);
+    ScopedObject *clump = ERC_GetClump(obj);
     assert(clump->clump_refcount > 0);
     if (--clump->clump_refcount == 0) {
         ERC_FreeClump(clump);
     }
 }
 
-static inline void ERC_BorrowRef(Object *from, Ref *ref)
+static inline void ERC_BorrowRef(ScopedObject *from, Ref *ref)
 {
-    Object *from_clump = ERC_GetClump(from);
-    Object *to_clump   = ERC_GetClump(ref->to);
+    if (!IsScopedObject((Object *)ref->to)) {
+        return;
+    }
+
+    ScopedObject *from_clump = ERC_GetClump(from);
+    ScopedObject *to_clump   = ERC_GetClump((ScopedObject *)ref->to);
     if (from_clump == to_clump) {
         // The objects are already entangled, there's nothing to do.
         return;
@@ -1097,14 +1028,18 @@ static inline void ERC_BorrowRef(Object *from, Ref *ref)
         ref->prev = NULL;
         from_clump->clump_references = ref;
     } else {
-        assert(ERC_GetClump(from) == ERC_GetClump(ref->to));
+        assert(ERC_GetClump(from) == ERC_GetClump((ScopedObject *)ref->to));
     }
 }
 
-static inline void ERC_ReleaseRef(Object *from, Ref *ref)
+static inline void ERC_ReleaseRef(ScopedObject *from, Ref *ref)
 {
-    Object *from_clump = ERC_GetClump(from);
-    Object *to_clump   = ERC_GetClump(ref->to);
+    if (!IsScopedObject((Object *)ref->to)) {
+        return;
+    }
+
+    ScopedObject *from_clump = ERC_GetClump(from);
+    ScopedObject *to_clump   = ERC_GetClump((ScopedObject *)ref->to);
 
     // We need to make sure these objects belong to two different clumps,
     // because if they are entangled then references between them are not
@@ -1131,18 +1066,15 @@ static inline void ERC_ReleaseRef(Object *from, Ref *ref)
         if (--to_clump->clump_refcount == 0) {
             ERC_FreeClump(to_clump);
         }
-    } else {
-        assert(ref->next == NULL);
-        assert(ref->prev == NULL);
     }
 }
 
-static inline void ERC_BorrowParent(Object *obj)
+static inline void ERC_BorrowParent(ScopedObject *obj)
 {
     assert(obj->parent != NULL);
 
-    Object *parent_clump = ERC_GetClump(obj->parent);
-    Object *obj_clump    = ERC_GetClump(obj);
+    ScopedObject *parent_clump = ERC_GetClump(obj->parent);
+    ScopedObject *obj_clump    = ERC_GetClump(obj);
 
     if (parent_clump != obj_clump) {
         // We only want to count this reference if the object is not already
@@ -1158,12 +1090,12 @@ static inline void ERC_BorrowParent(Object *obj)
     }
 }
 
-static inline void ERC_ReleaseParent(Object *obj)
+static inline void ERC_ReleaseParent(ScopedObject *obj)
 {
     assert(obj->parent != NULL);
 
-    Object *parent_clump = ERC_GetClump(obj->parent);
-    Object *obj_clump    = ERC_GetClump(obj);
+    ScopedObject *parent_clump = ERC_GetClump(obj->parent);
+    ScopedObject *obj_clump    = ERC_GetClump(obj);
 
     if (parent_clump != obj_clump) {
         // When we created this reference, we only counted it if the object
@@ -1176,13 +1108,13 @@ static inline void ERC_ReleaseParent(Object *obj)
     }
 }
 
-static inline Object *ERC_GetClump(Object *obj)
+static inline ScopedObject *ERC_GetClump(ScopedObject *obj)
 {
     if (obj->entangled == NULL) {
         return obj;
     }
 
-    Object *clump = ERC_GetClump(obj->entangled);
+    ScopedObject *clump = ERC_GetClump(obj->entangled);
 
     obj->entangled = clump;
         // If we had to recursively traverse `entangled` pointers to find the
@@ -1198,7 +1130,7 @@ static inline Object *ERC_GetClump(Object *obj)
     return clump;
 }
 
-static bool ERC_EntangleRecursive(Object *from, Object *to)
+static bool ERC_EntangleRecursive(ScopedObject *from, ScopedObject *to)
 {
     assert(from->entangled == NULL);
     assert(to->entangled == NULL);
@@ -1210,7 +1142,7 @@ static bool ERC_EntangleRecursive(Object *from, Object *to)
         return false;
     }
 
-    Object *parent = ERC_GetClump(to->parent);
+    ScopedObject *parent = ERC_GetClump(to->parent);
 
     if (parent == from) {
         // If the object we're trying to entangle with is our immediate parent,
@@ -1238,11 +1170,11 @@ static bool ERC_EntangleRecursive(Object *from, Object *to)
     }
 }
 
-static inline bool ERC_Entangle(Object *from, Object *to)
+static inline bool ERC_Entangle(ScopedObject *from, ScopedObject *to)
 {
-    Blimp *blimp = GetBlimp(from);
+    Blimp *blimp = Object_Blimp((Object *)from);
 
-    if (from->type == OBJ_GLOBAL) {
+    if (Object_Type((Object *)from) == OBJ_GLOBAL) {
         // Never entangle any object with the global object. Since the global
         // object is never freed, any object in its clump can never be freed by
         // ERC. So entangling an object with the global object can never help
@@ -1283,7 +1215,7 @@ static inline bool ERC_Entangle(Object *from, Object *to)
     return ERC_EntangleRecursive(from, to);
 }
 
-static void ERC_MergeClumps(Object *root, Object *child)
+static void ERC_MergeClumps(ScopedObject *root, ScopedObject *child)
 {
     assert(root->entangled == NULL);
     assert(child->entangled == NULL);
@@ -1297,7 +1229,7 @@ static void ERC_MergeClumps(Object *root, Object *child)
     root->clump_refcount += child->clump_refcount;
 
     // Append the lists of objects in the clump.
-    Object *last = child->clump_prev;
+    ScopedObject *last = child->clump_prev;
     root->clump_prev->clump_next = child;
     child->clump_prev = root->clump_prev;
     root->clump_prev = last;
@@ -1342,8 +1274,9 @@ static void ERC_MergeClumps(Object *root, Object *child)
     Ref *ref = child->clump_references;
     while (ref != NULL) {
         Ref *next = ref->next;
+        assert(IsScopedObject((Object *)ref->to));
 
-        Object *clump = ERC_GetClump(ref->to);
+        ScopedObject *clump = ERC_GetClump((ScopedObject *)ref->to);
         if (root == clump ||
                 // The child has an existing reference to an object in the root
                 // clump. Since `child` and `root` previously represented to
@@ -1382,9 +1315,9 @@ static void ERC_MergeClumps(Object *root, Object *child)
     child->clump_references = NULL;
 }
 
-static inline void ERC_RemoveFromClump(Object *obj)
+static inline void ERC_RemoveFromClump(ScopedObject *obj)
 {
-    Object *clump = ERC_GetClump(obj);
+    ScopedObject *clump = ERC_GetClump(obj);
 
     if (clump->clump_refcount == 0) {
         return;
@@ -1394,17 +1327,15 @@ static inline void ERC_RemoveFromClump(Object *obj)
     obj->clump_prev->clump_next = obj->clump_next;
 }
 
-static void ERC_FreeClump(Object *clump)
+static void ERC_FreeClump(ScopedObject *clump)
 {
     assert(clump->entangled == NULL);
 
-    Object *obj = clump;
+    ScopedObject *obj = clump;
 
     do {
-        assert(obj->transient_refcount == 0);
-
-        Object *next = obj->clump_next;
-        FreeObject(obj, true);
+        ScopedObject *next = obj->clump_next;
+        FreeObject((GC_Object *)obj, true);
         obj = next;
     } while (obj != clump);
 }
@@ -1413,30 +1344,30 @@ static void ERC_FreeClump(Object *clump)
 // Unified reference counting API
 //
 
-static inline void BorrowRef(Object *from, Ref *ref)
+static inline void BorrowRef(GC_Object *from, Ref *ref)
 {
-    Blimp *blimp = GetBlimp(from);
+    Blimp *blimp = Object_Blimp((Object *)from);
 
     if (blimp->options.gc_refcount) {
         RC_BorrowRef(from, ref);
     }
-    if (blimp->options.gc_cycle_detection) {
-        ERC_BorrowRef(from, ref);
+    if (blimp->options.gc_cycle_detection && IsScopedObject((Object *)from)) {
+        ERC_BorrowRef((ScopedObject*)from, ref);
     }
 }
 
-static inline void ReleaseRef(Object *from, Ref *ref)
+static inline void ReleaseRef(GC_Object *from, Ref *ref)
 {
-    if (ref->to->type == OBJ_FREE) {
+    if (Object_IsFree(ref->to)) {
         // It's possible that we have a reference to a free object if that
         // object has already been freed by the tracing garbage collector.
         return;
     }
 
-    Blimp *blimp = GetBlimp(from);
+    Blimp *blimp = Object_Blimp((Object *)from);
 
-    if (blimp->options.gc_cycle_detection) {
-        ERC_ReleaseRef(from, ref);
+    if (blimp->options.gc_cycle_detection && IsScopedObject((Object *)from)) {
+        ERC_ReleaseRef((ScopedObject *)from, ref);
     }
 
     if (blimp->options.gc_refcount) {
@@ -1444,9 +1375,9 @@ static inline void ReleaseRef(Object *from, Ref *ref)
     }
 }
 
-static inline void BorrowParent(Object *obj)
+static inline void BorrowParent(ScopedObject *obj)
 {
-    Blimp *blimp = GetBlimp(obj);
+    Blimp *blimp = Object_Blimp((Object *)obj);
 
     if (blimp->options.gc_refcount) {
         RC_BorrowParent(obj);
@@ -1456,15 +1387,15 @@ static inline void BorrowParent(Object *obj)
     }
 }
 
-static inline void ReleaseParent(Object *obj)
+static inline void ReleaseParent(ScopedObject *obj)
 {
-    if (obj->parent->type == OBJ_FREE) {
+    if (Object_IsFree((Object *)obj->parent)) {
         // It's possible that we have a reference to a free object if that
         // object has already been freed by the tracing garbage collector.
         return;
     }
 
-    Blimp *blimp = GetBlimp(obj);
+    Blimp *blimp = Object_Blimp((Object *)obj);
 
     if (blimp->options.gc_cycle_detection) {
         ERC_ReleaseParent(obj);
@@ -1472,6 +1403,48 @@ static inline void ReleaseParent(Object *obj)
     if (blimp->options.gc_refcount) {
         RC_ReleaseParent(obj);
     }
+}
+
+static inline void HeapCheck(Blimp *blimp);
+
+Object *BlimpObject_Borrow(Object *obj)
+{
+    Blimp *blimp = Object_Blimp(obj);
+
+    if (IsGC_Object(obj)) {
+        ++((GC_Object *)obj)->transient_refcount;
+        if (blimp->options.gc_cycle_detection && IsScopedObject(obj)) {
+            ERC_ExternalBorrow((ScopedObject *)obj);
+        }
+    }
+
+    return obj;
+}
+
+void BlimpObject_Release(Object *obj)
+{
+    Blimp *blimp = Object_Blimp(obj);
+
+    assert(!Object_IsFree(obj));
+    if (!IsGC_Object(obj)) {
+        return;
+    }
+
+    assert(((GC_Object *)obj)->transient_refcount);
+    --((GC_Object *)obj)->transient_refcount;
+
+    if (blimp->options.gc_cycle_detection && IsScopedObject(obj)) {
+        ERC_ExternalRelease((ScopedObject *)obj);
+    }
+
+    if (((GC_Object *)obj)->transient_refcount == 0 &&
+        ((GC_Object *)obj)->internal_refcount == 0 &&
+        blimp->options.gc_refcount)
+    {
+        FreeObject((GC_Object *)obj, true);
+    }
+
+    HeapCheck(blimp);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1482,7 +1455,7 @@ static void MarkReachable(ObjectPool *pool)
 {
     // Mark reachable objects using a depth-first traversal starting from
     // roots (objects with a nonzero transient refcount).
-    Object *stack = NULL;
+    ScopedObject *stack = NULL;
         // Invariant: every object on the stack has been marked `reached`. This
         // is slightly different than many depth-first search algorithms, which
         // mark an object reached only when it is popped off the stack. By
@@ -1492,15 +1465,20 @@ static void MarkReachable(ObjectPool *pool)
         // pointer for the intrusive stack.
 
     // Find all the roots and push them onto the stack.
-    for (ObjectBatch *batch = pool->batches; batch; batch = batch->next) {
-        for (size_t i = 0; i < batch->uninitialized; ++i) {
-            Object *obj = &batch->objects[i];
+    GC_Object *obj;
+    for (ObjectPoolIterator it = ObjectPool_Begin(pool);
+         (obj = ObjectPool_Next(pool, &it)) != NULL; )
+    {
+        if (obj->transient_refcount && !obj->reached) {
+            assert(!Object_IsFree((Object *)obj));
 
-            if (obj->transient_refcount && !obj->reached) {
-                assert(obj->type != OBJ_FREE);
-                obj->reached = true;
-                obj->next = stack;
-                stack = obj;
+            obj->reached = true;
+            if (IsScopedObject((Object *)obj)) {
+                // We only need to add scoped objects to the stack. Non-scoped
+                // GC objects do not have any references to other objects, so
+                // marking them reached is all the processing we have to do.
+                ((ScopedObject *)obj)->next = stack;
+                stack = (ScopedObject *)obj;
             }
         }
     }
@@ -1508,12 +1486,12 @@ static void MarkReachable(ObjectPool *pool)
     // The stack now contains all the roots. Start traversing their children.
     while (stack) {
         // Pop the next object off the stack.
-        Object *obj = stack;
+        ScopedObject *obj = stack;
         stack = stack->next;
 
-        assert(obj->type != OBJ_FREE);
+        assert(!Object_IsFree((Object *)obj));
             // We shouldn't be able to reach any free objects.
-        assert(obj->reached);
+        assert(((GC_Object *)obj)->reached);
             // Everything on the stack has been reached.
 
         // Push this object's children onto the stack.
@@ -1522,34 +1500,36 @@ static void MarkReachable(ObjectPool *pool)
              it = Scope_Next(&obj->scope, it))
         {
             Object *child = Scope_GetValue(&obj->scope, it)->to;
-            assert(child->type != OBJ_FREE);
+            assert(!Object_IsFree(child));
 
-            if (!child->reached) {
-                child->reached = true;
-                child->next = stack;
-                stack = child;
+            if (IsGC_Object(child) && !((GC_Object *)child)->reached) {
+                ((GC_Object *)child)->reached = true;
+                if (IsScopedObject(child)) {
+                    ((ScopedObject *)child)->next = stack;
+                    stack = (ScopedObject *)child;
+                }
             }
         }
 
         // Push messages captured by this object onto the stack.
-        if ((obj->type == OBJ_BLOCK || obj->type == OBJ_EXTENSION) &&
-            !DBMap_Empty(&obj->messages))
-        {
-            Ref *ref = DBMap_Resolve(&obj->messages, 0);
+        if (!DBMap_Empty(&obj->captures)) {
+            Ref *ref = DBMap_Resolve(&obj->captures, 0);
             Object *captured = ref->to;
-            assert(captured->type != OBJ_FREE);
+            assert(!Object_IsFree(captured));
 
-            if (!captured->reached) {
-                captured->reached = true;
-                captured->next = stack;
-                stack = captured;
+            if (IsGC_Object(captured) && !((GC_Object *)captured)->reached) {
+                ((GC_Object *)captured)->reached = true;
+                if (IsScopedObject((Object *)captured)) {
+                    ((ScopedObject *)captured)->next = stack;
+                    stack = (ScopedObject *)captured;
+                }
             }
         }
 
         // Push this object's parent onto the stack.
-        if (obj->parent && !obj->parent->reached) {
-            assert(obj->parent->type != OBJ_FREE);
-            obj->parent->reached = true;
+        if (obj->parent && !((GC_Object *)obj->parent)->reached) {
+            assert(!Object_IsFree((Object *)obj->parent));
+            ((GC_Object *)obj->parent)->reached = true;
             obj->parent->next = stack;
             stack = obj->parent;
         }
@@ -1563,32 +1543,20 @@ static void DoHeapCheck(Blimp *blimp)
         // Call MarkReachable() just for the assertions that it does.
 
     // Reset all the `reached` fields.
-    for (ObjectBatch *batch = blimp->objects.batches;
-         batch;
-         batch = batch->next)
+    GC_Object *obj;
+    for (ObjectPoolIterator it = ObjectPool_Begin(&blimp->objects);
+         (obj = ObjectPool_Next(&blimp->objects, &it)) != NULL; )
     {
-        for (size_t i = 0; i < batch->uninitialized; ++i) {
-            batch->objects[i].reached = false;
-        }
-    }
-
-    // Check that the free references list is not circular.
-    for (Ref *ref = blimp->objects.free_refs; ref; ref = ref->next) {
-        assert(ref->to == NULL);
-        assert(ref->prev == NULL);
-        ref->prev = ref;
-    }
-    for (Ref *ref = blimp->objects.free_refs; ref; ref = ref->next) {
-        ref->prev = NULL;
+        obj->reached = false;
     }
 }
 #endif
 
 static inline void HeapCheck(Blimp *blimp)
 {
+#ifdef NDEBUG
     (void)blimp;
-
-#ifndef NDEBUG
+#else
     if (!blimp->options.gc_heap_check) {
         return;
     }
@@ -1604,26 +1572,25 @@ void ObjectPool_CollectGarbage(ObjectPool *pool)
     // Traverse the entire heap, resetting the reachable flags and freeing
     // allocated objects which were not marked as reachable and are not
     // transiently referenced.
-    for (ObjectBatch *batch = pool->batches; batch; batch = batch->next) {
-        for (size_t i = 0; i < batch->uninitialized; ++i) {
-            Object *obj = &batch->objects[i];
+    GC_Object *obj;
+    for (ObjectPoolIterator it = ObjectPool_Begin(pool);
+         (obj = ObjectPool_Next(pool, &it)) != NULL; )
+    {
+        assert(!Object_IsFree((Object *)obj));
 
-            if (obj->reached) {
-                assert(obj->type != OBJ_FREE);
-                obj->reached = false;
-            } else if (obj->type != OBJ_FREE) {
-                assert(obj->transient_refcount == 0);
-                FreeObject(obj, false);
-                    // We don't need to free recursively, because with sweeping
-                    // GC, we are guaranteed to eventually call FreeObject() on
-                    // every dead object. In fact, freeing recursively would be
-                    // problematic here, since it's not necessarily safe to run
-                    // the reference counting GCs while a sweep is in progress.
-            }
+        if (obj->reached) {
+            obj->reached = false;
+        } else {
+            assert(obj->transient_refcount == 0);
+            FreeObject(obj, false);
+                // We don't need to free recursively, because with sweeping GC,
+                // we are guaranteed to eventually call FreeObject() on every
+                // dead object. In fact, freeing recursively would be
+                // problematic here, since it's not necessarily safe to run the
+                // reference counting GCs while a sweep is in progress.
         }
     }
 
-    pool->batches_since_last_gc = 0;
     ++pool->gc_collections;
 }
 
@@ -1640,42 +1607,44 @@ BlimpGCStatistics ObjectPool_GetStats(ObjectPool *pool)
     // allocated objects, reachable objects, and the total
     // number of objects that have ever been initialized (which is the high
     // water mark for allocated objects).
-    for (ObjectBatch *batch = pool->batches; batch; batch = batch->next) {
-        stats.max_allocated += batch->uninitialized;
-        for (size_t i = 0; i < batch->uninitialized; ++i) {
-            Object *obj = &batch->objects[i];
+    GC_Object *obj;
+    for (ObjectPoolIterator it = ObjectPool_Begin(pool);
+         (obj = ObjectPool_Next(pool, &it)) != NULL; )
+    {
+        ++stats.allocated;
 
-            if (obj->type != OBJ_FREE) {
-                ++stats.allocated;
+        if (Object_Blimp((Object *)obj)->options.gc_cycle_detection &&
+            IsScopedObject((Object *)obj))
+        {
+            ScopedObject *clump = (ScopedObject *)obj;
 
-                if (obj->entangled == NULL && obj->clump_next != obj) {
-                    // This is the representative of a nontrivial clump.
-                    ++stats.clumps;
+            if (clump->entangled == NULL && clump->clump_next != clump) {
+                // This is the representative of a nontrivial clump.
+                ++stats.clumps;
 
-                    // Count up the number of objects in the clump.
-                    size_t clump_size = 0;
-                    Object *curr = obj;
-                    do {
-                        ++clump_size;
-                        curr = curr->clump_next;
-                    } while (curr != obj);
+                // Count up the number of objects in the clump.
+                size_t clump_size = 0;
+                ScopedObject *curr = clump;
+                do {
+                    ++clump_size;
+                    curr = curr->clump_next;
+                } while (curr != clump);
 
-                    stats.entangled += clump_size;
-                    if (clump_size > stats.max_clump) {
-                        stats.max_clump = clump_size;
-                    }
-                    if (clump_size < stats.min_clump) {
-                        stats.min_clump = clump_size;
-                    }
+                stats.entangled += clump_size;
+                if (clump_size > stats.max_clump) {
+                    stats.max_clump = clump_size;
+                }
+                if (clump_size < stats.min_clump) {
+                    stats.min_clump = clump_size;
                 }
             }
-            if (obj->reached) {
-                assert(obj->type != OBJ_FREE);
-                ++stats.reachable;
-            }
-
-            obj->reached = false;
         }
+
+        if (obj->reached) {
+            ++stats.reachable;
+        }
+
+        obj->reached = false;
     }
 
     stats.collections = pool->gc_collections;
@@ -1688,220 +1657,268 @@ void ObjectPool_DumpHeap(FILE *f, ObjectPool *pool, bool include_reachable)
     MarkReachable(pool);
 
     // Print all the objects, with an asterisk next to the unreachable ones.
-    for (ObjectBatch *batch = pool->batches; batch; batch = batch->next) {
-        for (size_t i = 0; i < batch->uninitialized; ++i) {
-            Object *obj = &batch->objects[i];
-
-            if (obj->type != OBJ_FREE && (include_reachable || !obj->reached)) {
-                fprintf(f, "%c%p (%p): ",
-                    obj->reached ? ' ' : '*', obj, ERC_GetClump(obj));
-                BlimpObject_Print(f, obj);
-                fputc('\n', f);
-            }
+    GC_Object *obj;
+    for (ObjectPoolIterator it = ObjectPool_Begin(pool);
+         (obj = ObjectPool_Next(pool, &it)) != NULL; )
+    {
+        if (include_reachable || !obj->reached) {
+            fprintf(f, "%c%p (%p, %zu, %zu, %zu): ",
+                obj->reached ? ' ' : '*',
+                obj,
+                IsScopedObject((Object *)obj)
+                    ? ERC_GetClump((ScopedObject *)obj)
+                    : NULL,
+                IsScopedObject((Object *)obj)
+                    ? ERC_GetClump((ScopedObject *)obj)->clump_refcount
+                    : 0,
+                obj->transient_refcount,
+                obj->internal_refcount
+            );
+            BlimpObject_Print(f, (Object *)obj);
+            fputc('\n', f);
         }
     }
 
     // Print the graph of references between objects.
-    for (ObjectBatch *batch = pool->batches; batch; batch = batch->next) {
-        for (size_t i = 0; i < batch->uninitialized; ++i) {
-            Object *obj = &batch->objects[i];
+    for (ObjectPoolIterator it = ObjectPool_Begin(pool);
+         (obj = ObjectPool_Next(pool, &it)) != NULL; )
+    {
+        if (IsScopedObject((Object *)obj) &&
+            (include_reachable || !obj->reached))
+        {
+            ScopedObject *sobj = (ScopedObject *)obj;
 
-            if (obj->type != OBJ_FREE && (include_reachable || !obj->reached)) {
-                // Print the name of the object.
-                fprintf(f, "\n%p:\n", obj);
+            // Print the name of the object.
+            fprintf(f, "\n%p:\n", sobj);
 
-                // If it has a parent reference, print a graph edge for it.
-                if (obj->parent && (include_reachable || !obj->parent->reached)) {
-                    fprintf(f, "    %-10s -> %p\n", "<parent>", obj->parent);
-                }
+            // If it has a parent reference, print a graph edge for it.
+            if (sobj->parent &&
+                (include_reachable || !((GC_Object *)sobj->parent)->reached))
+            {
+                fprintf(f, "    %-10s -> %p\n", "<parent>", sobj->parent);
+            }
 
-                // If it has captured a message from its parent, print that.
-                if ((obj->type == OBJ_BLOCK || obj->type == OBJ_EXTENSION) &&
-                    !DBMap_Empty(&obj->messages))
+            // If it has captured a message from its parent, print that.
+            if (!DBMap_Empty(&sobj->captures)) {
+                Ref *ref = DBMap_Resolve(&sobj->captures, 0);
+                if (include_reachable ||
+                    (IsGC_Object(ref->to) && !((GC_Object *)ref->to)->reached))
                 {
-                    Ref *ref = DBMap_Resolve(&obj->messages, 0);
-                    if (include_reachable || !ref->to->reached) {
-                        fprintf(f, "    %-10s -> %p\n", "<capture>", ref->to);
-                    }
+                    fprintf(f, "    %-10s -> %p\n", "<capture>", ref->to);
                 }
+            }
 
-                // Print an edge for each entry in its scope.
-                for (ScopeIterator it = Scope_Begin(&obj->scope);
-                     it != Scope_End(&obj->scope);
-                     it = Scope_Next(&obj->scope, it))
+            // Print an edge for each entry in its scope.
+            for (ScopeIterator it = Scope_Begin(&sobj->scope);
+                 it != Scope_End(&sobj->scope);
+                 it = Scope_Next(&sobj->scope, it))
+            {
+                const Symbol *sym = Scope_GetKey(&sobj->scope, it);
+                Object *child = Scope_GetValue(&sobj->scope, it)->to;
+
+                if (include_reachable ||
+                    (IsGC_Object(child) && !((GC_Object *)child)->reached))
                 {
-                    const Symbol *sym = Scope_GetKey(&obj->scope, it);
-                    Object *child = Scope_GetValue(&obj->scope, it)->to;
-
-                    if (include_reachable || !child->reached) {
-                        fprintf(f, "    %-10s -> %p\n", sym->name, child);
-                    }
+                    fprintf(f, "    %-10s -> %p\n", sym->name, child);
                 }
             }
         }
     }
 
     // Clear the `reached` flags on all the objects.
-    for (ObjectBatch *batch = pool->batches; batch; batch = batch->next) {
-        for (size_t i = 0; i < batch->uninitialized; ++i) {
-            batch->objects[i].reached = false;
-        }
+    for (ObjectPoolIterator it = ObjectPool_Begin(pool);
+         (obj = ObjectPool_Next(pool, &it)) != NULL; )
+    {
+        obj->reached = false;
     }
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// Object creation and destruction
-//
-
-static Status NewObject(Blimp *blimp, Object *parent, Object **obj)
+static void FreeObject(GC_Object *obj, bool recursive)
 {
-    assert(parent == NULL || parent->type != OBJ_FREE);
-
-    // Try to allocate from the free list.
-    if ((*obj = blimp->objects.free_list) != NULL) {
-        assert((*obj)->type == OBJ_FREE);
-
-        blimp->objects.free_list = (*obj)->next;
-            // Pop the object off the free list.
-        Scope_Clear(&(*obj)->scope);
-            // The scope should already be initialized. Just make sure it's
-            // empty.
-    } else {
-        // If that failed, try to allocate from the active batch.
-        ObjectBatch *batch = blimp->objects.batches;
-
-        if (
-            // If it's time to do a garbage collection...
-            blimp->options.gc_tracing &&
-            blimp->objects.batches_since_last_gc >=
-                blimp->options.gc_batches_per_trace &&
-
-            // ...and the active batch is saturated...
-            batch->uninitialized >= blimp->objects.batch_size
-        ) {
-            // Collect garbage and try the free list again.
-            ObjectPool_CollectGarbage(&blimp->objects);
-            *obj = blimp->objects.free_list;
-        }
-
-        if (*obj) {
-            // If we got an object from the free list after garbage collecting,
-            // prepare it to be allocated.
-            blimp->objects.free_list = (*obj)->next;
-            Scope_Clear(&(*obj)->scope);
-        } else {
-            // If garbage collection didn't turn up anything, try allocating
-            // from the active batch.
-
-            if (batch->uninitialized >= blimp->objects.batch_size) {
-                // If the batch is saturated, allocate a new batch.
-                TRY(Malloc(
-                    blimp,
-                    sizeof(ObjectBatch) +
-                        sizeof(Object)*blimp->objects.batch_size,
-                    &batch
-                ));
-                batch->uninitialized = 0;
-                batch->next = blimp->objects.batches;
-                blimp->objects.batches = batch;
-                ++blimp->objects.batches_since_last_gc;
-            }
-            assert(batch->uninitialized < blimp->objects.batch_size);
-
-            // Grab the next uninitialized object from the batch and initialize
-            // it.
-            *obj = &batch->objects[batch->uninitialized++];
-            if (Scope_Init(blimp, &(*obj)->scope) != BLIMP_OK) {
-                --batch->uninitialized;
-                return Reraise(blimp);
-            }
-            DBMap_Init(blimp, &(*obj)->messages);
-            (*obj)->reached = false;
-
-            if (blimp->options.gc_cycle_detection) {
-                ERC_StaticInit(&blimp->objects, *obj);
-            }
-        }
-    }
-
-    (*obj)->parent = parent;
-    (*obj)->seq = blimp->objects.seq++;
-    (*obj)->internal_refcount = 0;
-    (*obj)->transient_refcount = 0;
-    ERC_Init(*obj);
-
-    if (parent) {
-        assert((*obj)->seq > parent->seq);
-        BorrowParent(*obj);
-    }
-
-    BlimpObject_Borrow(*obj);
-        // All objects are created with one transient reference.
-
-    return BLIMP_OK;
-}
-
-static void FreeObject(Object *obj, bool recursive)
-{
-    if (obj->type == OBJ_FREE) {
+    if (obj->freeing) {
         return;
     }
+    obj->freeing = true;
 
     assert(obj->transient_refcount == 0);
-    ObjectType type = obj->type;
-    obj->type = OBJ_FREE;
 
-    if (type == OBJ_EXTENSION && obj->ext.finalize != NULL) {
-        obj->ext.finalize(obj->ext.state);
+    Blimp *blimp = Object_Blimp((Object *)obj);
+    ObjectType type = Object_Type((Object *)obj);
+    if (type == OBJ_REFERENCE) {
+        Object_SetType((Object *)obj, OBJ_FREE);
+        PoolAllocator_Free(&blimp->objects.reference_object_pool, obj);
+        return;
     }
-
-    Blimp *blimp = GetBlimp(obj);
+    assert(IsScopedObjectType(type));
+    ScopedObject *sobj = (ScopedObject *)obj;
 
     if (blimp->options.gc_cycle_detection) {
-        ERC_RemoveFromClump(obj);
+        ERC_RemoveFromClump(sobj);
     }
 
     if (recursive) {
         // Release our references to all of the objects in this object's scope.
-        for (ScopeIterator entry = Scope_Begin(&obj->scope);
-             entry != Scope_End(&obj->scope);
-             entry = Scope_Next(&obj->scope, entry))
+        for (ScopeIterator entry = Scope_Begin(&sobj->scope);
+             entry != Scope_End(&sobj->scope);
+             entry = Scope_Next(&sobj->scope, entry))
         {
-            Ref *ref = Scope_GetValue(&obj->scope, entry);
-            ReleaseRef(obj, ref);
+            Ref *ref = Scope_GetValue(&sobj->scope, entry);
+            ReleaseRef((GC_Object *)sobj, ref);
             FreeRef(blimp, ref);
         }
 
         // Release our reference to our message.
-        if ((type == OBJ_BLOCK || type == OBJ_EXTENSION) &&
-            !DBMap_Empty(&obj->messages))
-        {
-            Ref *ref = DBMap_Resolve(&obj->messages, 0);
-            ReleaseRef(obj, ref);
+        if (!DBMap_Empty(&sobj->captures)) {
+            Ref *ref = DBMap_Resolve(&sobj->captures, 0);
+            ReleaseRef((GC_Object *)sobj, ref);
             FreeRef(blimp, ref);
         }
 
         // Release our reference to our parent.
-        ReleaseParent(obj);
+        ReleaseParent(sobj);
     }
 
     // Release our reference to the code expression if this is a block.
-    if (obj->type == OBJ_BLOCK) {
-        Blimp_FreeExpr(obj->code);
+    if (type == OBJ_BLOCK) {
+        Blimp_FreeExpr(((BlockObject *)obj)->code);
+    } else {
+        assert(type == OBJ_EXTENSION);
+
+        if (((ExtensionObject *)obj)->finalize) {
+            ((ExtensionObject *)obj)->finalize(((ExtensionObject *)obj)->state);
+        }
     }
 
-    // Push the object onto the free list.
-    obj->next = blimp->objects.free_list;
-    blimp->objects.free_list = obj;
+    Object_SetType((Object *)obj, OBJ_FREE);
+    PoolAllocator_Free(&blimp->objects.scoped_object_pool, obj);
 }
 
-// Make this object a closure in its parent scope. After this function succeeds,
-// `obj->messages` will contain all the messages captured by `obj->parent`, as
-// well as the message which is currently in scope, indicated by the top frame
-// of the interpreter stack.
-static Status MakeClosure(Object *obj)
+////////////////////////////////////////////////////////////////////////////////
+// Object
+//
+
+bool Object_IsFree(Object *obj)
 {
-    Blimp *blimp = GetBlimp(obj);
+    return Object_Type(obj) == OBJ_FREE
+        || (IsGC_Object(obj) && ((GC_Object *)obj)->freeing);
+}
+
+void BlimpObject_Inspect(Object *obj, BlimpObjectInfo *info)
+{
+    if (IsGC_Object(obj)) {
+        info->refcount = ((GC_Object *)obj)->internal_refcount
+                       + ((GC_Object *)obj)->transient_refcount;
+    } else {
+        info->refcount = 0;
+    }
+
+    if (IsScopedObject(obj)) {
+        info->clump = (Object *)ERC_GetClump((ScopedObject *)obj);
+        info->clump_refcount = ((ScopedObject *)info->clump)->clump_refcount;
+    }
+}
+
+void BlimpObject_ForEachChild(
+    Object *obj,
+    void(*func)(
+        Blimp *blimp,
+        Object *obj,
+        const Symbol *child_name,
+        Object *child,
+        void *arg),
+    void *arg)
+{
+    Blimp *blimp = Object_Blimp(obj);
+
+    if (!IsScopedObject(obj)) {
+        return;
+    }
+
+    ScopedObject *sobj = (ScopedObject *)obj;
+
+    // Handle the parent reference.
+    if (sobj->parent) {
+        const Symbol *sym;
+        if (Blimp_GetSymbol(blimp, "<parent>", &sym) == BLIMP_OK) {
+            func(blimp, obj, sym, (Object *)sobj->parent, arg);
+        }
+    }
+
+    // If it has captured a message from its parent, handle that.
+    if (!DBMap_Empty(&sobj->captures)) {
+        Ref *ref = DBMap_Resolve(&sobj->captures, 0);
+        const Symbol *sym;
+        if (Blimp_GetSymbol(blimp, "<capture>", &sym) == BLIMP_OK) {
+            func(blimp, obj, sym, ref->to, arg);
+        }
+    }
+
+    // Handle each entry in its scope.
+    for (ScopeIterator it = Scope_Begin(&sobj->scope);
+         it != Scope_End(&sobj->scope);
+         it = Scope_Next(&sobj->scope, it))
+    {
+        const Symbol *sym = Scope_GetKey(&sobj->scope, it);
+        Object *child = Scope_GetValue(&sobj->scope, it)->to;
+        func(blimp, obj, sym, child, arg);
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// GC_Object
+//
+
+void GC_Object_Init(GC_Object *obj, Blimp *blimp, ObjectType type)
+{
+    Object_Init((Object *)obj, blimp, type);
+
+    obj->reached = false;
+    obj->freeing = false;
+    obj->internal_refcount = 0;
+    obj->transient_refcount = 1;
+        // All objects are created with one transient reference.
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// ScopedObject
+//
+
+static Status ScopedObject_OneTimeInit(ScopedObject *obj, Blimp *blimp)
+{
+    TRY(Scope_Init(blimp, &obj->scope));
+    DBMap_Init(blimp, &obj->captures);
+    if (blimp->options.gc_cycle_detection) {
+        ERC_StaticInit(&blimp->objects, obj);
+    }
+
+    return BLIMP_OK;
+}
+
+static Status ScopedObject_New(
+    Blimp *blimp, ObjectType type, ScopedObject *parent, ScopedObject **obj)
+{
+    assert(IsScopedObjectType(type));
+
+    *obj = PoolAllocator_Alloc(&blimp->objects.scoped_object_pool);
+    if (obj == NULL) {
+        return Error(blimp, BLIMP_OUT_OF_MEMORY);
+    }
+
+    // Initialize the base class portion of the object.
+    GC_Object_Init((GC_Object *)*obj, blimp, type);
+
+    // Initialized ScopedObject derived fields.
+    Scope_Clear(&(*obj)->scope);
+    (*obj)->parent = parent;
+    (*obj)->seq = blimp->objects.seq++;
+
+    if (blimp->options.gc_cycle_detection) {
+        ERC_Init(&blimp->objects, *obj);
+    }
+    if (parent) {
+        assert((*obj)->seq > parent->seq);
+        BorrowParent(*obj);
+    }
 
     // Copy the references from the parent' closure. It is safe to literally
     // copy the pointers to the Ref objects, without borrowing the referred-to
@@ -1909,9 +1926,9 @@ static Status MakeClosure(Object *obj)
     // which will last for the duration of `obj`s lifetime, and the parent has a
     // reference to its captured messages which last the duration of its
     // lifetime.
-    DBMap_Clear(&obj->messages);
-    if (obj->parent->type == OBJ_BLOCK || obj->parent->type == OBJ_EXTENSION) {
-        TRY(DBMap_Append(&obj->messages, &obj->parent->messages));
+    DBMap_Clear(&(*obj)->captures);
+    if (parent) {
+        TRY(DBMap_Append(&(*obj)->captures, &parent->captures));
     }
 
     // Get the currently in-scope message from the top of the stack.
@@ -1921,106 +1938,24 @@ static Status MakeClosure(Object *obj)
         // Ref and borrow it.
         Ref *ref;
         TRY(AllocRef(blimp, &ref));
-        if (DBMap_Push(&obj->messages, ref) != BLIMP_OK) {
+        if (DBMap_Push(&(*obj)->captures, ref) != BLIMP_OK) {
             FreeRef(blimp, ref);
             return Reraise(blimp);
         }
 
         ref->to = frame->message;
-        BorrowRef(obj, ref);
+        BorrowRef((GC_Object *)*obj, ref);
     }
 
     return BLIMP_OK;
 }
 
-Status BlimpObject_NewBlock(
-    Blimp *blimp,
-    Object *parent,
-    const Symbol *msg_name,
-    Expr *code,
-    Object **obj)
+static Ref *Lookup(
+    const ScopedObject *obj,
+    const Symbol *sym,
+    const ScopedObject **owner)
 {
-    HeapCheck(blimp);
-
-    TRY(NewObject(blimp, parent, obj));
-    (*obj)->type = OBJ_BLOCK;
-    (*obj)->msg_name = msg_name;
-    (*obj)->code = code;
-    ++code->refcount;
-
-    if (MakeClosure(*obj) != BLIMP_OK) {
-        FreeObject(*obj, true);
-        return Reraise(blimp);
-    }
-
-    HeapCheck(blimp);
-    return BLIMP_OK;
-}
-
-Status BlimpObject_NewExtension(
-    Blimp *blimp,
-    Object *parent,
-    void *state,
-    BlimpMethod method,
-    BlimpFinalizer finalize,
-    Object **obj)
-{
-    HeapCheck(blimp);
-
-    TRY(NewObject(blimp, parent, obj));
-    (*obj)->type = OBJ_EXTENSION;
-
-    (*obj)->ext.method   = method;
-    (*obj)->ext.finalize = finalize;
-    (*obj)->ext.state    = state;
-
-    if (MakeClosure(*obj) != BLIMP_OK) {
-        FreeObject(*obj, true);
-        return Reraise(blimp);
-    }
-
-    HeapCheck(blimp);
-    return BLIMP_OK;
-}
-
-Status BlimpObject_NewSymbol(
-    Blimp *blimp, Object *parent, const Symbol *sym, Object **obj)
-{
-    TRY(NewObject(blimp, parent, obj));
-    (*obj)->type = OBJ_SYMBOL;
-    (*obj)->symbol = sym;
-
-    HeapCheck(blimp);
-    return BLIMP_OK;
-}
-
-Status BlimpObject_NewGlobal(Blimp *blimp, Object **obj)
-{
-    TRY(NewObject(blimp, NULL, obj));
-    (*obj)->type = OBJ_GLOBAL;
-
-    HeapCheck(blimp);
-    return BLIMP_OK;
-}
-
-Status BlimpObject_NewReference(
-    Blimp *blimp, Object *parent, const Symbol *sym, Object **obj)
-{
-    TRY(NewObject(blimp, parent, obj));
-    (*obj)->type = OBJ_REFERENCE;
-    (*obj)->symbol = sym;
-
-    HeapCheck(blimp);
-    return BLIMP_OK;
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// Object API
-//
-
-static Ref *Lookup(Object *obj, const Symbol *sym, Object **owner)
-{
-    Object *curr = obj;
+    const ScopedObject *curr = obj;
     while (curr) {
         Ref *ret = Scope_Lookup(&curr->scope, sym);
         if (ret) {
@@ -2036,119 +1971,30 @@ static Ref *Lookup(Object *obj, const Symbol *sym, Object **owner)
     return NULL;
 }
 
-Object *BlimpObject_Parent(const Object *obj)
+Status ScopedObject_Get(
+    const ScopedObject *obj, const Symbol *sym, Object **ret)
 {
-    assert(obj->type != OBJ_FREE);
-    return obj->parent;
-}
-
-void BlimpObject_Print(FILE *f, const Object *obj)
-{
-    Blimp *blimp = GetBlimp(obj);
-
-    switch (obj->type) {
-        case OBJ_SYMBOL:
-            fputs(obj->symbol->name, f);
-            break;
-        case OBJ_BLOCK: {
-            DeBruijnMap scopes;
-            DBMap_Init(blimp, &scopes);
-
-            for (const Object *cur = obj; cur != NULL; cur = cur->parent) {
-                if (cur->type == OBJ_BLOCK) {
-                    DBMap_Shift(&scopes, (void *)cur->msg_name);
-                }
-            }
-
-            fprintf(f, "{^%s ", obj->msg_name->name);
-            PrintClosure(f, obj->code, &scopes);
-            fprintf(f, "}");
-
-            DBMap_Destroy(&scopes);
-            break;
-        }
-        case OBJ_EXTENSION:
-            fprintf(f, "<extension>");
-            break;
-        case OBJ_REFERENCE:
-            fprintf(f, "<ref:%s>", obj->symbol->name);
-            break;
-        case OBJ_GLOBAL:
-            fprintf(f, "<global>");
-            break;
-        default:
-            assert(false);
-    }
-}
-
-Status BlimpObject_ParseBlock(const Object *obj, const Expr **code)
-{
-    if (obj->type != OBJ_BLOCK) {
-        return Error(GetBlimp(obj), BLIMP_MUST_BE_BLOCK);
-    }
-
-    if (code) {
-        *code = obj->code;
-    }
-    return BLIMP_OK;
-}
-
-Status BlimpObject_ParseExtension(
-    const Object *obj, BlimpMethod *method, void **state)
-{
-    if (obj->type != OBJ_EXTENSION) {
-        return Error(GetBlimp(obj), BLIMP_MUST_BE_EXTENSION);
-    }
-
-    if (method) {
-        *method = obj->ext.method;
-    }
-    if (state) {
-        *state = obj->ext.state;
-    }
-    return BLIMP_OK;
-}
-
-Status BlimpObject_ParseSymbol(const Object *obj, const Symbol **sym)
-{
-    if (obj->type != OBJ_SYMBOL) {
-        return Error(GetBlimp(obj), BLIMP_MUST_BE_SYMBOL);
-    }
-
-    if (sym) {
-        *sym = obj->symbol;
-    }
-    return BLIMP_OK;
-}
-
-Status BlimpObject_Get(const Object *obj, const Symbol *sym, Object **ret)
-{
-    assert(obj->type != OBJ_FREE);
-
-    Ref *value = Lookup((Object *)obj, sym, NULL);
+    Ref *value = Lookup(obj, sym, NULL);
     if (value) {
         *ret = value->to;
         return BLIMP_OK;
     } else {
         return RuntimeErrorMsg(
-            GetBlimp(obj),
+            Object_Blimp((Object *)obj),
             BLIMP_NO_SUCH_SYMBOL,
             "no symbol `%s' in scope", sym->name);
     }
 }
 
-Status BlimpObject_Set(Object *obj, const Symbol *sym, Object *val)
+Status ScopedObject_Set(ScopedObject *obj, const Symbol *sym, Object *val)
 {
-    Blimp *blimp = GetBlimp(obj);
-
-    assert(obj->type != OBJ_FREE);
-    assert(val->type != OBJ_FREE);
+    Blimp *blimp = Object_Blimp((Object *)obj);
 
     // If the symbol is already in scope, update the existing value.
-    Object *owner;
+    const ScopedObject *owner;
     Ref *ref = Lookup(obj, sym, &owner);
     if (ref) {
-        ReleaseRef(owner, ref);
+        ReleaseRef((GC_Object *)owner, ref);
             // This scope owned a reference to the existing value. After this
             // operation, the old value will no longer be reachable through this
             // scope, so we have to release our reference.
@@ -2156,7 +2002,7 @@ Status BlimpObject_Set(Object *obj, const Symbol *sym, Object *val)
         ref->to = val;
             // Reinitialize the reference to point to the new value.
 
-        BorrowRef(owner, ref);
+        BorrowRef((GC_Object *)owner, ref);
             // Borrow the new value on behalf of the existing owner of the scope
             // entry.
     } else {
@@ -2164,55 +2010,108 @@ Status BlimpObject_Set(Object *obj, const Symbol *sym, Object *val)
         TRY(AllocRef(blimp, &ref));
         ref->to = val;
         TRY(Scope_Update(&obj->scope, sym, ref));
-        BorrowRef(obj, ref);
+        BorrowRef((GC_Object *)obj, ref);
     }
 
     HeapCheck(blimp);
     return BLIMP_OK;
 }
 
-Status BlimpObject_GetMessage(Object *obj, size_t index, Object **message)
+Status ScopedObject_GetCapturedMessage(
+    const ScopedObject *obj, size_t index, Object **message)
 {
-    if (obj->type != OBJ_BLOCK && obj->type != OBJ_EXTENSION) {
-        return Error(GetBlimp(obj), BLIMP_INVALID_OBJECT_TYPE);
-    }
-
-    Ref *ref = DBMap_Resolve(&obj->messages, index);
+    Ref *ref = DBMap_Resolve(&obj->captures, index);
     *message = ref->to;
     return BLIMP_OK;
 }
 
-Object *BlimpObject_Borrow(Object *obj)
+////////////////////////////////////////////////////////////////////////////////
+// GlobalObject
+//
+
+Status GlobalObject_New(Blimp *blimp, GlobalObject **obj)
 {
-    Blimp *blimp = GetBlimp(obj);
-
-    ++obj->transient_refcount;
-
-    if (blimp->options.gc_cycle_detection) {
-        ERC_ExternalBorrow(obj);
-    }
-
-    return obj;
+    TRY(ScopedObject_New(blimp, OBJ_GLOBAL, NULL, (ScopedObject **)obj));
+    HeapCheck(blimp);
+    return BLIMP_OK;
 }
 
-void BlimpObject_Release(Object *obj)
+////////////////////////////////////////////////////////////////////////////////
+// BlockObject
+//
+
+Status BlockObject_New(
+    Blimp *blimp,
+    ScopedObject *parent,
+    const Symbol *msg_name,
+    Expr *code,
+    BlockObject **obj)
 {
-    Blimp *blimp = GetBlimp(obj);
+    TRY(ScopedObject_New(blimp, OBJ_BLOCK, parent, (ScopedObject **)obj));
 
-    assert(obj->type != OBJ_FREE);
-    assert(obj->transient_refcount);
-    --obj->transient_refcount;
-
-    if (blimp->options.gc_cycle_detection) {
-        ERC_ExternalRelease(obj);
-    }
-
-    if (obj->transient_refcount == 0 &&
-        obj->internal_refcount == 0 &&
-        blimp->options.gc_refcount)
-    {
-        FreeObject(obj, true);
-    }
+    // Initialize derived fields.
+    (*obj)->msg_name = msg_name;
+    (*obj)->code = code;
+    ++code->refcount;
 
     HeapCheck(blimp);
+    return BLIMP_OK;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// ExtensionObject
+//
+
+Status ExtensionObject_New(
+    Blimp *blimp,
+    ScopedObject *parent,
+    void *state,
+    BlimpMethod method,
+    BlimpFinalizer finalize,
+    ExtensionObject **obj)
+{
+    TRY(ScopedObject_New(blimp, OBJ_EXTENSION, parent, (ScopedObject **)obj));
+
+    // Initialize derived fields.
+    (*obj)->method   = method;
+    (*obj)->finalize = finalize;
+    (*obj)->state    = state;
+
+    HeapCheck(blimp);
+    return BLIMP_OK;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// ReferenceObject
+//
+
+Status ReferenceObject_New(
+    Blimp *blimp, ScopedObject *scope, const Symbol *sym, ReferenceObject **obj)
+{
+    *obj = PoolAllocator_Alloc(&blimp->objects.reference_object_pool);
+    if (*obj == NULL) {
+        return Error(blimp, BLIMP_OUT_OF_MEMORY);
+    }
+
+    // Initialize base class.
+    GC_Object_Init((GC_Object *)*obj, blimp, OBJ_REFERENCE);
+
+    // Initialize derived fields.
+    (*obj)->scope = scope;
+    (*obj)->scope_seq = scope->seq;
+    (*obj)->symbol = sym;
+
+    HeapCheck(blimp);
+    return BLIMP_OK;
+}
+
+Status ReferenceObject_Store(ReferenceObject *ref, Object *value)
+{
+    if (!Object_IsFree((Object *)ref->scope) &&
+        ref->scope->seq == ref->scope_seq)
+    {
+        ScopedObject_Set(ref->scope, ref->symbol, value);
+    }
+
+    return BLIMP_OK;
 }

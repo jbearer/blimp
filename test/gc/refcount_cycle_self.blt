@@ -1,39 +1,18 @@
-import runtime;
+#: -fno-gc-tracing -fno-gc-cycle-detection
 
-global{^ (__cell[]) };
-
-# Create an object which is just a setter for `self`.
-global {
-    {^self
-        self {^ (^self)}
-    }
-};
-
-# Create a self-cycle.
-global{^} (global{^});
-
-# Leak the object
-global{.};
-
-!gc_print_stats;
-!gc_expect_clean;
-
-module {
-    obj{^ (__cell[]) };
-
-    # Create an object which is just a setter for `self`.
-    obj {
-        {^self
+{
+    # `obj` will be a getter for...
+    obj{
+        ^({^value
+            {(^value)}
+        } {^self # A setter for `self`
             self {^ (^self)}
-        }
+        })
     };
 
-    # Create a self-cycle.
-    obj{^} (obj{^});
-
-    # Leak the object
-    obj{.}
-};
+    # Set `obj:self` to point at `obj`, creating a self-cycle.
+    obj[] (obj[])
+}[];
 
 !gc_print_stats;
 !gc_expect_clean;

@@ -77,7 +77,7 @@ Status DBMap_Index(
 Status DBMap_Append(DeBruijnMap *dst, const DeBruijnMap *src)
 {
     // Increase the capacity if necessary.
-    if (dst->size + src->size >= dst->capacity) {
+    if (dst->size + src->size > dst->capacity) {
         // Since we know exactly how much space we need, and this operation is
         // not amortized constant time anyways, we don't need to worry about
         // growing exponentionally. Allocate just enough space.

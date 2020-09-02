@@ -1,4 +1,4 @@
-#: --skip-racket -fno-gc-tracing -fno-gc-refcount
+#: --skip-racket -fno-gc-tracing
 
 # This test uses the union-find data structure defined in union_find.bli  to run
 # an intensive GC benchmark. We create a union-find with 1000 nodes, and then we

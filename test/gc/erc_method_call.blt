@@ -1,4 +1,4 @@
-#: --skip-racket -fno-gc-tracing -fno-gc-refcount
+#: --skip-racket -fno-gc-tracing
 
 {
     x{^ {.}[]}

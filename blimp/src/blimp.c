@@ -10,6 +10,7 @@
 #include <blimp.h>
 #include <blimp/module.h>
 
+#include "command.h"
 #include "options.h"
 
 #define VERSION_MAJOR 0
@@ -73,8 +74,10 @@ static bool DoAction(Blimp *blimp, const BlimpExpr *expr, Action action)
                 return false;
             }
 
-            BlimpObject_Print(stdout, result);
-            putchar('\n');
+            if (result != Blimp_GlobalObject(blimp)) {
+                BlimpObject_Print(stdout, result);
+                putchar('\n');
+            }
 
             BlimpObject_Release(result);
             return true;
@@ -185,8 +188,9 @@ static void WriteHistory(const Options *options)
 static int ReplMain(Blimp *blimp, const Options *options)
 {
     ReadHistory(options);
-
     PrintVersion(stdout);
+    InitCommands(blimp);
+    printf("Type ?help for help.\n");
 
     char *line;
     while ((line = Readline("bl:mp> ")) != NULL) {

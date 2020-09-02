@@ -95,6 +95,7 @@ Status SymbolTable_GetSymbol(
         HashMap_AbortEmplace(symbols, entry);
         return ret;
     }
+    Object_Init((Object *)new_symbol, blimp, OBJ_SYMBOL);
     new_symbol->length = len;
     new_symbol->name   = *key;
     new_symbol->hash   = hash;

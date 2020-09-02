@@ -861,7 +861,6 @@ BlimpStatus BlimpObject_NewExtension(
  */
 BlimpStatus BlimpObject_NewSymbol(
     Blimp *blimp,
-    BlimpObject *parent,
     const BlimpSymbol *sym,
     BlimpObject **obj);
 
@@ -914,15 +913,6 @@ BlimpObject *Blimp_GlobalObject(Blimp *blimp);
  */
 
 /**
- * \brief Get the parent object of an object.
- *
- * Returns the parent of `obj`, or `NULL` if `obj` is the global object.
- *
- * \returns a transient reference (lives at least as long as `obj`)
- */
-BlimpObject *BlimpObject_Parent(const BlimpObject *obj);
-
-/**
  * \brief Print a legible representation of `obj` to a file.
  */
 void BlimpObject_Print(FILE *file, const BlimpObject *obj);
@@ -972,6 +962,39 @@ BlimpStatus BlimpObject_ParseExtension(
 BlimpStatus BlimpObject_ParseSymbol(
     const BlimpObject *obj, const BlimpSymbol **sym);
 
+typedef struct {
+    size_t refcount;
+    BlimpObject *clump;
+    size_t clump_refcount;
+} BlimpObjectInfo;
+
+/**
+ * \brief Get information about the internal state of an object.
+ */
+void BlimpObject_Inspect(BlimpObject *obj, BlimpObjectInfo *info);
+
+/**
+ * \brief Iterate over children of an object.
+ *
+ * For each child object `child` which is referenced by `obj`, `func` is passed
+ * the following:
+ *
+ *  \param blimp        The bl:mp interpreter.
+ *  \param obj          The parent object.
+ *  \param child_name   The name by which the parent object owns the child.
+ *  \param child        The child object.
+ *  \param arg          Arbitrary data passed to BlimpObject_ForEachChild().
+ */
+void BlimpObject_ForEachChild(
+    BlimpObject *obj,
+    void(*func)(
+        Blimp *blimp,
+        BlimpObject *obj,
+        const BlimpSymbol *child_name,
+        BlimpObject *child,
+        void *arg),
+    void *arg);
+
 /**
  * @}
  *
@@ -998,6 +1021,8 @@ BlimpStatus BlimpObject_ParseSymbol(
  * \par Errors
  *  * `BLIMP_NO_SUCH_SYMBOL`:
  *      the symbol was not found in the scope of `obj` or any of its parents.
+ *  * `BLIMP_INVALID_OBJECT_TYPE`:
+ *      `obj` is not a scoped object (for example, it is a symbol).
  */
 BlimpStatus BlimpObject_Get(
     const BlimpObject *obj, const BlimpSymbol *sym, BlimpObject **ret);
@@ -1024,6 +1049,8 @@ BlimpStatus BlimpObject_Get(
  *
  * \par Errors
  *  * `BLIMP_OUT_OF_MEMORY`
+ *  * `BLIMP_INVALID_OBJECT_TYPE`:
+ *      `obj` is not a scoped object (for example, it is a symbol).
  */
 BlimpStatus BlimpObject_Set(
     BlimpObject *obj, const BlimpSymbol *sym, BlimpObject *val);
@@ -1042,9 +1069,9 @@ BlimpStatus BlimpObject_Set(
  *  * `BLIMP_INVALID_MESSAGE_NAME`:
  *      `index` exceeds the nesting level of the scope of `obj`.
  *  * `BLIMP_INVALID_OBJECT_TYPE`:
- *      `obj` is not a block object or an extension onject.
+ *      `obj` is not a scoped object (for example, it is a symbol).
  */
-BlimpStatus BlimpObject_GetMessage(
+BlimpStatus BlimpObject_GetCapturedMessage(
     BlimpObject *obj, size_t index, BlimpObject **message);
 
 /**
@@ -1110,6 +1137,21 @@ void Blimp_DumpUnreachable(FILE *f, Blimp *blimp);
  * \brief Force a garbage collection sweep.
  */
 void Blimp_CollectGarbage(Blimp *blimp);
+
+/**
+ * \brief Iterate over garbage collected objects.
+ *
+ * For each currently allocated object in the garbage collected heap, `func` is
+ * called and passed `blimp`, the current object, and `arg`.
+ *
+ * Note that this iteration only includes garbage collected objects. As an
+ * optimization, some objects (most notably symbol objects) are exempted from
+ * garbage collection, and cannot be reached this way.
+ */
+void Blimp_ForEachObject(
+    Blimp *blimp,
+    void(*func)(Blimp *blimp, BlimpObject *obj, void *arg),
+    void *arg);
 
 /**
  * @}

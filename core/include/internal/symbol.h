@@ -4,12 +4,6 @@
 #include "internal/common.h"
 #include "internal/hash_map.h"
 
-struct BlimpSymbol {
-    const char *name;
-    size_t hash;
-    size_t length;
-};
-
 typedef HashMap SymbolTable;
 
 PRIVATE Status SymbolTable_Init(Blimp *blimp, SymbolTable *symbols);

@@ -14,7 +14,7 @@ struct Blimp {
     SymbolTable symbols;
     ObjectPool objects;
     CallStack stack;
-    Object *global;
+    GlobalObject *global;
 
     struct BlimpErrorInfo {
         BlimpErrorCode code;
