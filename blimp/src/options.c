@@ -28,6 +28,8 @@ void DefaultOptions(Options *options)
         }
     }
     options->history_file = history_file;
+    options->history_limit = 1000;
+    options->no_history_limit = false;
 
     options->implicit_prelude = true;
 }

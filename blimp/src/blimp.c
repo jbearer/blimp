@@ -53,6 +53,13 @@ static void PrintUsage(FILE *f, int argc, char *const *argv)
     fprintf(f, "        Load and save interactive history to and from FILE.\n");
     fprintf(f, "        The default is `~/.blimp_history'.\n");
     fprintf(f, "\n");
+    fprintf(f, "    --history-limit N\n");
+    fprintf(f, "    --no-history-limit\n");
+    fprintf(f, "        Set the maximum number of entries saved in the history\n");
+    fprintf(f, "        buffer at a time. Setting this to something small can\n");
+    fprintf(f, "        help speed up initialization times for the interactive\n");
+    fprintf(f, "        REPL. The default is N=1000\n");
+    fprintf(f, "\n");
     fprintf(f, "    -h, --help\n");
     fprintf(f, "        Show this help and exit\n");
     fprintf(f, "\n");
@@ -117,10 +124,24 @@ static void ReadHistory(const Options *options)
     }
 }
 
+static void SetHistoryLimit(const Options *options)
+{
+    if (options->no_history_limit) {
+        unstifle_history();
+    } else {
+        stifle_history(options->history_limit);
+        if (options->history_file) {
+            history_truncate_file(
+                options->history_file, options->history_limit);
+        }
+    }
+}
+
 static void WriteHistory(const Options *options)
 {
     if (options->history_file) {
-        append_history(history_length, options->history_file);
+        append_history(history_max_entries, options->history_file);
+        SetHistoryLimit(options);
     }
 }
 
@@ -183,10 +204,16 @@ static void WriteHistory(const Options *options)
     (void)options;
 }
 
+static void SetHistoryLimit(const Options *options)
+{
+    (void)options;
+}
+
 #endif
 
 static int ReplMain(Blimp *blimp, const Options *options)
 {
+    SetHistoryLimit(options);
     ReadHistory(options);
     PrintVersion(stdout);
     InitCommands(blimp);
@@ -257,6 +284,8 @@ typedef enum {
 
     FLAG_CORE,
     FLAG_HISTORY_FILE,
+    FLAG_HISTORY_LIMIT,
+    FLAG_NO_HISTORY_LIMIT,
 } Flag;
 
 int main(int argc, char *const *argv)
@@ -266,6 +295,8 @@ int main(int argc, char *const *argv)
         {"import-path",             required_argument,  NULL, FLAG_IMPORT_PATH},
         {"action",                  required_argument,  NULL, FLAG_ACTION},
         {"history-file",            required_argument,  NULL, FLAG_HISTORY_FILE},
+        {"history-limit",           required_argument,  NULL, FLAG_HISTORY_LIMIT},
+        {"no-history-limit",        no_argument,        NULL, FLAG_NO_HISTORY_LIMIT},
         {"help",                    no_argument,        NULL, FLAG_HELP},
         {"version",                 no_argument,        NULL, FLAG_VERSION},
         {0, 0, 0, 0},
@@ -321,6 +352,25 @@ int main(int argc, char *const *argv)
                 options.history_file = optarg;
                 break;
             }
+
+            case FLAG_HISTORY_LIMIT: {
+                char *end;
+                long n = strtol(optarg, &end, 0);
+                if (*end || n < 0) {
+                    fprintf(stderr,
+                        "history-limit: argument must be a positive integer\n");
+                    PrintUsage(stderr, argc, argv);
+                    return EXIT_FAILURE;
+                }
+
+                options.history_limit = n;
+                options.no_history_limit = false;
+                break;
+            }
+
+            case FLAG_NO_HISTORY_LIMIT:
+                options.no_history_limit = true;
+                break;
 
             case FLAG_HELP:
                 PrintUsage(stdout, argc, argv);

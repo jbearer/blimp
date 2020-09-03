@@ -17,6 +17,8 @@ typedef struct {
     const char **import_path;
 
     const char *history_file;
+    size_t history_limit;
+    bool no_history_limit;
 
     bool implicit_prelude;
 } Options;
