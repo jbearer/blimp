@@ -1,0 +1,21 @@
+node {^{
+    {
+        # Capture a reference to the `next` field.
+        {^ref
+            # A node is just a setter for `next`.
+            {^next
+                ^ref ^next
+            }
+        } (next{^})
+    }[]
+}};
+
+
+{^node1{^node2
+    ^node1 ^node2;  # Link `node1:next` to `node2`.
+    ^node2 ^node1;  # Link `node2:next` to `node1`, creating a cycle.
+    ^node1 nil      # Link `node1:next` to nil, breaking the cycle.
+}} (node[])
+   (node[]);
+
+!gc_expect_clean

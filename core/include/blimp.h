@@ -304,6 +304,7 @@ typedef enum BlimpErrorCode {
     BLIMP_INVALID_OBJECT_TYPE,
     BLIMP_STACK_OVERFLOW,
     BLIMP_ILLEGAL_SCOPE,
+    BLIMP_OPTIMIZED_AWAY,
 
     // Internal consistency errors
     BLIMP_INVALID_EXPR,
@@ -1070,6 +1071,8 @@ BlimpStatus BlimpObject_Set(
  *      `index` exceeds the nesting level of the scope of `obj`.
  *  * `BLIMP_INVALID_OBJECT_TYPE`:
  *      `obj` is not a scoped object (for example, it is a symbol).
+ *  * `BLIMP_OPTIMIZED_AWAY`:
+ *      the message was not captured because it was not used in the source code.
  */
 BlimpStatus BlimpObject_GetCapturedMessage(
     BlimpObject *obj, size_t index, BlimpObject **message);

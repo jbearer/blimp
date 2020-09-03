@@ -39,6 +39,7 @@ struct BlimpExpr {
                 // time, not as names, so this name is only used for debugging
                 // and pretty-printing.
             Expr *code;
+            bool captures_parents_message;
         } block;
 
         struct {

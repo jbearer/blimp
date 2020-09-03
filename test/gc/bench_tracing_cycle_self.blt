@@ -1,6 +1,6 @@
 #: --skip-racket -fno-gc-refcount -fno-gc-cycle-detection
 
-# Tests garbage collection of self-cycles. Creates 100k objects and gives
+# Tests garbage collection of self-cycles. Creates 1 million objects and gives
 # each one a reference to itself.
 #
 # This is the same test as refcount_cycle_self, but it runs with tracing on and
@@ -8,23 +8,14 @@
 # counting version of the test, otherwise reference counting isn't gaining us
 # anything compared to tracing.
 
-import runtime;
-
-!benchmark{n{^ 100000}; refcount_cycle_self} {
-    obj{^ (__cell[]) };
-
-    # Create an object which is just a setter for `self`.
-    obj {
-        {^self
-            self {^ (^self)}
-        }
-    };
-
-    # Create a self-cycle.
-    obj{^} (obj{^});
-
-    # Leak the object
-    obj{.}
+!benchmark{n{^ 1000000}; refcount_cycle_self} {
+    {^value
+        # value is a setter function for a field `value:self`. We set this
+        # field to point at `value` itself, creating a self-loop.
+        ^value ^value
+    } {^self # A setter for `self`
+        self {^} ^self
+    }
 };
 
 !gc_collect;

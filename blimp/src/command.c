@@ -219,7 +219,7 @@ static void PrintObjectChild(
 static BlimpStatus InspectObject(
     Blimp *blimp, BlimpObject **args, BlimpObject **result)
 {
-    BlimpObject *obj;
+    BlimpObject *obj = NULL;
     if (ParseAddress(blimp, args[0], &obj) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
@@ -280,7 +280,7 @@ static void PrintOwningObjects(Blimp *blimp, BlimpObject *obj, void *arg)
 static BlimpStatus InspectOwners(
     Blimp *blimp, BlimpObject **args, BlimpObject **result)
 {
-    BlimpObject *obj;
+    BlimpObject *obj = NULL;
     if (ParseAddress(blimp, args[0], &obj) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
@@ -333,7 +333,7 @@ static void PrintClumpMember(Blimp *blimp, BlimpObject *obj, void *arg)
 static BlimpStatus InspectClump(
     Blimp *blimp, BlimpObject **args, BlimpObject **result)
 {
-    BlimpObject *obj;
+    BlimpObject *obj = NULL;
     if (ParseAddress(blimp, args[0], &obj) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
@@ -371,7 +371,7 @@ static void PrintOwnersOfClump(Blimp *blimp, BlimpObject *obj, void *arg)
 static BlimpStatus InspectClumpOwners(
     Blimp *blimp, BlimpObject **args, BlimpObject **result)
 {
-    BlimpObject *obj;
+    BlimpObject *obj = NULL;
     if (ParseAddress(blimp, args[0], &obj) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }

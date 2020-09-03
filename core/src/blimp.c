@@ -81,7 +81,12 @@ Status BlimpObject_NewBlock(
     }
 
     return BlockObject_New(
-        blimp, (ScopedObject *)parent, msg_name, code, (BlockObject **)obj);
+        blimp,
+        (ScopedObject *)parent,
+        msg_name,
+        code,
+        true,
+        (BlockObject **)obj);
 }
 
 Status BlimpObject_NewExtension(
@@ -293,6 +298,7 @@ static inline Status ReturnBlock(
     ScopedObject *scope,
     const Symbol *msg_name,
     Expr *code,
+    bool capture_parents_message,
     Value *result)
 {
     switch (result->type) {
@@ -302,6 +308,7 @@ static inline Status ReturnBlock(
                 scope,
                 msg_name,
                 code,
+                capture_parents_message,
                 (BlockObject **)&result->obj);
 
         case VALUE_SYMBOL:
@@ -391,7 +398,12 @@ static Status EvalStmt(
 
         case EXPR_BLOCK: {
             return ReturnBlock(
-                blimp, scope, expr->block.msg_name, expr->block.code, result);
+                blimp,
+                scope,
+                expr->block.msg_name,
+                expr->block.code,
+                expr->block.captures_parents_message,
+                result);
         }
 
         case EXPR_SEND: {

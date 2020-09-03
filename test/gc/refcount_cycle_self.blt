@@ -1,18 +1,12 @@
 #: -fno-gc-tracing -fno-gc-cycle-detection
 
-{
-    # `obj` will be a getter for...
-    obj{
-        ^({^value
-            {(^value)}
-        } {^self # A setter for `self`
-            self {^ (^self)}
-        })
-    };
-
-    # Set `obj:self` to point at `obj`, creating a self-cycle.
-    obj[] (obj[])
-}[];
+{^value
+    # value is a setter function for a field `value:self`. We set this
+    # field to point at `value` itself, creating a self-loop.
+    ^value ^value
+} {^self # A setter for `self`
+    self {^} ^self
+};
 
 !gc_print_stats;
 !gc_expect_clean;

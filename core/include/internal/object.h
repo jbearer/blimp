@@ -410,6 +410,7 @@ PRIVATE Status BlockObject_New(
     ScopedObject *parent,
     const Symbol *msg_name,
     Expr *code,
+    bool capture_parents_message,
     BlockObject **object);
 
 ////////////////////////////////////////////////////////////////////////////////

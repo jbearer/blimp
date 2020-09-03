@@ -1514,14 +1514,17 @@ static void MarkReachable(ObjectPool *pool)
         // Push messages captured by this object onto the stack.
         if (!DBMap_Empty(&obj->captures)) {
             Ref *ref = DBMap_Resolve(&obj->captures, 0);
-            Object *captured = ref->to;
-            assert(!Object_IsFree(captured));
+            if (ref != NULL) {
+                Object *captured = ref->to;
+                assert(!Object_IsFree(captured));
 
-            if (IsGC_Object(captured) && !((GC_Object *)captured)->reached) {
-                ((GC_Object *)captured)->reached = true;
-                if (IsScopedObject((Object *)captured)) {
-                    ((ScopedObject *)captured)->next = stack;
-                    stack = (ScopedObject *)captured;
+                if (IsGC_Object(captured) && !((GC_Object *)captured)->reached)
+                {
+                    ((GC_Object *)captured)->reached = true;
+                    if (IsScopedObject((Object *)captured)) {
+                        ((ScopedObject *)captured)->next = stack;
+                        stack = (ScopedObject *)captured;
+                    }
                 }
             }
         }
@@ -1701,10 +1704,13 @@ void ObjectPool_DumpHeap(FILE *f, ObjectPool *pool, bool include_reachable)
             // If it has captured a message from its parent, print that.
             if (!DBMap_Empty(&sobj->captures)) {
                 Ref *ref = DBMap_Resolve(&sobj->captures, 0);
-                if (include_reachable ||
-                    (IsGC_Object(ref->to) && !((GC_Object *)ref->to)->reached))
-                {
-                    fprintf(f, "    %-10s -> %p\n", "<capture>", ref->to);
+                if (ref != NULL) {
+                    if (include_reachable ||
+                        (IsGC_Object(ref->to) &&
+                            !((GC_Object *)ref->to)->reached))
+                    {
+                        fprintf(f, "    %-10s -> %p\n", "<capture>", ref->to);
+                    }
                 }
             }
 
@@ -1770,8 +1776,10 @@ static void FreeObject(GC_Object *obj, bool recursive)
         // Release our reference to our message.
         if (!DBMap_Empty(&sobj->captures)) {
             Ref *ref = DBMap_Resolve(&sobj->captures, 0);
-            ReleaseRef((GC_Object *)sobj, ref);
-            FreeRef(blimp, ref);
+            if (ref != NULL) {
+                ReleaseRef((GC_Object *)sobj, ref);
+                FreeRef(blimp, ref);
+            }
         }
 
         // Release our reference to our parent.
@@ -1847,9 +1855,11 @@ void BlimpObject_ForEachChild(
     // If it has captured a message from its parent, handle that.
     if (!DBMap_Empty(&sobj->captures)) {
         Ref *ref = DBMap_Resolve(&sobj->captures, 0);
-        const Symbol *sym;
-        if (Blimp_GetSymbol(blimp, "<capture>", &sym) == BLIMP_OK) {
-            func(blimp, obj, sym, ref->to, arg);
+        if (ref != NULL) {
+            const Symbol *sym;
+            if (Blimp_GetSymbol(blimp, "<capture>", &sym) == BLIMP_OK) {
+                func(blimp, obj, sym, ref->to, arg);
+            }
         }
     }
 
@@ -1895,7 +1905,11 @@ static Status ScopedObject_OneTimeInit(ScopedObject *obj, Blimp *blimp)
 }
 
 static Status ScopedObject_New(
-    Blimp *blimp, ObjectType type, ScopedObject *parent, ScopedObject **obj)
+    Blimp *blimp,
+    ObjectType type,
+    ScopedObject *parent,
+    bool capture_parents_message,
+    ScopedObject **obj)
 {
     assert(IsScopedObjectType(type));
 
@@ -1934,17 +1948,23 @@ static Status ScopedObject_New(
     // Get the currently in-scope message from the top of the stack.
     const StackFrame *frame = Stack_CurrentFrame(&blimp->stack);
     if (frame != NULL) {
-        // Our parent does not capture this object, so we need to create a new
-        // Ref and borrow it.
-        Ref *ref;
-        TRY(AllocRef(blimp, &ref));
-        if (DBMap_Push(&(*obj)->captures, ref) != BLIMP_OK) {
-            FreeRef(blimp, ref);
-            return Reraise(blimp);
-        }
+        if (capture_parents_message) {
+            // Our parent does not capture this object, so we need to create a
+            // new Ref and borrow it.
+            Ref *ref;
+            TRY(AllocRef(blimp, &ref));
+            if (DBMap_Push(&(*obj)->captures, ref) != BLIMP_OK) {
+                FreeRef(blimp, ref);
+                return Reraise(blimp);
+            }
 
-        ref->to = frame->message;
-        BorrowRef((GC_Object *)*obj, ref);
+            ref->to = frame->message;
+            BorrowRef((GC_Object *)*obj, ref);
+        } else {
+            if (DBMap_Push(&(*obj)->captures, NULL) != BLIMP_OK) {
+                return Reraise(blimp);
+            }
+        }
     }
 
     return BLIMP_OK;
@@ -2021,6 +2041,10 @@ Status ScopedObject_GetCapturedMessage(
     const ScopedObject *obj, size_t index, Object **message)
 {
     Ref *ref = DBMap_Resolve(&obj->captures, index);
+    if (ref == NULL) {
+        return Blimp_Error(Object_Blimp((Object *)obj), BLIMP_OPTIMIZED_AWAY);
+    }
+
     *message = ref->to;
     return BLIMP_OK;
 }
@@ -2031,7 +2055,7 @@ Status ScopedObject_GetCapturedMessage(
 
 Status GlobalObject_New(Blimp *blimp, GlobalObject **obj)
 {
-    TRY(ScopedObject_New(blimp, OBJ_GLOBAL, NULL, (ScopedObject **)obj));
+    TRY(ScopedObject_New(blimp, OBJ_GLOBAL, NULL, true, (ScopedObject **)obj));
     HeapCheck(blimp);
     return BLIMP_OK;
 }
@@ -2045,9 +2069,15 @@ Status BlockObject_New(
     ScopedObject *parent,
     const Symbol *msg_name,
     Expr *code,
+    bool capture_parents_message,
     BlockObject **obj)
 {
-    TRY(ScopedObject_New(blimp, OBJ_BLOCK, parent, (ScopedObject **)obj));
+    TRY(ScopedObject_New(
+        blimp,
+        OBJ_BLOCK,
+        parent,
+        capture_parents_message,
+        (ScopedObject **)obj));
 
     // Initialize derived fields.
     (*obj)->msg_name = msg_name;
@@ -2070,7 +2100,8 @@ Status ExtensionObject_New(
     BlimpFinalizer finalize,
     ExtensionObject **obj)
 {
-    TRY(ScopedObject_New(blimp, OBJ_EXTENSION, parent, (ScopedObject **)obj));
+    TRY(ScopedObject_New(
+        blimp, OBJ_EXTENSION, parent, true, (ScopedObject **)obj));
 
     // Initialize derived fields.
     (*obj)->method   = method;

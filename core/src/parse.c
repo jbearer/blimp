@@ -630,9 +630,10 @@ static Status Lexer_Consume(Lexer *lex, TokenType expected_token)
     return Lexer_ConsumeWithLoc(lex, expected_token, NULL);
 }
 
-static inline Status Lexer_PushScope(Lexer *lex, const Symbol *msg_name)
+static inline Status Lexer_PushScope(Lexer *lex, Expr *expr)
 {
-    return DBMap_Push(&lex->scopes, (void *)msg_name);
+    assert(expr->tag == EXPR_BLOCK);
+    return DBMap_Push(&lex->scopes, expr);
 }
 
 static inline void Lexer_PopScope(Lexer *lex)
@@ -645,13 +646,20 @@ static inline bool Lexer_InBlock(const Lexer *lex)
     return !DBMap_Empty(&lex->scopes);
 }
 
-static bool Lexer_MessageNameEq(void *sym1, void *sym2)
+static bool Lexer_MessageNameEq(void *arg1, void *arg2)
 {
-    return SymbolEq((const Symbol **)&sym1, (const Symbol **)&sym2);
+    const Symbol *sym = (const Symbol *)arg1;
+    Expr *expr = (Expr *)arg2;
+
+    assert(expr->tag == EXPR_BLOCK);
+    return expr->block.msg_name == sym;
 }
 
 static inline Status Lexer_ResolveMessageName(
-    const Lexer *lex, const Symbol *msg_name, size_t *index)
+    const Lexer *lex,
+    const Symbol *msg_name,
+    size_t *index,
+    Expr **capturing_child)
 {
     if (DBMap_Index(
             &lex->scopes, (void *)msg_name, Lexer_MessageNameEq, index)
@@ -659,6 +667,12 @@ static inline Status Lexer_ResolveMessageName(
     {
         return ErrorMsg(lex->blimp, BLIMP_INVALID_MESSAGE_NAME,
             "no message named ^%s is in scope", msg_name->name);
+    }
+
+    if (*index == 0) {
+        *capturing_child = NULL;
+    } else {
+        *capturing_child = DBMap_Resolve(&lex->scopes, *index - 1);
     }
 
     return BLIMP_OK;
@@ -802,9 +816,10 @@ static Status ParseTerm(Lexer *lex, Expr **term)
                 // Generate a fresh name for the messages passed to this block.
                 TRY(Lexer_FreshSymbol(lex, &(*term)->block.msg_name));
             }
+            (*term)->block.captures_parents_message = false;
 
             // Parse the body of the block with the new message name in scope.
-            Lexer_PushScope(lex, (*term)->block.msg_name);
+            Lexer_PushScope(lex, *term);
             Status status = ParseExpr(lex, &(*term)->block.code);
             Lexer_PopScope(lex);
             if (status != BLIMP_OK) {
@@ -833,10 +848,17 @@ static Status ParseTerm(Lexer *lex, Expr **term)
                 }
                 (*term)->msg.index = 0;
             } else {
+                Expr *capturing_child = NULL;
                 if (Lexer_ResolveMessageName(
-                    lex, tok.symbol, &(*term)->msg.index) != BLIMP_OK)
+                        lex, tok.symbol, &(*term)->msg.index, &capturing_child)
+                    != BLIMP_OK)
                 {
                     return ReraiseFrom(lex->blimp, tok.range);
+                }
+
+                if (capturing_child != NULL) {
+                    assert(capturing_child->tag == EXPR_BLOCK);
+                    capturing_child->block.captures_parents_message = true;
                 }
             }
 
