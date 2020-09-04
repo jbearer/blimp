@@ -1,29 +1,27 @@
-import runtime;
+import std;
 
 # Assign to a mutable global variable.
-module {
-    global := bar;
-    global := baz;
-    !expect_eq ($global) baz
-};
+global := bar;
+global := baz;
+!expect_eq ($global) baz;
+
 
 # Reassign to a global variable in a stack frame.
-module {
-    global := bar;
-    __push_stack_frame[];
-    global := baz;
-    __pop_stack_frame[];
-    !expect_eq ($global) baz
+global := bar;
+__call {
+    global := baz
 };
+!expect_eq ($global) baz;
 
 # Two different local variables with the same name.
-module {
-    __push_stack_frame[];
+__call {
     local := bar;
-    __push_stack_frame[];
-    local := baz;
-    !expect_eq ($local) baz;
-    __pop_stack_frame[];
+
+    __call {
+        local := baz;
+        !expect_eq ($local) baz
+    };
+
     !expect_eq ($local) bar
 };
 

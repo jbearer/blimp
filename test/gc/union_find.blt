@@ -6,27 +6,25 @@
 
 import union_find;
 
-module {
-    a := (node[]);
-    b := (node[]);
-    c := (node[]);
+a := (node[]);
+b := (node[]);
+c := (node[]);
 
-    # Test basic union.
-    union ($a) ($b);
-    !expect_eq (equiv ($a) ($b)) true;
-    !expect_eq (equiv ($b) ($a)) true;
-    !expect_eq (equiv ($a) ($c)) false;
+# Test basic union.
+union ($a) ($b);
+!expect_eq (equiv ($a) ($b)) true;
+!expect_eq (equiv ($b) ($a)) true;
+!expect_eq (equiv ($a) ($c)) false;
 
 
-    # Test path compression.
-    !expect_eq (find ($a) is ($b)) true;
-    union ($c) ($a);
-    !expect_eq (equiv ($c) ($a)) true;
-    !expect_eq (equiv ($c) ($b)) true;
-    !expect_eq (equiv ($a) ($b)) true;
-    !expect_eq (equiv (($a) get_parent) ($b));
-    !expect_eq (equiv (($c) get_parent) ($b));
+# Test path compression.
+!expect_eq (find ($a) is ($b)) true;
+union ($c) ($a);
+!expect_eq (equiv ($c) ($a)) true;
+!expect_eq (equiv ($c) ($b)) true;
+!expect_eq (equiv ($a) ($b)) true;
+!expect_eq (equiv (($a) get_parent) ($b));
+!expect_eq (equiv (($c) get_parent) ($b));
 
-    .
-}
+.
 

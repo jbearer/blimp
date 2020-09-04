@@ -383,6 +383,16 @@ static BlimpStatus InspectClumpOwners(
     return VoidReturn(blimp, result);
 }
 
+static BlimpStatus InspectBlimp(
+    Blimp *blimp, BlimpObject **args, BlimpObject **result)
+{
+    (void)args;
+
+    printf("Global object: %p\n", Blimp_GlobalObject(blimp));
+
+    return VoidReturn(blimp, result);
+}
+
 static const Command inspect_commands[] = {
     {"unreachable", "print information about unreachable heap objects",
         InspectUnreachable, 0},
@@ -394,6 +404,8 @@ static const Command inspect_commands[] = {
         InspectClump, 1},
     {"clump_owners", "print the owners of a clump",
         InspectClumpOwners, 1},
+    {"blimp", "print information about the bl:mp interpreter",
+        InspectBlimp, 0},
     {0}
 };
 

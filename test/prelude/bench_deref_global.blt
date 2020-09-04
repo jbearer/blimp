@@ -1,0 +1,7 @@
+import std;
+
+global := x;
+
+!benchmark{n{^ 250000}; deref_global} {
+    $global
+}

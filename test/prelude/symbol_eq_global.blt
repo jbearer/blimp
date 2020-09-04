@@ -1,0 +1,13 @@
+import std;
+
+!expect_eq (x == y) false;
+!expect_eq (z == z) true;
+
+# Check that == doesn't affect the value of a symbol;
+x := a;
+y := b;
+!expect_eq (x == y) false;
+!expect_eq ($x) a;
+!expect_eq ($y) b;
+
+.

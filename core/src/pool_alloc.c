@@ -123,3 +123,17 @@ void PoolAllocator_Free(PoolAllocator *pool, void *p)
     obj->next = pool->free_list;
     pool->free_list = obj;
 }
+
+size_t PoolAllocator_HighWaterMark(PoolAllocator *pool)
+{
+    size_t n = 0;
+
+    // We never initialize a new object when there is a free object available,
+    // so the maximum number of simultaneously allocated objects is just the
+    // number of objects we've initialized.
+    for (Batch *batch = pool->batches; batch; batch = batch->next) {
+        n += batch->initialized;
+    }
+
+    return n;
+}

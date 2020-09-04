@@ -2,7 +2,7 @@
 
 # Tests garbage collection of 10 element simple cycles (C10).
 
-import runtime;
+import std;
 
 node{^
     {
@@ -14,7 +14,9 @@ node{^
     }
 };
 
-!benchmark{n{^ 10000}; ops{^ 10}; refcount_cycle_broken} {
+!benchmark{n{^ 5000}; ops{^ 10}; refcount_cycle_broken} {
+    __push_stack_frame[];
+
     # Create 10 nodes.
     1 := (node[]);
     2 := (node[]);
@@ -50,6 +52,8 @@ node{^
     8 := nil;
     9 := nil;
     10 := nil;
+
+    __pop_stack_frame[];
 
     .
 };

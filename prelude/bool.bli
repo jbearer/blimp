@@ -5,6 +5,12 @@ true {
         }}
     }};
 
+    if_false {^{
+        {^if{^else
+            ^else[]
+        }}
+    }};
+
     and {^{
         {^that
             ^that
@@ -26,6 +32,12 @@ false {
     if_true {^{
         {^if{^else
             ^else[]
+        }}
+    }};
+
+    if_false {^{
+        {^if{^else
+            ^if[]
         }}
     }};
 

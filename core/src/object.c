@@ -954,8 +954,10 @@ static void ERC_StaticInit(ObjectPool *pool, ScopedObject *obj)
 // will be called each time the object is reused.
 static void ERC_Init(ObjectPool *pool, ScopedObject *obj)
 {
+    assert(obj->seq + 1 == pool->seq);
+    assert(obj->parent == NULL || obj->seq > obj->parent->seq);
+
     // Make this object the representative of a trivial clump.
-    obj->seq = pool->seq++;
     obj->entangled = NULL;
     obj->clump_refcount = 1;
         // Every clump starts out with one external reference.
@@ -1602,6 +1604,14 @@ BlimpGCStatistics ObjectPool_GetStats(ObjectPool *pool)
     BlimpGCStatistics stats = {
         .created = pool->seq,
         .min_clump = SIZE_MAX,
+        .max_allocated =
+            // Technically this is an overestimate of the true high-water mark,
+            // because the high-water mark for references may not have occurred
+            // at the same time as the high-water mark for scoped objects. In
+            // practice, though, the high-water mark for references should be
+            // quite small, so this shouldn't overestimate by too much.
+            PoolAllocator_HighWaterMark(&pool->reference_object_pool) +
+            PoolAllocator_HighWaterMark(&pool->scoped_object_pool),
     };
 
     MarkReachable(pool);
@@ -2131,6 +2141,12 @@ Status ReferenceObject_New(
     (*obj)->scope = scope;
     (*obj)->scope_seq = scope->seq;
     (*obj)->symbol = sym;
+
+    ++blimp->objects.seq;
+        // We don't actually need to reserve a sequence number for this object,
+        // since sequence numbers are only used for ERC. But this is an easy way
+        // to track how many total objects are created, which is a useful
+        // statistic for debugging and benchmarking.
 
     HeapCheck(blimp);
     return BLIMP_OK;

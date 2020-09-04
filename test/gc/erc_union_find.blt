@@ -3,17 +3,15 @@
 import union_find;
 !gc_expect_clean;
 
-{
-    a := (node[]);
-    b := (node[]);
 
-    union ($a) ($b);
+a := (node[]);
+b := (node[]);
 
-    # Leak everything
-    a := .;
-    b := .;
-    .
-}[];
+union ($a) ($b);
+
+# Leak everything
+a := .;
+b := .;
 
 !gc_print_stats;
 !gc_expect_clean;

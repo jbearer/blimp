@@ -1,0 +1,13 @@
+import std;
+
+# Can we handle a block which isn't actually a scope; that is, we are in a block
+# but still running in the same stack frame as the outer block.
+
+__call {
+    {
+        a := x;
+        !expect_eq ($a) x
+    }[];
+
+    !expect_eq ($a) x
+}

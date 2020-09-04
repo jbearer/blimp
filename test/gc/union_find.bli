@@ -22,59 +22,25 @@
 #       Test if one node is in the same set as another.
 #
 
-################################################################################
-# Booleans
-#
+import std;
 
-import runtime;
-
-true {
-    ^ {^method
-        if_true{^ {{^block
-            ^block[]
-        }}};
-
-        if_false{^ {{^block
-            .
-        }}};
-
-        ^method[]
-    }
-};
-
-false {
-    ^ {^method
-        if_true{^ {{^block
-            .
-        }}};
-
-        if_false{^ {{^block
-            ^block[]
-        }}};
-
-        ^method[]
-    }
-};
-
-################################################################################
-# Union-find data structure
-#
-
-nil {^
-    {^method
-        if_nil{^{
-            {^if
-                {^else
-                    ^if []
-                }
+nil {^} {^method
+    if_nil{^{
+        {^if
+            {^else
+                ^if []
             }
-        }};
+        }
+    }};
 
-        ^method[]
-    }
+    to_string{^{
+        nil
+    }};
+
+    ^method[]
 };
 
-node {^{
+node {^} {^label
     {^method
         parent {
             ^({^cell {(^cell)}}(__cell[]));
@@ -118,24 +84,26 @@ node {^{
             }
         }};
 
+        to_string{^{
+            (^label)
+        }};
+
         ^method[]
     }
-}};
+};
 
-find{
-    ^{^node
-        ^node get_parent if_nil {
-            (^node)
-        } {
-            root {
-                ^ ({^root
-                    {(^root)}
-                } (find (^node get_parent)))
-            };
+find{^} {^node
+    ^node get_parent if_nil {
+        (^node)
+    } {
+        root {
+            ^ ({^root
+                {(^root)}
+            } (find (^node get_parent)))
+        };
 
-            ^node set_parent (root[]);
-            root[]
-        }
+        ^node set_parent (root[]);
+        root[]
     }
 };
 
@@ -146,6 +114,8 @@ union{
                 {^root2
                     (^root1 is ^root2) if_false {
                         (^root1 set_parent ^root2)
+                    } {
+                        .
                     }
                 } (find ^node2)
             } (find ^node1)

@@ -1,56 +1,199 @@
 # A simple runtime for an imperative language hosted in bl:mp.
 
-__cell {(^){
+################################################################################
+# __cell: internal mutability
+#
+# A cell is a mutable value, which be can be written and retrieved using read-
+# modify-write operations. To create a new cell, call `__cell[]`. All newly
+# initialized cells have the value `undefined`. To access the value contained by
+# a cell, send it a message. The cell will respond by sending its value to the
+# message it receives (read) and then replacing its value with the result
+# (modify/write).
+#
+# For example, to replace a cell's value with a function that returns that
+# value, you could use something like
+#
+#       cell {^old_value
+#           # The new value is:
+#           {(^old_value)}
+#       }
+#
+# As a common special case, a message that ignores its argument and returns a
+# fixed value can be used to set the value of a cell:
+#
+#       cell { new_value }
+#           # Whatever value `cell` had before, it now has the value `new_value`.
+#
+# Finally, the result of sending a message to a cell is the new value of the
+# cell. This can be used to retrieve the current value of a cell by sending to
+# the cell a message which simply returns its argument:
+#
+#       cell {^}
+#           # Gets the value of the cell.
+#
+__cell{^} {
+    # The actual cell constructor runs in an anonymous scope, so that we can
+    # give the value of the cell a name which is local to the cell itself
+    # (rather than binding the name in the scope of the cell constructor, which
+    # is a parent scope of all cells).
     {
-        value{^ref
-            ^ref {undefined};
+        # We assume that the name for the cell's value is local to this scope,
+        # which means it must not be a name which is defined globally.
+        # Therefore, we give it the dunder prefix: __cell_value.
+        __cell_value{^ref
+            # This block is a constructor for __cell_value: it runs ones, when
+            # the cell is first created. It will initialize the value and then
+            # return the cell object itself.
 
+            ^ref {undefined};
+                # Initialize the value of the cell to `undefined`.
+                #
+                # Note that __cell_value actually holds a getter for the value,
+                # hence `{undefined}` rather than `undefined`. This way, we can
+                # refer to the actual value object by sending any message to
+                # the __cell_value symbol. The message will be forwarded to the
+                # value of the symbol, which is a getter that ignores the
+                # message and returns the value we actually care about.
+
+            # The cell object itself is a handler for modifier messages.
             {^M
+                # Get the new value by applying the modifier to the current
+                # value.
                 {^new_val
                     ^ref {(^new_val)};
+                        # Set the value to a getter for the new value.
                     ^new_val
-                } (^M (value[]))
+                        # Return the new value.
+
+                } (^M (__cell_value[]))
             }
         }
     }[]
-}};
+};
 
-__mem {
-    (^){^sym
-        # If `__new_stack_frame` is not in scope, send it a constructor to
-        # initialize it to a getter function for a function which returns a new
-        # stack frame which is a lexical child of the `__mem` object.
-        #
-        # If `__new_stack_frame` is already in scope, this will
-        # simply call the previously initialized getter, which does nothing.
-        __new_stack_frame {
-            # The getter function
+################################################################################
+# Call stack: implementation of variables
+#
+# The stack is a linked list of stack frames. Each frame is essentially a
+# dictionary of local variables. It is implemented as an object which receives
+# a symbol naming a variable and returns a cell corresponding to that variable.
+# Each frame has its own distinct cell for each of its variables; even if two
+# frames have a variable with the same name, they will have different cells.
+#
+# The bottom frame on the stack is always the pseduo-frame __global. This frame
+# does not contain any variables of its own, as global variables are not managed
+# by the stack; they are simply any variable which is actually declared at
+# global scope in a bl:mp file. The global frame exists as a sentinel, allowing
+# us to test whether the program is currently running in a local scope or not.
+#
+# The primary way to access the stack is through the global variable __stack,
+# whose value is always the frame which is currently in scope. For example,
+# `__stack var` is the cell corresponding to `var` in the current scope.
+#
+# The stack can also be manipulated using the global variable __stack_ref, which
+# is a reference to __stack, so sending a message to __stack_ref will cause
+# __stack to take on that value. This is used internally by __push_stack_frame
+# and __pop_stack_frame to update the __stack variable when the top of the stack
+# changes. This method of interacting with the stack should not be used outside
+# this module.
+#
+# Finally, there is a global variable __stack_cell, which is a cell whose value
+# is the top of the stack. It is kept in sync in parallel with __stack by
+# __push_stack_frame and __pop_stack_frame. This can be useful if you need
+# access to the stack frame itself beyond just sending it a message, since
+# `__stack_cell{^}` is an expression whose value is (and always will be) the
+# frame which was on top of the stack when the expression was evaluated.
+# Contrast this with the expression `__stack`, whose value is merely the symbol
+# `__stack`. This expression quacks like the top stack frame, but when the top
+# of the stack changes, so to will the results of sending messages to `__stack`.
+#
+# The function __push_stack_frame[] can be used to push a new, empty local frame
+# on top of the stack, and the function __pop_stack_frame[] can be used to pop
+# the topmost frame off of the stack. It's __caller because the new top frame.
+# The stack must contain at least one local frame when __pop_stack_frame[] is
+# called, or else the behavior is undefined.
+#
+# Each local stack frame contains a special variable __caller, whose value is
+# the frame below it on the stack. These __caller links between frames form the
+# linked list structure of the stack.
+#
+# Each stack frame also responds to a special message, __if_global, which can be
+# used to test if the current scope is global, or if there is a local stack
+# frame associated with it. `__stack{^} __if_global { IF } { ELSE }` will
+# evaluate IF if we are running in the global scope (that is, the global frame
+# is the only frame on the stack) or ELSE otherwise.
+#
+
+__stack_cell{^} (__cell[]);
+    # Create a cell to track the top stack frame.
+__stack_ref{^ ^};
+    # Introduce __stack_ref into the global scope. For now, its value will be a
+    # reference to itself. This will allow us to change its value later (exactly
+    # once) by sending it a new value. We will do this once we get a reference
+    # to __stack.
+__stack{^ref
+    __stack_ref ^ref;
+        # Save a reference to __stack in __stack_ref so we can change the stack.
+
+    {^global
+        __stack_cell {(^global)};
+            # Initialize __stack_cell to point to the global frame.
+        ^ref ^global
+            # Initialize __stack to point to the global frame.
+    } {^msg
+        # The only message that the global frame responds to is __if_global, so
+        # we don't need to dispatch ^msg; we can just assume it's that.
+        {^if{^else
+            # This is a global frame, so evaluate the if branch.
+            ^if[]
+        }}
+    }
+};
+
+__push_stack_frame{^} {
+    {^frame
+        ^frame __caller { __stack_cell{^} };
+            # Set the special __caller local variable in the new frame to point
+            # to the current top frame.
+        __stack_ref ^frame;
+            # Point __stack_cell at the new top frame.
+        __stack_cell{(^frame)}
+            # Point __stack at the new top frame.
+
+    } {^sym # The frame object:
+
+        # In order to handle the special message __if_global as well as normal
+        # symbol messages, we need to create a little dispatch table. We will
+        # initialize __if_global to a getter for an if-else handler. Any other
+        # symbol that we see for the first time will be initialized to a getter
+        # for a cell. We can then dispatch messages by sending any object to the
+        # message in our scope, which will call the corresponding getter,
+        # returning either the if-else handler (if the message is __if_global)
+        # or the cell.
+
+        # Send __if_global an initializer block. If __if_global has not yet been
+        # initialized (that is, this is the first message this stack frame has
+        # ever received) then the initializer block will run and initialize it.
+        # Otherwise, __if_global has already been initialized to a getter, which
+        # will receive the initializer block and ignore it, so this will have no
+        # effect.
+        __if_global {
             (^){
-                # The actual stack frame creator
-                {
-                    # Just return a stack frame
-                    {^sym
-                        ^sym {
-                            # The getter function
-                            (^)({^cell
-                                {
-                                    (^cell)
-                                }
-                            } (__cell[]))
-                        };
-
-                        # Return the cell
-                        ^sym get_cell
-                    }
-                }
+                {^if{^else
+                    # This is not a global frame, so evaluate the else branch.
+                    ^else[]
+                }}
             }
         };
 
-        # If `sym` is not in scope, send it a constructor to initialize it to a
-        # getter function for a cell. If `sym` is already in scope, this will
-        # simply call the previously initialized getter, which does nothing.
+        # Send ^sym an initializer block. If ^sym has not yet been initialized
+        # (that is, ^sym is not __if_global or any symbol that we have seen
+        # before) then the initializer block will run and initialize it.
+        # Otherwise, ^sym has already been initialized to a getter, which will
+        # receive the initializer block and ignore it, so this will have no
+        # effect.
         ^sym {
-            # The getter function
+            # Set ^sym to a getter function for a new cell.
             (^)({^cell
                 {
                     (^cell)
@@ -58,56 +201,29 @@ __mem {
             } (__cell[]))
         };
 
-        # Return the cell
-        ^sym get_cell
+        # Dispatch.
+        ^sym[]
     }
 };
-
-__stack { (^)(__cell[]) };
-__stack { __mem };
-
-__push_stack_frame {(^){
-    {^frame
-        ^frame __caller { __stack{^} };
-        __stack { (^frame) }
-    }(__mem __new_stack_frame[])
-}};
 
 __pop_stack_frame {(^){
     {^frame
-        __stack { (^frame) }
-    } (__stack{^} __caller {^})
+        __stack_ref ^frame;
+            # Point __stack at the caller.
+        __stack_cell {(^frame)}
+            # Point __stack_cell at the caller.
+    } (__stack __caller {^}) # Get the caller of the current frame
 }};
 
-$ {
-    (^){^sym
-        __stack{^} ^sym{^}
-    }
-};
+# Convenience function which evaluates a block of code in a new stack frame.
+__call{^} {^code
+    __push_stack_frame[];
 
-:= {
-    (^){^symref
-
-        {^sym
-            {^val
-                __stack{^} ^sym {(^val)};
-                ^val
-            }
-        } (^symref ({^sym
-            { # Consume :=
-                {^val
-                    __stack{^} ^sym {(^val)};
-                    ^val
-                }
-            }
-        } (^symref .)))
-    }
-};
-
-module {
-    (^){^code
-        ^code[]
-    }
+    # Evaluate the block.
+    {^result
+        __pop_stack_frame[];    # Remove the stack frame that we pushed.
+        ^result                 # Return the result.
+    } (^code[])
 };
 
 .

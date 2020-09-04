@@ -1,6 +1,6 @@
 #: --skip-racket -fno-gc-tracing
 
-# Tests garbage collection of cycles which get broken by the user. Creates 100k
+# Tests garbage collection of cycles which get broken by the user. Creates 1000
 # 10-element cycles, and then breaks each cycle.
 #
 # This is the same test as tracing_cycle_broken, but it runs with reference
@@ -8,7 +8,7 @@
 # version of the test, otherwise reference counting isn't gaining us anything
 # compared to tracing.
 
-import runtime;
+import std;
 
 node{^
     {
@@ -20,7 +20,9 @@ node{^
     }
 };
 
-!benchmark{n{^ 10000}; ops{^ 10}; refcount_cycle_broken} {
+!benchmark{n{^ 5000}; ops{^ 10}; refcount_cycle_broken} {
+    __push_stack_frame[];
+
     # Create 10 nodes.
     1 := (node[]);
     2 := (node[]);
@@ -59,6 +61,8 @@ node{^
     8 := nil;
     9 := nil;
     10 := nil;
+
+    __pop_stack_frame[];
 
     .
 };

@@ -195,6 +195,17 @@ PRIVATE void *PoolAllocator_Alloc(PoolAllocator *pool);
 PRIVATE void PoolAllocator_Free(PoolAllocator *pool, void *p);
 
 /**
+ * \brief
+ *      Return the maximum number of objects which have been allocated from this
+ *      pool at one time.
+ *
+ * \note
+ *      This function traverses the entire heap, and can be quite slow. Use it
+ *      with caution.
+ */
+PRIVATE size_t PoolAllocator_HighWaterMark(PoolAllocator *pool);
+
+/**
  * \brief Get an iterator which will traverse all initialized objects.
  */
 static inline PoolAllocatorIterator PoolAllocator_Begin(PoolAllocator *pool)

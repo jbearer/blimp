@@ -3,7 +3,7 @@
 # Tests garbage collection of trees, one of the most well-behaved data
 # structures, since every node is referenced exactly once, by its parent.
 
-import runtime;
+import std;
 
 nil{
     if_nil{^{
@@ -65,7 +65,7 @@ dfs{^
     #               d
     # starting from the leaves and building up.
 
-    {
+    __call {
         # Level 0
         d := (node d nil nil);
 
@@ -77,7 +77,7 @@ dfs{^
         a := (node a ($b) ($c));
 
         dfs ($a)
-    }[]
+    }
 };
 
 !gc_print_stats;

@@ -12,7 +12,9 @@
 
 import union_find;
 
-!benchmark{n{^ 5}; ops{^ 2000}; erc_union_find} {
+!benchmark{n{^ 10}; ops{^ 2000}; erc_union_find} {
+    __push_stack_frame[];
+
     # Create 1000 nodes.
     1 := (node[]);
     2 := (node[]);
@@ -2016,6 +2018,8 @@ import union_find;
     union ($624) ($362);
     union ($116) ($425);
     union ($214) ($390);
+
+    __pop_stack_frame[];
     .
 };
 

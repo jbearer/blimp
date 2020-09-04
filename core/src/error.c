@@ -102,6 +102,9 @@ void PrintSourceRange(FILE *f, const SourceRange *range)
          (range->start.row == range->end.row &&
           range->start.col <= range->end.col)) &&
 
+        // The range must be a reasonable size: no more than 5 lines.
+        (range->end.row - range->start.row <= 5) &&
+
         // We must be able to open the file for reading.
         (source_file = fopen(range->start.file, "r")) != NULL
     ) {
