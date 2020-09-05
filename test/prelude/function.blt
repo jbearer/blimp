@@ -1,0 +1,27 @@
+import std;
+
+# A simple identity function.
+!expect_eq ((function x {$x}) foo) foo;
+
+# A function with a non-trivial body.
+!expect_eq ((function x {$x foo}) {^}) foo;
+
+# A function with side-effects.
+global := foo;
+set_global := (function x {global := ($x)});
+!expect_eq ($global) foo;
+$set_global(bar);
+!expect_eq ($global) bar;
+$set_global(baz);
+!expect_eq ($global) baz;
+
+# A function with multiple arguments.
+!expect_eq foo (
+    (function([a, b]) {
+        !expect_eq ($a) foo;
+        !expect_eq ($b) bar;
+        $a
+    }) ([foo, bar])
+);
+
+.

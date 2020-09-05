@@ -3,5 +3,6 @@ import vtable;
 import bool;
 import symbol;
 import list;
+import function;
 
 .

@@ -1,0 +1,6 @@
+function{^} {^param{^body{^arg
+    __call {
+        (^param := ^arg);
+        ^body[]
+    }
+}}}
