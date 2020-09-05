@@ -1,0 +1,28 @@
+import std;
+
+a := nil;
+b := nil;
+c := nil;
+
+# Test a loop with some observable side-effects.
+[a, b, c] each (function(sym) {
+    $sym := ($sym)
+});
+
+# Verify the side-effects of the loop.
+!expect_eq ($a) a;
+!expect_eq ($b) b;
+!expect_eq ($c) c;
+
+# Verify the side-effects of the loop, using another loop.
+[a, b, c] each (function(sym) {
+    !expect_eq ($($sym)) ($sym)
+});
+
+# Test destructuring assignment.
+[a, b, c] := ([c, b, a]);
+!expect_eq ($a) c;
+!expect_eq ($b) b;
+!expect_eq ($c) a;
+
+.

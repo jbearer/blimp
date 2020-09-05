@@ -1,0 +1,196 @@
+__list_nil{^} ({
+    each{^} {
+        {^f
+            .
+        }
+    };
+
+    assign {^} {
+        {^value
+            .
+        }
+    };
+
+    {^msg
+        ^msg[]
+    }
+}[]);
+
+__bind __list_node __init {^self{^value
+    ^self next (__cell[]);
+    ^self value (__cell[]):
+    ^self value {(^value)}
+}};
+
+__bind __list_node append {^self{^node
+    ^self next {(^node)};
+    ^node
+}};
+
+__bind __list_node each {^self{^f
+    ^f (^self value{^});
+    ^self next{^} each ^f
+}};
+
+__bind __list_node assign{^self{^values
+    ^self value{^} := (^values value{^});
+    ^self next{^} assign (^values next{^})
+}};
+
+__bind list __init {^self{^value
+    ^self __head (__cell[]);
+    ^self __tail (__cell[]);
+    ^self __length (__cell[]);
+
+    ^self __head {
+        __new __list_node ^value
+    };
+    ^self __tail {
+        (^self __head){^}
+    };
+
+    ^self __length { 1 }
+}};
+
+__bind list length {^self
+    ^self __length {^}
+};
+
+__bind list , {^self{^value
+    ^self __tail {
+        (^self __tail{^} append (__new __list_node ^value))
+    };
+
+    ^self
+}};
+
+__bind list ] {^self
+    ^self
+};
+
+__bind list each {^self{^f
+    ^self __head{^} each ^f;
+    .
+}};
+
+__bind list := {^self{^values
+    ^self __head{^} assign (^values __head{^});
+    .
+}};
+
+[{^} {^value
+    __new list ^value
+};
+
+
+#__list_node{^} {^value{^next
+#    {^next_cell
+#        ^next_cell {(^next)};
+
+#        get_value{^} {
+#            (^value)
+#        };
+
+#        get_next{^} {
+#            (^next_cell{^})
+#        };
+
+#        set_next{^} {
+#            {^new_next
+#                ^next_cell {(^new_next)}
+#            }
+#        };
+
+#        each{^} {
+#            {^f
+#                ^f ^value;
+#                ^next_cell{^} each ^f
+#            }
+#        };
+
+#        <-{^} {
+#            {^values
+#                ^value := (^values get_value);
+#                ^next_cell{^} <- (^values get_next)
+#            }
+#        };
+
+#        {^msg
+#            ^msg[]
+#        }
+#    } (__cell[])
+#}};
+
+#[] {^} {^msg
+#    length{^{
+#        0
+#    }};
+
+#    each{^{
+#        {^f
+#            .
+#        }
+#    }};
+
+#    ^msg[]
+#};
+
+#[ {^} {^elem
+#    {^list
+#        ^list __init ^list
+#    } ({
+#        __length{^(__cell[])};
+#        __head{^(__cell[])};
+#        __tail{^(__cell[])};
+#        __self{^ ^};
+
+#        __init{^{
+#            {^self
+#                __self {(^self)};
+#                __length {1};
+#                __head{__list_node ^elem __list_nil};
+#                __tail{__head{^}};
+#                ^self
+#            }
+#        }};
+
+#        length{^{
+#            __length{^}
+#        }};
+
+#        ,{^{
+#            {^elem
+#                __tail{^} set_next (__list_node ^elem __list_nil);
+#                __length{ __length{^} + 1 };
+#                __self[]
+#            }
+#        }};
+
+#        each{^{
+#            {^f
+#                __head{^} each ^f
+#            }
+#        }};
+
+#        __nodes{^{
+#            __head{^}
+#        }};
+
+#        <-{^{
+#            {^values
+#                __head{^} <- (^values __nodes)
+#            }
+#        }};
+
+#        ]{^{
+#            __self[]
+#        }};
+
+#        {^msg
+#            print ^msg;
+#            ^msg[]
+#        }
+#    }[])
+#};
+
+.

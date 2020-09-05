@@ -1,0 +1,361 @@
+################################################################################
+# vtable: virtual dispatch
+#
+# This module provides an interface for classes with virtual dispatch; that is,
+# the result of evaluating the expression `instance method` depends on the class
+# of `instance`.
+#
+# Two kinds of instance can be created:
+#
+#   1. A standard instance (created using `__new class arg`) is most similar to
+#      classes in modern dynamically typed OOP languages like Ruby or Python.
+#      When a method is called on a standard instance, a reference to the
+#      receiver instance is implicitly passed as the first argument to the
+#      method body. A class whose instances are standard instances may have a
+#      constructor, which is special method called __init whose only argument
+#      (after the implicit "self" argument) is the argument passed to `__new`.
+#      Standard instances also may have fields. If a standard instance receives
+#      a method call for a method which has not been bound using `__bind`, then
+#      a field with the same name as the method is created in the instance, and
+#      its value is the argument to the method. Thereafter, the name of the
+#      field can be used as a method with that particular instance to access the
+#      value of the field.
+#
+#   2. A wrapper instance (created using `__wrap class arg`) can be used to
+#      emulate a class interface while wrapping a lower-level or lighter-weight
+#      implementation. Contrasting with standard instances, when a wrapper
+#      instance is created, no constructor is invoked, but the argument to
+#      `__new` is saved for later. When a wrapper instance receives a method
+#      call, its implicit first argument is not a reference to the instance
+#      itself, but rather whatever argument was passed to `__new` when the
+#      instance was created. Wrapper instances do not have fields.
+#
+# A tabular summary of the differences between standard and wrapper instances:
+#
+#                       |         Standard          |         Wrapper
+# ----------------------|---------------------------|---------------------------
+#  Supports constructor | Via __init method         | No
+# ----------------------|---------------------------|---------------------------
+#  Implicit argument    | Reference to self         | Argument to __new
+# ----------------------|---------------------------|---------------------------
+#  To initialize field  | `instance field value`,   | N/A
+#                       | where `field` is not a    |
+#                       | bound method.             |
+# ----------------------|---------------------------|---------------------------
+#  To access field      | `instance field`, after   | N/A
+#                       | `field` is initialized.   |
+#
+# Classes defined using this module are open: new methods can be added any time,
+# from anywhere, using the __bind function:
+#
+#           __bind class method {^self
+#               # Method body...
+#           }
+#
+# Note that the `^self` parameter above would actually be the argument to
+# `__new` if the method is called on a wrapper instance.
+#
+# There is a complication when trying to bind a method whose name is a symbol
+# which is already bound at the global scope. __bind relies on being able to set
+# a value for the method name in a scope which is a child of the global scope.
+# This will have unspecified behavior if that name is already in scope. To avoid
+# this issue, use `__operator name` before defining `name` in the global scope.
+# `__operator` will add `name` to the vtable scope before it is added to the
+# global scope, so that the definition of `name` in the vtable scope can be
+# accessed and updated later by the vtable module.
+#
+
+################################################################################
+# __global_vtable
+#
+# __global_vtable is the parent scope of all vtables. Having a common scope from
+# which all class-specific vtables inherit allows us to implement __operator in
+# a way that works even for vtables that haven't been created yet: when a new
+# global operator is declared using `__operator name`, we bind `name` in the
+# __global_vtable scope. This ensures that when `name` is looked up in the scope
+# of any particular vtable, it will use the definition from __global_vtable, not
+# from the global scope. This holds even for vtables which are created after
+# `name` is bound in the global scope, since those vtables are still lexical
+# children of __global_vtable.
+#
+# Note that binding operator names in the __global_vtable scope presents a bit
+# of a problem when we want to bind different definitions to those names for
+# different classes (which, after all, is the whole point of virtual dispatch).
+# To solve this problem, the value bound to an operator name in the
+# __global_vtable scope is actually a function from class names to method
+# implementations, so that when the time comes to dispatch a method to an
+# instance, we can use the class of the instance to look up the appropriate
+# handler for the method.
+#
+# Note that "method implementations" in the paragraph above refers to cells
+# containing handler functions for the method. We use cells so that we can
+# update the method handler dynamically in the implementation of __bind. So a
+# vtable is a map from a method name to a map from a class name to a cell
+# containing a method body.
+#
+# This implementation is able to handle the tricky case from above, but it's a
+# bit inefficient in the common case where the method is not defined globally in
+# the __global_vtable scope, but is actually defined separately in each
+# individual vtable. Methods which are defined in a specific vtable do not need
+# to map class names to definitions, because the vtable they are defined in is
+# already unique to a particular class. As an optimization, then, methods which
+# are defined in a specific vtable which is a child of __global_vtable, rather
+# than in __global_vtable directly, are not maps from classes to
+# implementations, they are simply getter functions for implementations. Note
+# that the two quack the same: a map from class names to implementations takes a
+# class name and returns the appropriate cell. A getter for a method body takes
+# the only class name that will ever be passed to that getter (since the getter
+# is defined in a vtable for a specific class) and unconditionally returns the
+# appropriate cell. However, the getter should be slightly faster, because it
+# requires one fewer map lookup.
+__global_vtable{^} {^msg
+    # The general pattern is:
+    #   * receive a method name
+    #   * if it is not already initialized, initialize it to a getter for a map
+    #     from class names to method bodies
+    #   * call the getter, returning a function from a class name to a metho
+    #     body
+    #
+    # Before we do that for this particular method name, though, we ensure that
+    # the special method __new_vtable is initialized. This method can be used
+    # from outside the __global_vtable scope to create a new vtable which is a
+    # lexical child of the __global_vtable scope.
+    __new_vtable {^{
+        {
+            {^msg
+                # Similar to above, our plan is to get a message, initialize it
+                # if necessary to a getter for a getter for a method body (note:
+                # not a getter for a map from a class name to a method body) and
+                # then call the method.
+                #
+                # As before, we have one special method to initialize before
+                # initializing the method ^msg: __new_instance, which returns a
+                # standard instance which is a lexical child of this vtable.
+                # Since the instance is a child of this vtable, if it receives a
+                # method which is bound in this vtable or in __global_vtable, it
+                # can easily look up the appropriate definition. But since it is
+                # its own scope, if it receives a method which is not bound, it
+                # can bind it to an instance-specific field.
+                __new_instance {^{
+                    {^class
+                        # Whenever a method is called, we look up the method in
+                        # the instance scope and then pass the class name to the
+                        # result, in case the method is a map from class names
+                        # to method definitions bound in __global_vtable. This
+                        # particular method is not, since it is bound right
+                        # here, so we can simply ignore the class name and
+                        # return a new standard instance of the class associated
+                        # with this vtable.
+                        {^msg
+                            # Now we are in the standard instance. Once more, we
+                            # repeat the pattern of receiving a method (or
+                            # field) name, initializing it if necessary, and
+                            # returning the method definition, but again, we
+                            # first have to initialize a special field, __self.
+                            #
+                            # This field will be used to compute the implicit
+                            # first argument when a method is called. However,
+                            # we can't fully initialize __self yet, because we
+                            # can't get a reference to self until the instance
+                            # is created, and we're in the process of defining
+                            # the instance now. Instead, we will initialize
+                            # __self to a setter for __self. Later, in __new,
+                            # once we have a name for this instance, we will use
+                            # the setter to set __self to this instance.
+                            __self{^ref
+                                # Initialize __self to a method which, when
+                                # called, returns a setter for __self. Since
+                                # this is a method which will be called from
+                                # outside the instance scope using the normal
+                                # dispatch mechanism, it needs to quack like a
+                                # getter for a map from a class name to a cell
+                                # whose value is the setter we want to return.
+                                # So we ignore four inputs:
+                                #   * the dummy input to the getter
+                                #   * the class name
+                                #   * the read-modify-write function to the cell
+                                #     (since this method is never dynamically
+                                #     bound using __bind, the argumetn to the
+                                #     cell will only ever be {^} to get the
+                                #     value so we can mock it without using a
+                                #     cell by unconditionally returning the
+                                #     value we want to return)
+                                #   * the implicit first argument to the setter
+                                #     method, which will be nonsense anyways
+                                #     because the reference to self hasn't been
+                                #     initialized when this method is called
+                                ^ref {{{{
+                                    {^value
+                                        # Once we receive a value for __self,
+                                        # the __self method will never again be
+                                        # called from outside this scope. We
+                                        # will only use __self from within this
+                                        # scope to look up the implicit first
+                                        # argument for method invocations.
+                                        # Therefore, the value we set here does
+                                        # not have to obey the method call
+                                        # protocol and ignore four arguments.
+                                        # Instead, we can just ignore one
+                                        # argument, so that this is simply a
+                                        # getter for the self reference.
+                                        ^ref {(^value)}
+                                    }
+                                }}}}
+                            };
+
+                            # If ^msg is already initialized, then it is a
+                            # getter for a map from the class name to a cell
+                            # containing the method implementation. In this
+                            # case, sending it a block will invoke the getter,
+                            # which will ignore the block and result in a map
+                            # from the class name to a cell containing the
+                            # method.
+                            #
+                            # Otherwise, if ^msg is unbound, sending it a block
+                            # will invoke the block with a reference to ^msg so
+                            # that we can initialize it.
+                            ^msg{^ref
+                                # If ^msg is not bound, then we want to
+                                # initialize it to a field, so we return a
+                                # method which takes a value and initializes the
+                                # field to that value.
+                                #
+                                # This time, for this to work with the method
+                                # call protocol, we need to ignore only three
+                                # inputs, because the result of this block is
+                                # supposed to be the result of the outer getter,
+                                # so the input to the outer getter has already
+                                # been processed.
+                                {{{
+                                    {^value
+                                        # When we receive a value, initialize
+                                        # ^msg to a method which returns that
+                                        # value.
+                                        ^ref {{{{(^value)}}}}
+                                    }
+                                }}}
+                            } # Regardless of whether ^msg was initialized order
+                              # not, the result of the preceding expression is a
+                              # map from the class name to a cell containing the
+                              # method implementation (or at least something
+                              # which quacks like that). Now it is time to
+                              # actually invoke the method.
+                              ^class
+                                    # Look up the method for this specific class
+                              {^}
+                                    # Get the method body from the cell
+                              (__self[])
+                                    # Pass a reference to self as the implicit
+                                    # first argument.
+                        }
+                    }
+                }};
+
+                # Now that we have initialized the special __new_instance method
+                # for this particular vtable, we can handle the method name
+                # which we have just received.
+                #
+                # If ^msg is already bound, it will be bound to a getter for a
+                # map from a class name to a cell containing the method body. In
+                # this case, sending the block to ^msg below will invoke the
+                # getter, ignore the block, and return the map, as desired.
+                #
+                # Otherwise, if ^msg is not bound, then sending it the block
+                # below will cause it to invoke the block, allowing us to
+                # initialize ^msg.
+                ^msg {^ref
+                    # Create a new cell to hold the method definition.
+                    {^cell
+                        # The method name is supposed to resolve to a getter for
+                        # a map from class name to cell. This vtable is already
+                        # specific to one class, so we ignore the class name.
+                        ^ref {{(^cell)}};
+
+                        # The result of this whole thing should quack like a map
+                        # from class name to cell. Since we're ignoring the
+                        # class name in this scope we just return a getter for
+                        # the cell.
+                        {(^cell)}
+                    } (__cell[])
+                }
+            }
+        }
+    }};
+
+    # Now we handle receiving a method name in __global_vtable. If ^msg is
+    # already initialized, then it is initalized to a getter for the value we
+    # want to return. Sending it the block below will simply invoke the getter.
+    #
+    # Otherwise, the block will be invoked so that we can initialize ^msg.
+    ^msg {^ref
+        # Create a map from class names to cells containing method bodies, which
+        # we will call `secondary_dispatch`.
+        {^secondary_dispatch
+            ^ref {(^secondary_dispatch)};
+                # Set ^msg to a getter for this map.
+            ^secondary_dispatch
+                # And return the map.
+        } {^class
+            # When the map receives a class which is not already in the map, we
+            # will initailize it to a getter for a cell and return the cell. If
+            # the class name is already in the map, this simply invokes the
+            # getter and returns the cell.
+            ^class{^ref
+                {^cell
+                    ^ref {(^cell)};
+                    ^cell
+                } (__cell[])
+            }
+        }
+    }
+};
+
+################################################################################
+# class interface
+#
+
+__operator{^} {^msg
+    __global_vtable ^msg;
+        # Simply sending the name of a method to __global_vtable causes
+        # __global_vtable to add that method name to its scope, without binding
+        # any particular implementation to it.
+    ^msg
+};
+
+# __vtables: a map from class names to the vtable for a particular class.
+__vtables{^} {^class
+    ^class{^ref
+        {^vtable
+            ^ref {(^vtable)};
+            ^vtable
+        } (__global_vtable __new_vtable[])
+    }
+};
+
+__bind{^} {^class{^msg{^body
+    (__vtables ^class) ^msg ^class {(^body)}
+}}};
+
+__new{^} {^class
+    {^arg
+        {^vtable
+            {^self
+                ^self __self ^self;
+                ^self __init ^arg;
+                ^self
+            } (^vtable __new_instance ^class)
+        } (__vtables ^class)
+    }
+};
+
+__wrap{^} {^class
+    {^arg
+        {^vtable
+            {^msg
+                ^vtable ^msg ^class {^} ^arg
+            }
+        } (__vtables ^class)
+    }
+};
+
+.

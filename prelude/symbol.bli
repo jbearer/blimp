@@ -3,8 +3,8 @@
 #
 # The classes __global_symbol and __local_symbol represent symbols. Unlike
 # actual symbols, instances of these classes are blocks with their own custom
-# message handler, which allows us, for example, to dispatch methods received by
-# the symbol object.
+# message handler, which allows them to dispatch methods received by the symbol
+# object.
 #
 # The difference between these two classes is whether the symbol represented by
 # an instance lives on the stack or in the global scope. This is determined by
@@ -14,41 +14,29 @@
 # (see below) as well as one special message __sym_cell, which returns a cell
 # containing the value of the symbol in the appropriate scope.
 #
+# Since __local_symbol represents a symbol whose value lives elsewhere (on the
+# stack) the only piece of state it needs to do its job is the name of the
+# symbol, which it can use to get the value of the symbol from the stack.
+# Therefore, __local_symbol can be implemented as a wrapper class: instances
+# should be created using `__wrap __local_symbol symbol`, and methods will
+# receive the symbol as their implicit first argument.
+#
+# __global_symbol, on the other hand, actually stores a cell containing its
+# value in its scope. Since it needs to maintain this additional per-instance
+# state, __global_symbol instances should be standard instances: `__new
+# __global_symbol symbol`. Methods will receive a reference to the
+# __global_symbol object as their implicit first argument. The name of the
+# symbol can be recovered using the method __sym.
+#
 
-__global_symbol{^} {^sym{^msg
-    __sym_cell{^ref
-        # For global symbols, the symbol object lives at the global scope, so
-        # the cell containing the symbol's value can live within the symbol
-        # object.
-        #
-        # The first time this block is called (when we initialize __sym_cell for
-        # a new __global_symbol instance) we will create a new __cell and save
-        # it. We will then initalize __sym_cell to a getter for this cell.
-        {^cell
-            ^ref { # When a message is dispatch, it receives a getter for the
-                   # symbol as an argument (see below). We don't care about the
-                   # symbol because we know we're going to return ^cell, so
-                   # just ignore the argument here.
-                (^cell)
-            }
-        } (__cell[])
-    };
-
-    # Dispatch.
-    ^msg {(^sym)}
+__bind __global_symbol __init {^self{^sym
+    ^self __sym_cell (__cell[]);
+    ^self __sym ^sym
 }};
 
-__local_symbol{^} {^sym{^msg
-    __sym_cell{^ref
-        ^ref {
-            # Local symbols' cells are stored on the stack.
-            __stack ^sym
-        }
-    };
-
-    # Dispatch.
-    ^msg {(^sym)}
-}};
+__bind __local_symbol __sym_cell {^sym
+    __stack ^sym
+};
 
 ################################################################################
 # symbol operations
@@ -69,7 +57,7 @@ __local_symbol{^} {^sym{^msg
 # symbol to the code block which implements the operator, and it also uses the
 # reference to initialize the symbol to a symbol object. Thereafter, when the
 # symbol receives an operator, it will be forwarded to the symbol object, which
-# will manually invoke the operator handler.
+# will manually invoke the code block for the operator.
 #
 # In this module, we define an operator __symop which can be used to declare new
 # symbol operators, like so:
@@ -79,77 +67,57 @@ __local_symbol{^} {^sym{^msg
 # Now the expression `my_sym my_op` will cause `my_sym` to be passed to the
 # block which was bound to `my_op` using __symop.
 #
+# Note that __symop introduces the receiving symbol into the global scope. This
+# will interfere with virtual dispatch for methods whose name matches the
+# symbol, unless the symbol is first declared `__operator`. Therefore, the
+# preferred idiom is
+#
+#   __operator my_op __symop {...};
+#
 # This module also provides several built-in symbol operators, including := for
 # assignment and == for equality.
 #
 
-__symop{^} {^opref
-    {^code
-        {^op
-            # Set the operator to a handler function.
-            #
-            # There are two ways the operator function can be invoked:
-            #   1. The operator symbol is passed to an uninitialized symbol. In
-            #      the case, the symbol's built-in message handler will pass a
-            #      reference to the symbol back to the operator symbol, and thus
-            #      in turn to the operator function.
-            #   2. The operator symbol is passed to an initialized symbol
-            #      (either a __global_symbol or __local_symbol instance) and the
-            #      message hanler for the __global_symbol or __local_symbol
-            #      class will pass a getter for the symbol to the operator
-            #      symbol, and thus in turn to the operator function.
-            #
-            # We need to set the operator to a function which can handle both of
-            # these cases, and for performance reasons we would like to do this
-            # without branching. Fortunately, we can take advantage of the fact
-            # that the argument to the operator function (a reference to a
-            # symbol in case 1, or a getter for a symbol in case 2) quacks
-            # similarly in both cases: in particular, if you send it any message
-            # at all, the result will be the symbol receiving the operator.
-            #
-            # Furthermore, the message sent to the argument will be ignored in
-            # case 2, but will become the new value of the hitherto-
-            # uninitialized symbol in case 1. So we can use this message to
-            # perform one-time initialization which will automatically be
-            # skipped whenever the symbol receiving the operator is already
-            # initialized to a symbol object.
-            ^opref {^symref_or_getter
-                {^sym
-                    # In one fell swoop,
-                    #   a. Initialize the receiver symbol, if ^symref_or_getter
-                    #      is a reference.
-                    #   b. Send the receiver symbol to the operator body. Note
-                    #      that the result of the right-hand-side here is the
-                    #      receiver symbol regardless of whether we are in case
-                    #      1 or case 2.
-                    ^code (^symref_or_getter
-
-                        # If this value is used, we are in case 2 and
-                        # ^symref_or_getter is a reference. Use it to set the
-                        # value of the symbol to a __global_symbol or
-                        # __local_symbol object, depending on which kind of
-                        # scope we are executing in.
-                        (__stack __if_global {
-                            __global_symbol ^sym
-                        } {
-                            __local_symbol ^sym
-                        })
-                    )
-                } (^symref_or_getter[])
-                    # Whether the argument is a reference or getter, just treat
-                    # it as a getter, sending it a dummy message so we can
-                    # access the receiver symbol.
-            }
-        } (^opref[])
-    }
-};
+__symop{^} {^opref{^code
+    # When we initialize the operator using ^opref below, the result is the
+    # operator symbol, which we capture in ^op.
+    {^op
+        # Bind methods named ^op in the __local_symbol and __global_symbol
+        # classes.
+        __bind __local_symbol ^op {^sym
+            ^code ^sym
+        };
+        __bind __global_symbol ^op {^self
+            ^code (^self __sym)
+        }
+    } (
+        # Initialize the operator to a handler which receives reference to
+        # uninitialized symbols.
+        ^opref{^symref
+            # Invoke ^symref once to get the name of the symbol.
+            {^sym
+                # Invoke ^symref again to initialize the symbol to a
+                # __global_symbol or __local_symbol object, as appropriate, and
+                # pass the result of that (which is the name of the symbol) to
+                # the operator code.
+                ^code (^symref
+                    (__stack __if_global {
+                        __new __global_symbol ^sym
+                    } {
+                        __wrap __local_symbol ^sym
+                    })
+                )
+            } (^symref[])
+        }
+    )
+}};
 
 # __declare is a trivial symbol operator. It does nothing if the symbol is
 # already initialized, but still causes the symbol to go through the operator
 # dispatch process, which ensures the symbol is initialized to a symbol object.
 # `sym __declare` guarantees that `sym` responds to symbol object messages, such
 # as `sym __sym_cell`.
-__declare __symop {^sym .};
+__operator __declare __symop {^sym .};
 
 # Dereference: get the value of a symbol.
 ${^} {^sym
@@ -160,14 +128,14 @@ ${^} {^sym
 };
 
 # Assignment: change the value of a symbol.
-:= __symop {^sym{^value
+__operator := __symop {^sym{^value
     ^sym __declare;
     ^sym __sym_cell {(^value)}
 }};
 
 # Equality: determine if two symbols (the symbols themselves, not their values)
 # are identical.
-== __symop {^sym1{^sym2
+__operator == __symop {^sym1{^sym2
     {^old1
         {^old2
             # We assign `false` to `sym1`, and then assign `true` to `sym2`. If

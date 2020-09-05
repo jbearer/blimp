@@ -1,0 +1,15 @@
+import std;
+
+__bind class __init{^self{^arg
+    .
+}};
+
+__bind class method {^self
+    ^self
+};
+
+instance{^} (__new class[]);
+
+!benchmark{n{^ 100000}; dispatch_class} {
+    instance method
+}

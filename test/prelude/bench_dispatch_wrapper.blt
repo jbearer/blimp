@@ -1,0 +1,11 @@
+import std;
+
+__bind class method {^arg
+    ^arg
+};
+
+instance{^} (__wrap class[]);
+
+!benchmark{n{^ 100000}; dispatch_wrapper} {
+    instance method
+}

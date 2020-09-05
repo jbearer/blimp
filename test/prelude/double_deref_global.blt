@@ -1,0 +1,8 @@
+import std;
+
+sym := a;
+a := a;
+!expect_eq ($($sym)) ($sym);
+!expect_eq ($sym) a;
+
+.

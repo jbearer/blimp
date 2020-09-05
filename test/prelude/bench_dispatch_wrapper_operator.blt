@@ -1,0 +1,13 @@
+import std;
+
+__operator method;
+
+__bind class method {^arg
+    ^arg
+};
+
+instance{^} (__wrap class[]);
+
+!benchmark{n{^ 100000}; dispatch_wrapper_operator} {
+    instance method
+}
