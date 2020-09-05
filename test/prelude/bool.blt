@@ -13,4 +13,38 @@ import std;
 !expect_eq (true  if_true {a} {b}) a;
 !expect_eq (false if_true {a} {b}) b;
 
+x := 0;
+
+if true {
+    x := 1
+};
+!expect_eq ($x) 1;
+
+if false {
+    x := 0
+};
+!expect_eq ($x) 1;
+
+!expect_eq a (
+    if true {
+        x := 0;
+        a
+    } else {
+        x := 1;
+        b
+    }
+);
+!expect_eq ($x) 0;
+
+!expect_eq b (
+    if false {
+        x := 0;
+        a
+    } else {
+        x := 1;
+        b
+    }
+);
+!expect_eq ($x) 1;
+
 .

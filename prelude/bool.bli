@@ -62,4 +62,18 @@ not {^{^b
     b if_true { false } { true }
 }};
 
+if{^} {^cond{^if_block
+    ^cond if_true {
+        {^result
+            {^else_kw{^else_block
+                ^result
+            }}
+        } (^if_block[])
+    } {
+        {^else_kw{^else_block
+            ^else_block[]
+        }}
+    }
+}};
+
 .
