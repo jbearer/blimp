@@ -2,6 +2,7 @@ import runtime;
 import vtable;
 import bool;
 import symbol;
+import int;
 import list;
 import function;
 

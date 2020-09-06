@@ -25,4 +25,8 @@ c := nil;
 !expect_eq ($b) b;
 !expect_eq ($c) a;
 
+# Test length.
+!expect([a] length == 1);
+!expect([a, b, c, d, e] length == 5);
+
 .

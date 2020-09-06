@@ -18,40 +18,40 @@ node{^
     __push_stack_frame[];
 
     # Create 10 nodes.
-    1 := (node[]);
-    2 := (node[]);
-    3 := (node[]);
-    4 := (node[]);
-    5 := (node[]);
-    6 := (node[]);
-    7 := (node[]);
-    8 := (node[]);
-    9 := (node[]);
-    10 := (node[]);
+    n1 := (node[]);
+    n2 := (node[]);
+    n3 := (node[]);
+    n4 := (node[]);
+    n5 := (node[]);
+    n6 := (node[]);
+    n7 := (node[]);
+    n8 := (node[]);
+    n9 := (node[]);
+    n10 := (node[]);
 
     # Link them into a cycle.
-    ($1) ($2);
-    ($2) ($3);
-    ($3) ($4);
-    ($4) ($5);
-    ($5) ($6);
-    ($6) ($7);
-    ($7) ($8);
-    ($8) ($9);
-    ($9) ($10);
-    ($10) ($1);
+    ($n1) ($n2);
+    ($n2) ($n3);
+    ($n3) ($n4);
+    ($n4) ($n5);
+    ($n5) ($n6);
+    ($n6) ($n7);
+    ($n7) ($n8);
+    ($n8) ($n9);
+    ($n9) ($n10);
+    ($n10) ($n1);
 
     # Leak the nodes.
-    1 := nil;
-    2 := nil;
-    3 := nil;
-    4 := nil;
-    5 := nil;
-    6 := nil;
-    7 := nil;
-    8 := nil;
-    9 := nil;
-    10 := nil;
+    n1 := nil;
+    n2 := nil;
+    n3 := nil;
+    n4 := nil;
+    n5 := nil;
+    n6 := nil;
+    n7 := nil;
+    n8 := nil;
+    n9 := nil;
+    n10 := nil;
 
     __pop_stack_frame[];
 

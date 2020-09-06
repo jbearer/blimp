@@ -61,6 +61,10 @@ __bind list , {^self{^value
         (^self __tail{^} append (__new __list_node ^value))
     };
 
+    (^self __length{
+        (^self __length{^}) + 1
+    });
+
     ^self
 }};
 

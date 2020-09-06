@@ -9,6 +9,7 @@ The `bl:mp` test runner, `blimp-test`, interprets "`bl:mp` test" files, denoted 
 
   Function                | Description
 :------------------------:|:-------------------------------------------------------------------
+| `!expect bool`          | Causes a test failure if `bool` does not evaluate to `true`.
 | `!expect_eq a b`        | Causes a test failure if `a` and `b` do not evaluate to the same symbol.
 | `!expect_lt a b`        | Checks that a numeric symbol is less than another numeric symbol.
 | `!expect_percent p a b` | `p`, `a`, and `b` should be numeric symbols, with `0 <= p <= 1`. Checks that the `a` is approximately equal to `b` within a margin of `p`%.

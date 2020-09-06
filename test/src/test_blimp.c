@@ -30,6 +30,32 @@ static inline BlimpStatus MakeUIntSymbol(
     return Blimp_GetSymbol(blimp, buf, sym);
 }
 
+static BlimpStatus Expect(
+    Blimp *blimp, Test *test, BlimpObject **args, BlimpObject **result)
+{
+    (void)test;
+
+    const BlimpSymbol *sym1;
+    if (BlimpObject_ParseSymbol(args[0], &sym1) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    const BlimpSymbol *sym2;
+    if (Blimp_GetSymbol(blimp, "true", &sym2) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    if (sym1 != sym2) {
+        return Blimp_ErrorMsg(blimp, BLIMP_ERROR,
+            "expected `%s' to match `%s'",
+            BlimpSymbol_GetName(sym1),
+            BlimpSymbol_GetName(sym2)
+        );
+    }
+
+    return VoidReturn(blimp, result);
+}
+
 static BlimpStatus ExpectEQ(
     Blimp *blimp, Test *test, BlimpObject **args, BlimpObject **result)
 {
@@ -548,6 +574,7 @@ static BlimpStatus TestBlimpMethodCall_New(
 }
 
 static const TestBlimpMethod methods[] = {
+    {"expect",              1,  Expect          },
     {"expect_eq",           2,  ExpectEQ        },
     {"expect_lt",           2,  ExpectLT        },
     {"expect_percent",      3,  ExpectPercent   },

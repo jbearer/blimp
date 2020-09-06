@@ -1,0 +1,436 @@
+################################################################################
+# int: a pure-bl:mp implementation of integer arithmetic
+#
+# Integers in this module are represented as lists of decimal digits, in order
+# from the least significant digit (the ones digit) to the most significant
+# digit, terminated by __dnil, which can be thought of as representing
+# arbitarily many leading zeros in the higher digits.
+#
+# Digits are represented internally by the symbols __digit0 - __digit9. The
+# public interface consists of the symbols 0 - 9, which are bound to singleton
+# lists of the corresponding digits.
+#
+
+# __dpair: a pair of a carry digit and a result digit
+__dpair{^} {^carry{^result
+    carry{^} {(^carry)};
+    result{^} {(^result)};
+
+    {^msg
+        ^msg[]
+    }
+}};
+
+################################################################################
+# single-digit addition tables
+#
+# The functions __add0 - __add9 can be used to add single digits together. For
+# example, __add4 __digit2 represents the single-digit addition of 4 and 2. All
+# of these functions return a __dpair, where the carry digit is at most 1.
+#
+
+__add0{^} {^digit
+    # __digit0 + any digit is that digit.
+    __dpair __digit0 ^digit
+};
+
+__add1{
+    __digit0{^} {__dpair __digit0 __digit1};
+    __digit1{^} {__dpair __digit0 __digit2};
+    __digit2{^} {__dpair __digit0 __digit3};
+    __digit3{^} {__dpair __digit0 __digit4};
+    __digit4{^} {__dpair __digit0 __digit5};
+    __digit5{^} {__dpair __digit0 __digit6};
+    __digit6{^} {__dpair __digit0 __digit7};
+    __digit7{^} {__dpair __digit0 __digit8};
+    __digit8{^} {__dpair __digit0 __digit9};
+    __digit9{^} {__dpair __digit1 __digit0};
+
+    ^{^digit
+        ^digit[]
+    }
+};
+
+__add2{
+    __digit0{^} {__dpair __digit0 __digit2};
+    __digit1{^} {__dpair __digit0 __digit3};
+    __digit2{^} {__dpair __digit0 __digit4};
+    __digit3{^} {__dpair __digit0 __digit5};
+    __digit4{^} {__dpair __digit0 __digit6};
+    __digit5{^} {__dpair __digit0 __digit7};
+    __digit6{^} {__dpair __digit0 __digit8};
+    __digit7{^} {__dpair __digit0 __digit9};
+    __digit8{^} {__dpair __digit1 __digit0};
+    __digit9{^} {__dpair __digit1 __digit1};
+
+    ^{^digit
+        ^digit[]
+    }
+};
+
+__add3{
+    __digit0{^} {__dpair __digit0 __digit3};
+    __digit1{^} {__dpair __digit0 __digit4};
+    __digit2{^} {__dpair __digit0 __digit5};
+    __digit3{^} {__dpair __digit0 __digit6};
+    __digit4{^} {__dpair __digit0 __digit7};
+    __digit5{^} {__dpair __digit0 __digit8};
+    __digit6{^} {__dpair __digit0 __digit9};
+    __digit7{^} {__dpair __digit1 __digit0};
+    __digit8{^} {__dpair __digit1 __digit1};
+    __digit9{^} {__dpair __digit1 __digit2};
+
+    ^{^digit
+        ^digit[]
+    }
+};
+
+__add4{
+    __digit0{^} {__dpair __digit0 __digit4};
+    __digit1{^} {__dpair __digit0 __digit5};
+    __digit2{^} {__dpair __digit0 __digit6};
+    __digit3{^} {__dpair __digit0 __digit7};
+    __digit4{^} {__dpair __digit0 __digit8};
+    __digit5{^} {__dpair __digit0 __digit9};
+    __digit6{^} {__dpair __digit1 __digit0};
+    __digit7{^} {__dpair __digit1 __digit1};
+    __digit8{^} {__dpair __digit1 __digit2};
+    __digit9{^} {__dpair __digit1 __digit3};
+
+    ^{^digit
+        ^digit[]
+    }
+};
+
+__add5{
+    __digit0{^} {__dpair __digit0 __digit5};
+    __digit1{^} {__dpair __digit0 __digit6};
+    __digit2{^} {__dpair __digit0 __digit7};
+    __digit3{^} {__dpair __digit0 __digit8};
+    __digit4{^} {__dpair __digit0 __digit9};
+    __digit5{^} {__dpair __digit1 __digit0};
+    __digit6{^} {__dpair __digit1 __digit1};
+    __digit7{^} {__dpair __digit1 __digit2};
+    __digit8{^} {__dpair __digit1 __digit3};
+    __digit9{^} {__dpair __digit1 __digit4};
+
+    ^{^digit
+        ^digit[]
+    }
+};
+
+__add6{
+    __digit0{^} {__dpair __digit0 __digit6};
+    __digit1{^} {__dpair __digit0 __digit7};
+    __digit2{^} {__dpair __digit0 __digit8};
+    __digit3{^} {__dpair __digit0 __digit9};
+    __digit4{^} {__dpair __digit1 __digit0};
+    __digit5{^} {__dpair __digit1 __digit1};
+    __digit6{^} {__dpair __digit1 __digit2};
+    __digit7{^} {__dpair __digit1 __digit3};
+    __digit8{^} {__dpair __digit1 __digit4};
+    __digit9{^} {__dpair __digit1 __digit5};
+
+    ^{^digit
+        ^digit[]
+    }
+};
+
+__add7{
+    __digit0{^} {__dpair __digit0 __digit7};
+    __digit1{^} {__dpair __digit0 __digit8};
+    __digit2{^} {__dpair __digit0 __digit9};
+    __digit3{^} {__dpair __digit1 __digit0};
+    __digit4{^} {__dpair __digit1 __digit1};
+    __digit5{^} {__dpair __digit1 __digit2};
+    __digit6{^} {__dpair __digit1 __digit3};
+    __digit7{^} {__dpair __digit1 __digit4};
+    __digit8{^} {__dpair __digit1 __digit5};
+    __digit9{^} {__dpair __digit1 __digit6};
+
+    ^{^digit
+        ^digit[]
+    }
+};
+
+__add8{
+    __digit0{^} {__dpair __digit0 __digit8};
+    __digit1{^} {__dpair __digit0 __digit9};
+    __digit2{^} {__dpair __digit1 __digit0};
+    __digit3{^} {__dpair __digit1 __digit1};
+    __digit4{^} {__dpair __digit1 __digit2};
+    __digit5{^} {__dpair __digit1 __digit3};
+    __digit6{^} {__dpair __digit1 __digit4};
+    __digit7{^} {__dpair __digit1 __digit5};
+    __digit8{^} {__dpair __digit1 __digit6};
+    __digit9{^} {__dpair __digit1 __digit7};
+
+    ^{^digit
+        ^digit[]
+    }
+};
+
+__add9{
+    __digit0{^} {__dpair __digit0 __digit9};
+    __digit1{^} {__dpair __digit1 __digit0};
+    __digit2{^} {__dpair __digit1 __digit1};
+    __digit3{^} {__dpair __digit1 __digit2};
+    __digit4{^} {__dpair __digit1 __digit3};
+    __digit5{^} {__dpair __digit1 __digit4};
+    __digit6{^} {__dpair __digit1 __digit5};
+    __digit7{^} {__dpair __digit1 __digit6};
+    __digit8{^} {__dpair __digit1 __digit7};
+    __digit9{^} {__dpair __digit1 __digit8};
+
+    ^{^digit
+        ^digit[]
+    }
+};
+
+# Convenience function for adding two digits.
+__add_digits{
+    # Lookup table for the appropriate __add* function based on the first digit.
+    __digit0{^} __add0;
+    __digit1{^} __add1;
+    __digit2{^} __add2;
+    __digit3{^} __add3;
+    __digit4{^} __add4;
+    __digit5{^} __add5;
+    __digit6{^} __add6;
+    __digit7{^} __add7;
+    __digit8{^} __add8;
+    __digit9{^} __add9;
+
+    ^{^d1{^d2
+        # Look up the __add function for the first digit and pass it the second
+        # digit.
+        ^d1 ^d2
+    }}
+};
+
+# Compute the sum of two digits and a carry digit. The carry digit must be
+# __digit0 or __digit1. The result is a __dpair where the carry digit is at most
+# 1.
+__add_digits_with_carry{^} {^d1{^d2{^c
+    # Add the two digits, obtaining a __dpair.
+    {^d12
+        # Add the carry digit to the result of the d12 __dpair.
+        {^result
+            __dpair (__add_digits (^d12 carry) (^result carry) result)
+                        # The final carry is the sum of the two carries.
+                        #
+                        # Note that at most one of (^d12 carry) and (^result
+                        # carry) is 1, and the other is 0: if there was a carry
+                        # from the addition of d1 and d2, then the result of
+                        # that addition was at most 8, because we cannot add two
+                        # digits to get 19. Therefore, even if ^c is 1, adding
+                        # ^c to that result cannot produce a second carry.
+                        #
+                        # It follows that the sum of the two carries is at most
+                        # 2, so we can ignore the carry of this addition.
+                    (^result result)
+                        # The final result is the result of the second addition.
+        } (__add_digits ^c (^d12 result))
+    } (__add_digits ^d1 ^d2)
+}}};
+
+# Single-digit equality: returns `true` or `false`.
+__digit_equals{^} {^d1{^d2
+    {
+        (^d1{^} {true});
+        ^d2{
+            false
+        }
+    }[]
+}};
+
+# Get a symbol representing a digit, suitable for pretty-printing. E.g.
+# `__digit_symbol __digit0` is 0`, `__digit_symbol __digit1` is 1, etc.
+__digit_symbol{
+    __digit0{^} {0};
+    __digit1{^} {1};
+    __digit2{^} {2};
+    __digit3{^} {3};
+    __digit4{^} {4};
+    __digit5{^} {5};
+    __digit6{^} {6};
+    __digit7{^} {7};
+    __digit8{^} {8};
+    __digit9{^} {9};
+
+    ^{^d
+        ^d[]
+    }
+};
+
+################################################################################
+# multi-digit arithmetic
+#
+
+# __dnil is the terminator for a list of digits. It indicates that all digits in
+# positions of equal or greater significance than the position in which __dnil
+# appears are 0.
+__dnil{
+    lsd{^} {__digit0};
+        # __dnil represents infinitely many leading zeros, so the least
+        # significant digit starting from __dnil is always 0, ...
+    tail{^} {__dnil};
+        # ...and the remaining digits consist of infinitely many more zeros.
+
+    add_with_carry{^} {
+        {^y{^c
+            ^y add_carry ^c
+        }}
+    };
+
+    add_carry {
+        # When we add a carry digit to __dnil, the result is the value of the
+        # carry digit: __dcons ^c __dnil. But we don't want explicit leading
+        # zeros in our representation of integers; all leading zeros should be
+        # condensed into __dnil, so if the carry is zero, we return __dnil
+        # instead of creating a __dcons cell. We use a lookup table to
+        # distinguish this case.
+        __digit0{^} {__dnil};
+        __digit1{^} {__dcons __digit1 __dnil};
+        __digit2{^} {__dcons __digit2 __dnil};
+        __digit3{^} {__dcons __digit3 __dnil};
+        __digit4{^} {__dcons __digit4 __dnil};
+        __digit5{^} {__dcons __digit5 __dnil};
+        __digit6{^} {__dcons __digit6 __dnil};
+        __digit7{^} {__dcons __digit7 __dnil};
+        __digit8{^} {__dcons __digit8 __dnil};
+        __digit9{^} {__dcons __digit9 __dnil};
+
+        ^{
+            {^c
+                ^c[]
+            }
+        }
+    };
+
+    equals{^} {
+        {^y
+            ^y is_nil
+        }
+    };
+
+    is_nil{^} {
+        true
+    };
+
+    __render{^} {
+        {^out
+            .
+        }
+    };
+
+    ^{^msg
+        ^msg[]
+    }
+};
+
+# __dcons contains a least-significant digit (which should not be __dzero) and a
+# list of more digits, in order of increasing significance. The tail is
+# represented as __dnil, or as __dcons, recursively.
+__dcons{^} {^lsd{^tail
+    lsd{^} {(^lsd)};
+    tail{^} {(^tail)};
+
+    add_with_carry{^} {
+        {^y{^c
+            # Add the least significant digits along with the carry, obtaining a
+            # result (which is the final LSD) and a new carry (which is either 0
+            # or 1).
+            {^lsd_sum
+                __dcons (^lsd_sum result)
+                        (^tail add_with_carry (^y tail) (^lsd_sum carry))
+                            # Recursively add the tails along with the new
+                            # carry.
+            } (__add_digits_with_carry ^lsd (^y lsd) ^c)
+        }}
+    };
+
+    add_carry{^} {
+        {^c
+            # Add the carry to the least-significant digit, obtaining a result
+            # (which is the final LSD) and a new carry (which is either 0 or 1).
+            {^lsd_sum
+                __dcons (^lsd_sum result)
+                        (^tail add_carry (^lsd_sum carry))
+                            # Recursively add the new carry to the remaining
+                            # digits.
+            } (__add_digits ^lsd ^c)
+        }
+    };
+
+    equals{^} {
+        {^y
+            (__digit_equals ^lsd (^y lsd)) and (^tail equals (^y tail))
+                # Since we do not allow leading zeros, two integers are equal if
+                # and only if they have the same digits, so we compare the least
+                # significant digits and compare the remaining digits
+                # recursively.
+        }
+    };
+
+    is_nil{^} {
+        false
+    };
+
+    __render{^} {
+        {^out
+            # The list of digits is stored backwards, with the least-significant
+            # digit first. So we render it in reverse order, by rendering the
+            # tail first:
+            (^tail __render ^out);
+
+            # And then rendering the least-significant digit.
+            ^out (__digit_symbol ^lsd)
+        }
+    };
+
+    {^msg
+        ^msg[]
+    }
+}};
+
+################################################################################
+# nat: a wrapper class which presents a vtable-based interface to integers
+#
+
+__bind nat __digits {^x
+    ^x
+};
+
+__bind nat + {^x{^y
+    __wrap nat (^x add_with_carry (^y __digits) __digit0)
+}};
+
+__bind nat == {^x{^y
+    ^x equals (^y __digits)
+}};
+
+__bind nat render {^x{^out
+    if (^x is_nil) {
+        (^out `0`)
+    } else {
+        (^x __render ^out)
+    }
+}};
+
+################################################################################
+# globally bound names for small integers
+#
+
+0{^} (__wrap nat (__dnil));
+1{^} (__wrap nat (__dcons __digit1 __dnil));
+2{^} (__wrap nat (__dcons __digit2 __dnil));
+3{^} (__wrap nat (__dcons __digit3 __dnil));
+4{^} (__wrap nat (__dcons __digit4 __dnil));
+5{^} (__wrap nat (__dcons __digit5 __dnil));
+6{^} (__wrap nat (__dcons __digit6 __dnil));
+7{^} (__wrap nat (__dcons __digit7 __dnil));
+8{^} (__wrap nat (__dcons __digit8 __dnil));
+9{^} (__wrap nat (__dcons __digit9 __dnil));
+
+.
