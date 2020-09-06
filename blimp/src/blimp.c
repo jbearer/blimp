@@ -70,9 +70,178 @@ static void PrintUsage(FILE *f, int argc, char *const *argv)
     fprintf(f, "%s\n", BLIMP_OPTIONS_USAGE);
 }
 
-static bool DoAction(Blimp *blimp, const BlimpExpr *expr, Action action)
+static bool IsRenderableStandardInstance(Blimp *blimp, BlimpObject *obj)
 {
-    switch (action) {
+    // Try to determine if the object is a standard instance of a class which
+    // responds to `render`. Classes which respond to methods have a symbol
+    // matching the method name in their scope.
+    const BlimpSymbol *render;
+    if (Blimp_GetSymbol(blimp, "render", &render) != BLIMP_OK) {
+        return false;
+    }
+    BlimpObject *obj_render;
+    if (BlimpObject_Get(obj, render, &obj_render) != BLIMP_OK) {
+        return false;
+    }
+
+    // Technically, we expect every object to have the symbol `render` in its
+    // scope, since `render` is defined as a global function for symbols. What
+    // we really care about is if the definition of `render` in the object's
+    // scope is specific to that object; that is, it is different from the
+    // global definition.
+    BlimpObject *global_render;
+    if (BlimpObject_Get(
+            Blimp_GlobalObject(blimp), render, &global_render) != BLIMP_OK)
+    {
+        // If for some reason `render` is not in scope globally, yet it is in
+        // scope for `obj`, then `obj` must have its own definition of `render`.
+        return true;
+    }
+    if (obj_render == global_render) {
+        return false;
+    }
+
+    // This object at least looks like it responds to render, so we will try to
+    // fancy-render it.
+    return true;
+}
+
+static bool IsRenderableWrapperInstance(Blimp *blimp, BlimpObject *obj)
+{
+    // Wrapper instances do not actually have their methods in their scope, but
+    // they do capture a vtable which has the methods in its scope.
+    const BlimpSymbol *vtable;
+    if (Blimp_GetSymbol(blimp, "vtable", &vtable) != BLIMP_OK) {
+        return false;
+    }
+    BlimpObject *obj_vtable;
+    if (BlimpObject_GetCapturedMessageByName(
+            obj, vtable, &obj_vtable) != BLIMP_OK)
+    {
+        return false;
+    }
+
+    // The vtable should quack like a renderable standard instance.
+    return IsRenderableStandardInstance(blimp, obj_vtable);
+}
+
+static bool FancyRender(Blimp *blimp, BlimpObject *obj, const Options *options)
+{
+    if (!options->implicit_prelude) {
+        // If --core is given, don't try to do anything fancy and format the
+        // object, since the user is probably working with a lot of objects that
+        // don't conform to the core library formatting protocol.
+        return false;
+    }
+
+    // If the object is a symbol, just dumping the object will already produce
+    // nicely formatted output.
+    const BlimpSymbol *sym;
+    if (BlimpObject_ParseSymbol(obj, &sym) == BLIMP_OK) {
+        return false;
+    }
+
+    return IsRenderableStandardInstance(blimp, obj)
+        || IsRenderableWrapperInstance(blimp, obj);
+}
+
+static BlimpStatus StdoutStream(
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject *receiver,
+    BlimpObject *message,
+    BlimpObject **result)
+{
+    (void)scope;
+    (void)receiver;
+
+    BlimpObject_Print(stdout, message);
+
+    *result = BlimpObject_Borrow(Blimp_GlobalObject(blimp));
+    return BLIMP_OK;
+}
+
+static BlimpStatus Render(
+    Blimp *blimp, BlimpObject *obj, const Options *options)
+{
+    if (obj == Blimp_GlobalObject(blimp)) {
+        return BLIMP_OK;
+    }
+
+    if (FancyRender(blimp, obj, options)) {
+        // Send the object a message to render itself to stdout.
+
+        // Create the output stream.
+        BlimpObject *out;
+        if (BlimpObject_NewExtension(
+                blimp,
+                Blimp_GlobalObject(blimp),
+                NULL,
+                StdoutStream,
+                NULL,
+                &out)
+            != BLIMP_OK)
+        {
+            return Blimp_Reraise(blimp);
+        }
+
+        // Create the `render` message.
+        const BlimpSymbol *render;
+        if (Blimp_GetSymbol(blimp, "render", &render) != BLIMP_OK) {
+            BlimpObject_Release(out);
+            return Blimp_Reraise(blimp);
+        }
+        BlimpObject *render_msg;
+        if (BlimpObject_NewSymbol(blimp, render, &render_msg) != BLIMP_OK) {
+            BlimpObject_Release(out);
+            return Blimp_Reraise(blimp);
+        }
+
+        // Send the symbol `render` to `obj`, getting its implementation of
+        // `render`.
+        BlimpObject *render_handler;
+        if (Blimp_Send(
+                blimp,
+                Blimp_GlobalObject(blimp),
+                obj,
+                render_msg,
+                &render_handler)
+            != BLIMP_OK)
+        {
+            BlimpObject_Release(out);
+            BlimpObject_Release(render_msg);
+            return Blimp_Reraise(blimp);
+        }
+        BlimpObject_Release(render_msg);
+
+        // Send the output stream to the render handler.
+        if (Blimp_Send(
+                blimp,
+                Blimp_GlobalObject(blimp),
+                render_handler,
+                out,
+                NULL)
+            != BLIMP_OK)
+        {
+            BlimpObject_Release(out);
+            BlimpObject_Release(render_handler);
+            return Blimp_Reraise(blimp);
+        }
+
+        BlimpObject_Release(out);
+        BlimpObject_Release(render_handler);
+    } else {
+        BlimpObject_Print(stdout, obj);
+    }
+
+    putchar('\n');
+    return BLIMP_OK;
+}
+
+static bool DoAction(
+    Blimp *blimp, const BlimpExpr *expr, const Options *options)
+{
+    switch (options->action) {
         case ACTION_EVAL: {
             BlimpObject *result;
             if (Blimp_Eval(
@@ -81,9 +250,8 @@ static bool DoAction(Blimp *blimp, const BlimpExpr *expr, Action action)
                 return false;
             }
 
-            if (result != Blimp_GlobalObject(blimp)) {
-                BlimpObject_Print(stdout, result);
-                putchar('\n');
+            if (Render(blimp, result, options) != BLIMP_OK) {
+                return false;
             }
 
             BlimpObject_Release(result);
@@ -231,7 +399,7 @@ static int ReplMain(Blimp *blimp, const Options *options)
             goto err_parse;
         }
 
-        if (!DoAction(blimp, expr, options->action)) {
+        if (!DoAction(blimp, expr, options)) {
             Blimp_DumpLastError(blimp, stdout);
             goto err_action;
         }
@@ -260,7 +428,7 @@ static int EvalMain(Blimp *blimp, const char *path, const Options *options)
     }
 
     int ret = EXIT_SUCCESS;
-    if (!DoAction(blimp, expr, options->action)) {
+    if (!DoAction(blimp, expr, options)) {
         Blimp_DumpLastError(blimp, stderr);
         ret = EXIT_FAILURE;
     }

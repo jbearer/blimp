@@ -2050,13 +2050,39 @@ Status ScopedObject_Set(ScopedObject *obj, const Symbol *sym, Object *val)
 Status ScopedObject_GetCapturedMessage(
     const ScopedObject *obj, size_t index, Object **message)
 {
+    if (index >= DBMap_Size(&obj->captures)) {
+        return Error(Object_Blimp((Object *)obj), BLIMP_INVALID_MESSAGE_NAME);
+    }
+
     Ref *ref = DBMap_Resolve(&obj->captures, index);
     if (ref == NULL) {
-        return Blimp_Error(Object_Blimp((Object *)obj), BLIMP_OPTIMIZED_AWAY);
+        return Error(Object_Blimp((Object *)obj), BLIMP_OPTIMIZED_AWAY);
     }
 
     *message = ref->to;
     return BLIMP_OK;
+}
+
+Status ScopedObject_GetCapturedMessageByName(
+    const ScopedObject *obj, const Symbol *name, Object **message)
+{
+    size_t index = 0;
+    for (const ScopedObject *curr = obj->parent;
+         curr != NULL;
+         curr = curr->parent)
+    {
+        if (Object_Type((Object *)curr) == OBJ_GLOBAL) {
+            return Error(
+                Object_Blimp((Object *)obj), BLIMP_INVALID_MESSAGE_NAME);
+        } else if (Object_Type((Object *)curr) == OBJ_BLOCK &&
+            ((BlockObject *)curr)->msg_name == name) {
+            break;
+        }
+
+        ++index;
+    }
+
+    return ScopedObject_GetCapturedMessage(obj, index, message);
 }
 
 ////////////////////////////////////////////////////////////////////////////////

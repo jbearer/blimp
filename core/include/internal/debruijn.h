@@ -104,6 +104,11 @@ PRIVATE Status DBMap_Index(
  */
 PRIVATE Status DBMap_Append(DeBruijnMap *dst, const DeBruijnMap *src);
 
+static inline size_t DBMap_Size(const DeBruijnMap *map)
+{
+    return map->size;
+}
+
 static inline bool DBMap_Empty(const DeBruijnMap *map)
 {
     return map->size == 0;

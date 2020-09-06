@@ -78,6 +78,16 @@ __bind list := {^self{^values
     .
 }};
 
+__bind list render {^self{^out
+    ^out `[`;
+    (^self __head{^} value{^}) render ^out;
+    ^self __head{^} next{^} each {^val
+        ^out `, `;
+        ^val render ^out
+    };
+    ^out `]`
+}};
+
 [{^} {^value
     __new list ^value
 };

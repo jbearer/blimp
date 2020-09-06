@@ -161,4 +161,10 @@ __operator == __symop {^sym1{^sym2
     }($^sym1)
 }};
 
+# Render is an operator which objects can define to customize how they are
+# displayed. It takes an output stream, which is essentially a sink for symbols.
+__operator render __symop {^sym{^out
+    ^out ^sym
+}};
+
 .

@@ -309,6 +309,8 @@ PRIVATE Status ScopedObject_Get(
     const ScopedObject *obj, const Symbol *sym, Object **value);
 PRIVATE Status ScopedObject_GetCapturedMessage(
     const ScopedObject *obj, size_t index, Object **message);
+PRIVATE Status ScopedObject_GetCapturedMessageByName(
+    const ScopedObject *obj, const Symbol *name, Object **message);
 
 ////////////////////////////////////////////////////////////////////////////////
 // concrete class Symbol extends Object

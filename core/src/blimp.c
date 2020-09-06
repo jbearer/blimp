@@ -244,6 +244,18 @@ Status BlimpObject_GetCapturedMessage(
     return ScopedObject_GetCapturedMessage((ScopedObject *)obj, index, message);
 }
 
+Status BlimpObject_GetCapturedMessageByName(
+    Object *obj, const Symbol *name, Object **message)
+{
+    if (!IsScopedObject(obj)) {
+        return ErrorMsg(Object_Blimp(obj), BLIMP_INVALID_OBJECT_TYPE,
+            "cannot get captured message from non-scoped object");
+    }
+
+    return ScopedObject_GetCapturedMessageByName(
+        (ScopedObject *)obj, name, message);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Evaluation
 //
@@ -629,7 +641,11 @@ BlimpStatus Blimp_Send(
 
     TRY(Send(blimp, (ScopedObject *)scope, receiver, message, &v, NULL));
 
-    *result = v.obj;
+    if (result != NULL) {
+        *result = v.obj;
+    } else {
+        BlimpObject_Release(v.obj);
+    }
     return BLIMP_OK;
 }
 

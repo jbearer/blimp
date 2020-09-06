@@ -1066,6 +1066,8 @@ BlimpStatus BlimpObject_Set(
  * `obj` must be a lexical closure, which means it must be a block or extension
  * object.
  *
+ * \return a transient reference (lives at least as long as `obj`)
+ *
  * \par Errors
  *  * `BLIMP_INVALID_MESSAGE_NAME`:
  *      `index` exceeds the nesting level of the scope of `obj`.
@@ -1076,6 +1078,25 @@ BlimpStatus BlimpObject_Set(
  */
 BlimpStatus BlimpObject_GetCapturedMessage(
     BlimpObject *obj, size_t index, BlimpObject **message);
+
+/**
+ * \brief Get a message which is captured by an object.
+ *
+ * `obj` must be a lexical closure, which means it must be a block or extension
+ * object.
+ *
+ * \return a transient reference (lives at least as long as `obj`)
+ *
+ * \par Errors
+ *  * `BLIMP_INVALID_MESSAGE_NAME`:
+ *      `name` does not refer to a caputred message in the scope of `obj`.
+ *  * `BLIMP_INVALID_OBJECT_TYPE`:
+ *      `obj` is not a scoped object (for example, it is a symbol).
+ *  * `BLIMP_OPTIMIZED_AWAY`:
+ *      the message was not captured because it was not used in the source code.
+ */
+BlimpStatus BlimpObject_GetCapturedMessageByName(
+    BlimpObject *obj, const BlimpSymbol *name, BlimpObject **message);
 
 /**
  * @}
