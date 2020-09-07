@@ -14,5 +14,28 @@ import std;
 !expect((5 + 5) == (9 + 1));
 !expect((5 + 7) == (9 + 3));
 
+# Test subtraction
+!expect((0 - 0) == 0);
+!expect((1 - 0) == 1);
+!expect((0 - 1) == (-1));
+!expect((1 - 1) == 0);
+!expect((2 - 1) == 1);
+!expect((1 - 2) == (-1));
+!expect((2 - 2) == 0);
+!expect((1 - (9 + 2)) == (-(9 + 1)));
+!expect((1 - (9 + 9)) == (-(8 + 9)));
+
+# Test `times`
+x := 0;
+3 times {
+    x := ($x + 1)
+};
+!expect($x == 3);
+(9 + 9) times {
+    x := ($x + 1)
+};
+!expect($x == (3 + 9 + 9));
+
+
 .
 

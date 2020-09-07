@@ -1,14 +1,31 @@
 ################################################################################
 # int: a pure-bl:mp implementation of integer arithmetic
 #
-# Integers in this module are represented as lists of decimal digits, in order
+# Integers in this module are represented in tens complement, using lists of
+# decimal digits, in order
 # from the least significant digit (the ones digit) to the most significant
-# digit, terminated by __dnil, which can be thought of as representing
-# arbitarily many leading zeros in the higher digits.
+# digit, terminated by a sign bit.
 #
-# Digits are represented internally by the symbols __digit0 - __digit9. The
-# public interface consists of the symbols 0 - 9, which are bound to singleton
-# lists of the corresponding digits.
+# For example, we could represent the integer 42 as the list [2, 4, +], and -42
+# as [8, 5, -], where
+#   * the value of a list of tens complement digits is the sum of the values of
+#     each digit
+#   * a digit `d` in position `n` has the value +d*10^n
+#   * a `+` is always the last digit, and has the value 0
+#   * a `-` in position `n` is always the last digit, and has the value -10^n
+#
+# Digits are represented internally by the symbols __digit0 - __digit9. Lists of
+# digits are represented as cons cells using the __dcons constructor, and they
+# are terminated by either __dpos (+) or __dneg(-).
+#
+# The public interface of this module consists of the integer class, which wraps
+# the cons lists described above in a user-friendly, vtable-based interface. We
+# also provide global definitions of the symbols 0 - 9, which are bound to
+# singleton lists of the corresponding digits.
+#
+
+################################################################################
+# single-digit arithmetic
 #
 
 # __dpair: a pair of a carry digit and a result digit
@@ -187,7 +204,10 @@ __add9{
     }
 };
 
-# Convenience function for adding two digits.
+################################################################################
+# single-digit API
+#
+
 __add_digits{
     # Lookup table for the appropriate __add* function based on the first digit.
     __digit0{^} __add0;
@@ -227,12 +247,32 @@ __add_digits_with_carry{^} {^d1{^d2{^c
                         # ^c to that result cannot produce a second carry.
                         #
                         # It follows that the sum of the two carries is at most
-                        # 2, so we can ignore the carry of this addition.
+                        # 2, so we can ignore the carry of this addition, and we
+                        # also preserve the invariant that our carry digit is
+                        # never more than 1.
                     (^result result)
                         # The final result is the result of the second addition.
         } (__add_digits ^c (^d12 result))
     } (__add_digits ^d1 ^d2)
 }}};
+
+# Compute the 10s complement of a digit.
+__digit_complement{
+    __digit0{^} {__digit9};
+    __digit1{^} {__digit8};
+    __digit2{^} {__digit7};
+    __digit3{^} {__digit6};
+    __digit4{^} {__digit5};
+    __digit5{^} {__digit4};
+    __digit6{^} {__digit3};
+    __digit7{^} {__digit2};
+    __digit8{^} {__digit1};
+    __digit9{^} {__digit0};
+
+    ^{^d
+        ^d[]
+    }
+};
 
 # Single-digit equality: returns `true` or `false`.
 __digit_equals{^} {^d1{^d2
@@ -263,62 +303,298 @@ __digit_symbol{
     }
 };
 
+# Execute a block a number of times determined by a digit.
+__digit_times{
+    __digit0{^} {^f .};
+    __digit1{^} {^f ^f[]};
+    __digit2{^} {^f ^f[]; ^f[]};
+    __digit3{^} {^f ^f[]; ^f[]; ^f[]};
+    __digit4{^} {^f ^f[]; ^f[]; ^f[]; ^f[]};
+    __digit5{^} {^f ^f[]; ^f[]; ^f[]; ^f[]; ^f[]};
+    __digit6{^} {^f ^f[]; ^f[]; ^f[]; ^f[]; ^f[]; ^f[]};
+    __digit7{^} {^f ^f[]; ^f[]; ^f[]; ^f[]; ^f[]; ^f[]; ^f[]};
+    __digit8{^} {^f ^f[]; ^f[]; ^f[]; ^f[]; ^f[]; ^f[]; ^f[]; ^f[]};
+    __digit9{^} {^f ^f[]; ^f[]; ^f[]; ^f[]; ^f[]; ^f[]; ^f[]; ^f[]; ^f[]};
+
+    ^{^d{^f
+        ^d ^f
+    }}
+};
+
 ################################################################################
 # multi-digit arithmetic
 #
+# The digit-list protocol: there are three kinds of digit-list objects: __dneg,
+# __dpos, and __dcons. All of them implement the following methods:
+#
+#   * lsd:
+#       Return the least significant digit in the represented number (the
+#       residue modulo 10)
+#   * tail:
+#       Return a digit list of all the digits except the least significant.
+#       this is like dividing by 10 and dropping the remainder.
+#   * negative:
+#       Return `true` if the number is negative, `false` otherwise.
+#   * equals ^y:
+#       Return `true` if the receiver and ^y represent the same number, `false`
+#       otherwise.
+#   * __render ^out:
+#       Print the represented number to the output stream ^out.
+#   * case ^n ^p ^c
+#       Execute the block ^n if the receiver is __dneg, execute ^p if the
+#       receiver is __dpos, and execute ^c if the receiver is __dcons.
+#   * add_with_carry ^complement ^y ^c
+#       Add the digit-list ^y and the carry digit ^c (which must be 0 or 1) to
+#       the receiving digit-list, returning a new digit-list. If ^complement is
+#       `true`, digits in the receiver are complemented before adding. This can
+#       be used to implement subtraction as well as addition. In particular,
+#           x + y ::= x add_with_carry false y __digit0
+#           x - y ::= y add_with_carry true  y __digit1
+#       using the principle of tens complement arithmetic that
+#           -y = ~y + 1
+#
+# In addition:
+#   * __dneg and __dpos implement `snoc ^digit`, where `terminator snoc digit`
+#     is equivalent to `__dcons digit terminator`, but `__dneg snoc` collapses
+#     leading 9s (since [__dneg, 9, ...] is equivalent to [__dneg, ...]), and
+#     `__dpos snoc` collapses leading 0s (since [__dpos, 0, ...]) is equivalent
+#     to [__dpos, ...]. These methods in turn are used to implement the function
+#     __make_dcons, which is like the __dcons constructor but collapses
+#     redundant leading digits.
+#   * __dpos and __dcons implement `times ^f`, which execute the block ^f a
+#     number of times equivalent to the represented number.
+#
 
-# __dnil is the terminator for a list of digits. It indicates that all digits in
-# positions of equal or greater significance than the position in which __dnil
-# appears are 0.
-__dnil{
-    lsd{^} {__digit0};
-        # __dnil represents infinitely many leading zeros, so the least
-        # significant digit starting from __dnil is always 0, ...
-    tail{^} {__dnil};
-        # ...and the remaining digits consist of infinitely many more zeros.
+__dneg{
+    # __dneg is equivalent to (__dcons __digit9 __dneg), because __dneg in
+    # position `n` has the value -10^n, while __digit9 in position `n` has the
+    # value `9*10^n, and __dneg in position `n + 1` has the value `-10^(n+1)`,
+    # and `-10^n = -10^(n+1) + 9*10^n` for all `n`. Therefore, if we have to
+    # break a __dneg into a least significant digit and a tail, they are 9 and
+    # __dneg, respectively.
+    lsd{^} {__digit9};
+    tail{^} {__dneg};
 
-    add_with_carry{^} {
-        {^y{^c
-            ^y add_carry ^c
-        }}
+    case{^} {
+        {^dneg{^dpos{^dcons
+            ^dneg[]
+        }}}
     };
 
-    add_carry {
-        # When we add a carry digit to __dnil, the result is the value of the
-        # carry digit: __dcons ^c __dnil. But we don't want explicit leading
-        # zeros in our representation of integers; all leading zeros should be
-        # condensed into __dnil, so if the carry is zero, we return __dnil
-        # instead of creating a __dcons cell. We use a lookup table to
-        # distinguish this case.
-        __digit0{^} {__dnil};
-        __digit1{^} {__dcons __digit1 __dnil};
-        __digit2{^} {__dcons __digit2 __dnil};
-        __digit3{^} {__dcons __digit3 __dnil};
-        __digit4{^} {__dcons __digit4 __dnil};
-        __digit5{^} {__dcons __digit5 __dnil};
-        __digit6{^} {__dcons __digit6 __dnil};
-        __digit7{^} {__dcons __digit7 __dnil};
-        __digit8{^} {__dcons __digit8 __dnil};
-        __digit9{^} {__dcons __digit9 __dnil};
+    negative{^} {
+        true
+    };
 
-        ^{
-            {^c
-                ^c[]
+    add_with_carry {
+        # If we get here, we've reached the end of the first digit-list in an
+        # add_with_carry operation, but the second might still have more digits
+        # to process.
+        #
+        # As an optimization, we will short-circuit here if we can determine the
+        # result without traversing the second list. This is the case if the
+        # carry digit is 1: when we add the carry digit and this __dneg (which
+        # is worth -1 in the same decimal position) they cancel out, leaving
+        # only the second digit-list as the result.
+        __digit1{^} {^y
+            ^y
+        };
+
+        # In the general case, we have to look at the second digit-list, because
+        # we may have to traverse it arbitrarily deep to propagate the carry all
+        # the way to the end. We will case split on the second list, because if
+        # it is a list terminator (__dneg or __dpos) then we have reached a base
+        # case and must produce a result without evaluating deeper. Otherwise,
+        # we will exploit commutativity of addition to recurse down the second
+        # list using the __dcons implementation of add_with_carry.
+        __digit0{^} {^y
+            ^y case {
+                # If ^y is __dneg, then this whole operation boils down to
+                # __dneg + __dneg (since we already know the carry is 0). If we
+                # think of __dneg as representing a -1, then the result is -2,
+                # which we can represent as:
+                __dcons __digit8 __dneg
+                # since -2 = -1*10 + 2*1.
+            } {
+                # If ^y is __dpos, then the operation boils down to __dneg +
+                # __dpos, which is __dneg since __dpos has a value of 0.
+                __dneg
+            } {
+                # Otherwise, we have to traverse the second digit-list. Switch
+                # the order of the operands so we can recurse down the __dcons
+                # version of add_with_carry.
+                (^y add_with_carry false __dneg)
             }
+        };
+
+        ^ {
+            {^complement{^y{^c
+                ^complement if_true {
+                    # If we're complementing, then call __dpos add_with_carry,
+                    # since the complement of __dneg is __dpos.
+                    __dpos add_with_carry false ^y ^c
+                } {
+                    # Otherwise, dispatch on the carry.
+                    (^c ^y)
+                }
+            }}}
         }
     };
 
     equals{^} {
-        {^y
-            ^y is_nil
+        {^x
+            ^x case {
+                true
+            } {
+                false
+            } {
+                false
+            }
         }
     };
 
-    is_nil{^} {
-        true
+    snoc {
+        # If the digit we're appending is 9, collapse [9, __dneg] into just
+        # [__dneg]. Otherwise create a new cons cell.
+        __digit0{^} {__dcons __digit0 __dneg};
+        __digit1{^} {__dcons __digit1 __dneg};
+        __digit2{^} {__dcons __digit2 __dneg};
+        __digit3{^} {__dcons __digit3 __dneg};
+        __digit4{^} {__dcons __digit4 __dneg};
+        __digit5{^} {__dcons __digit5 __dneg};
+        __digit6{^} {__dcons __digit6 __dneg};
+        __digit7{^} {__dcons __digit7 __dneg};
+        __digit8{^} {__dcons __digit8 __dneg};
+        __digit9{^} {__dneg};
+
+        ^{
+            {^digit
+                ^digit[]
+            }
+        }
     };
 
-    __render{^} {
+    __render {^} {
+        {^out
+            ^out `-`
+        }
+    };
+
+    ^{^msg
+        ^msg[]
+    }
+};
+
+__dpos{
+    # __pos is equivalent to (__dcons __digit0 __dpos), because __dpos has a
+    # value of 0.
+    lsd{^} {__digit0};
+    tail{^} {__dpos};
+
+    case{^} {
+        {^dneg{^dpos{^dcons
+            ^dpos[]
+        }}}
+    };
+
+    negative{^} {
+        false
+    };
+
+    add_with_carry {
+        # If we get here, we've reached the end of the first digit-list in an
+        # add_with_carry operation, but the second might still have more digits
+        # to process.
+        #
+        # As an optimization, we will short-circuit here if we can determine the
+        # result without traversing the second list. This is the case if the
+        # carry digit is 0: when we add the carry digit and this __dpos (which
+        # is also worth 0) we get 0, leaving only the second digit-list as the
+        # result.
+        __digit0{^} {^y
+            ^y
+        };
+
+        # In the general case, we have to look at the second digit-list, because
+        # we may have to traverse it arbitrarily deep to propagate the carry all
+        # the way to the end. We will case split on the second list, because if
+        # it is a list terminator (__dneg or __dpos) then we have reached a base
+        # case and must produce a result without evaluating deeper. Otherwise,
+        # we will exploit commutativity of addition to recurse down the second
+        # list using the __dcons implementation of add_with_carry.
+        __digit1{^} {^y
+            ^y case {
+                # If ^y is __dneg, then this whole operation boils down to
+                # __dpos + __dneg + 1 (since we already know the carry is 1). If
+                # we think of __dpos as representing a 0 and __dneg as
+                # representing a -1, then the result is 0
+                __dpos
+            } {
+                # If ^y is __dpos, then the operation boils down to __dpos +
+                # __dpos + 1, which is 1 since __dpos has a value of 0.
+                __dcons __digit1 __dpos
+            } {
+                # Otherwise, we have to traverse the second digit-list. Switch
+                # the order of the operands so we can recurse down the __dcons
+                # version of add_with_carry.
+                (^y add_with_carry false __dpos __digit1)
+            }
+        };
+
+
+        ^ {
+            {^complement{^y{^c
+                ^complement if_true {
+                    # If we're complementing, then call __dneg add_with_carry,
+                    # since the complement of __dpos is __dneg.
+                    __dneg add_with_carry false ^y ^c
+                } {
+                    # Otherwise, dispatch on the carry.
+                    (^c ^y)
+                }
+            }}}
+        }
+    };
+
+    equals{^} {
+        {^x
+            ^x case {
+                false
+            } {
+                true
+            } {
+                false
+            }
+        }
+    };
+
+    snoc {
+        # If the digit we're appending is 0, collapse [0, __dpos] into just
+        # [__dpos]. Otherwise create a new cons cell.
+        __digit0{^} {__dpos};
+        __digit1{^} {__dcons __digit1 __dpos};
+        __digit2{^} {__dcons __digit2 __dpos};
+        __digit3{^} {__dcons __digit3 __dpos};
+        __digit4{^} {__dcons __digit4 __dpos};
+        __digit5{^} {__dcons __digit5 __dpos};
+        __digit6{^} {__dcons __digit6 __dpos};
+        __digit7{^} {__dcons __digit7 __dpos};
+        __digit8{^} {__dcons __digit8 __dpos};
+        __digit9{^} {__dcons __digit9 __dpos};
+
+        ^{
+            {^digit
+                ^digit[]
+            }
+        }
+    };
+
+    times{^} {
+        {^f
+            .
+        }
+    };
+
+    __render {^} {
         {^out
             .
         }
@@ -329,38 +605,38 @@ __dnil{
     }
 };
 
-# __dcons contains a least-significant digit (which should not be __dzero) and a
-# list of more digits, in order of increasing significance. The tail is
-# represented as __dnil, or as __dcons, recursively.
 __dcons{^} {^lsd{^tail
     lsd{^} {(^lsd)};
     tail{^} {(^tail)};
 
-    add_with_carry{^} {
-        {^y{^c
-            # Add the least significant digits along with the carry, obtaining a
-            # result (which is the final LSD) and a new carry (which is either 0
-            # or 1).
-            {^lsd_sum
-                __dcons (^lsd_sum result)
-                        (^tail add_with_carry (^y tail) (^lsd_sum carry))
-                            # Recursively add the tails along with the new
-                            # carry.
-            } (__add_digits_with_carry ^lsd (^y lsd) ^c)
-        }}
+    case{^} {
+        {^dneg{^dpos{^dcons
+            ^dcons[]
+        }}}
     };
 
-    add_carry{^} {
-        {^c
-            # Add the carry to the least-significant digit, obtaining a result
-            # (which is the final LSD) and a new carry (which is either 0 or 1).
-            {^lsd_sum
-                __dcons (^lsd_sum result)
-                        (^tail add_carry (^lsd_sum carry))
-                            # Recursively add the new carry to the remaining
-                            # digits.
-            } (__add_digits ^lsd ^c)
-        }
+    negative{^} {
+        (^tail negative)
+            # The sign is determined by the terminator (whether it is __dpos or
+            # __dneg) so just recurse down the tail until we get there.
+    };
+
+    add_with_carry{^} {
+        {^complement{^y{^c
+            # Take the complement of the LSD if requested.
+            {^lsd
+                # Add the least significant digits along with the carry,
+                # obtaining a result (which is the final LSD) and a new carry
+                # (which is either 0 or 1).
+                {^lsd_sum
+                    __make_dcons
+                        (^lsd_sum result)
+                        (^tail add_with_carry ^complement (^y tail) (^lsd_sum carry))
+                            # Recursively add the tails along with the new
+                            # carry.
+                } (__add_digits_with_carry ^lsd (^y lsd) ^c)
+            } (^complement if_true {__digit_complement ^lsd} {(^lsd)})
+        }}}
     };
 
     equals{^} {
@@ -373,8 +649,26 @@ __dcons{^} {^lsd{^tail
         }
     };
 
-    is_nil{^} {
-        false
+    times{^} {
+        {^f
+            __digit_times ^lsd ^f;
+                # Do the action `d` times for a ones digit of `d`.
+
+            # Run `f` 10 times the the number represented by the tail times,
+            # since getting the tail is like dividing by 10.
+            ^tail times {
+                (^f[]);
+                (^f[]);
+                (^f[]);
+                (^f[]);
+                (^f[]);
+                (^f[]);
+                (^f[]);
+                (^f[]);
+                (^f[]);
+                (^f[])
+            }
+        }
     };
 
     __render{^} {
@@ -394,43 +688,86 @@ __dcons{^} {^lsd{^tail
     }
 }};
 
+__make_dcons{^} {^h{^t
+    ^t case {
+        (^t snoc ^h)
+    } {
+        (^t snoc ^h)
+    } {
+        __dcons ^h ^t
+    }
+}};
+
 ################################################################################
-# nat: a wrapper class which presents a vtable-based interface to integers
+# integer: a wrapper class which presents a vtable-based interface to integers
 #
 
-__bind nat __digits {^x
+__bind integer __digits {^x
     ^x
 };
 
-__bind nat + {^x{^y
-    __wrap nat (^x add_with_carry (^y __digits) __digit0)
+__bind integer + {^x{^y
+    __wrap integer (^x add_with_carry false (^y __digits) __digit0)
 }};
 
-__bind nat == {^x{^y
+__bind integer - {^x{^y
+    # We compute ^x - ^y as
+    #       ^x + (-^y)
+    #     = ^x + (~^y + 1)
+    #     = ~^y + ^x + 1
+    # using the complement feature of the add_with_carry method.
+    __wrap integer ((^y __digits) add_with_carry true ^x __digit1)
+}};
+
+__bind integer == {^x{^y
     ^x equals (^y __digits)
 }};
 
-__bind nat render {^x{^out
-    if (^x is_nil) {
-        (^out `0`)
-    } else {
-        (^x __render ^out)
+__bind integer times {^x{^f
+    unless (^x negative) {
+        (^x times ^f)
     }
 }};
+
+__bind integer render {^x{^out
+    ^x case {
+        # If ^x is -1, it is represented as a single __dneg, which would render
+        # incorrectly as `-`, so we handle this case specially.
+        (^out `-1`)
+    } {
+        # If ^x is 0, it is represented as a single __dpos, which would render
+        # incorrectly as nothing, so we handle this case specially.
+        (^out `0`)
+    } {
+        # A simple way of converting from a 10s complement representation to a
+        # normal decimal representation is to get the sign and the absolute
+        # value in two separate steps.
+        if (^x negative) {
+            (^out `-`); (0 - (__wrap integer ^x)) render ^out
+        } else {
+            (^x __render ^out)
+        }
+    }
+}};
+
+__operator -;
+-{^} {^x
+    0 - ^x
+};
 
 ################################################################################
 # globally bound names for small integers
 #
 
-0{^} (__wrap nat (__dnil));
-1{^} (__wrap nat (__dcons __digit1 __dnil));
-2{^} (__wrap nat (__dcons __digit2 __dnil));
-3{^} (__wrap nat (__dcons __digit3 __dnil));
-4{^} (__wrap nat (__dcons __digit4 __dnil));
-5{^} (__wrap nat (__dcons __digit5 __dnil));
-6{^} (__wrap nat (__dcons __digit6 __dnil));
-7{^} (__wrap nat (__dcons __digit7 __dnil));
-8{^} (__wrap nat (__dcons __digit8 __dnil));
-9{^} (__wrap nat (__dcons __digit9 __dnil));
+0{^} (__wrap integer (__dpos));
+1{^} (__wrap integer (__dcons __digit1 __dpos));
+2{^} (__wrap integer (__dcons __digit2 __dpos));
+3{^} (__wrap integer (__dcons __digit3 __dpos));
+4{^} (__wrap integer (__dcons __digit4 __dpos));
+5{^} (__wrap integer (__dcons __digit5 __dpos));
+6{^} (__wrap integer (__dcons __digit6 __dpos));
+7{^} (__wrap integer (__dcons __digit7 __dpos));
+8{^} (__wrap integer (__dcons __digit8 __dpos));
+9{^} (__wrap integer (__dcons __digit9 __dpos));
 
 .

@@ -76,4 +76,8 @@ if{^} {^cond{^if_block
     }
 }};
 
+unless{^} {^cond{^block
+    ^cond if_false ^block {.}
+}};
+
 .
