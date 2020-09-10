@@ -2,8 +2,8 @@ import runtime;
 import vtable;
 import bool;
 import symbol;
+import function;
 import int;
 import list;
-import function;
 
 .

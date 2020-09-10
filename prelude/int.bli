@@ -422,7 +422,7 @@ __dneg{
                 # Otherwise, we have to traverse the second digit-list. Switch
                 # the order of the operands so we can recurse down the __dcons
                 # version of add_with_carry.
-                (^y add_with_carry false __dneg)
+                (^y add_with_carry false __dneg __digit0)
             }
         };
 
@@ -719,6 +719,19 @@ __bind integer - {^x{^y
     __wrap integer ((^y __digits) add_with_carry true ^x __digit1)
 }};
 
+__bind integer * {^self
+    # For a quick prototype, we implement multiplication as repeated addition.
+    # We should be able to replace this with a faster implementation.
+    function(y) {
+        x := (__wrap integer ^self);
+        n := 0;
+        $y times {
+            n := (($n) + ($x))
+        };
+        $n
+    }
+};
+
 __bind integer == {^x{^y
     ^x equals (^y __digits)
 }};
@@ -769,5 +782,18 @@ __operator -;
 7{^} (__wrap integer (__dcons __digit7 __dpos));
 8{^} (__wrap integer (__dcons __digit8 __dpos));
 9{^} (__wrap integer (__dcons __digit9 __dpos));
+10{^} (__wrap integer (__dcons __digit0 (__dcons __digit1 __dpos)));
+
+################################################################################
+# constructor for arbitarary integers
+#
+
+digits{^} (function(ds) {
+    n := 0;
+    $ds each {^d
+        n := (10*($n) + ^d)
+    };
+    $n
+});
 
 .

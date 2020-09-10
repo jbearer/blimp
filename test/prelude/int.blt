@@ -24,6 +24,16 @@ import std;
 !expect((2 - 2) == 0);
 !expect((1 - (9 + 2)) == (-(9 + 1)));
 !expect((1 - (9 + 9)) == (-(8 + 9)));
+!expect((10 - 1) == 9);
+
+# Test multiplication
+!expect((0 * 0) == 0);
+!expect((0 * 2) == 0);
+!expect((2 * 0) == 0);
+!expect((1 * 2) == 2);
+!expect((2 * 1) == 2);
+!expect((2 * 5) == 10);
+!expect((8 * 8) == (2 * 4 * 2 * 2 * 2));
 
 # Test `times`
 x := 0;
@@ -36,6 +46,9 @@ x := 0;
 };
 !expect($x == (3 + 9 + 9));
 
+# Test `digits`
+!expect(digits([1,0]) == 10);
+!expect(digits([1,2,3]) == ((10*10) + (2*10) + 3));
 
 .
 
