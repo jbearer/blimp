@@ -96,11 +96,12 @@
 // procedures
 //
 // A bytecode procedure is a sequence of instructions which execute one after
-// the other, terminating with a RET instruction which returns from the program.
-// A procedure may call other procedures. For example, when a SEND instruction
-// executes where the receiver is a block object, the block's `code` procedure
-// executes until a RET instruction causes it to return to the procedure which
-// executed the SEND.
+// the other, usually terminating with a RET instruction which returns from the
+// program. (Other instructions may be used to return, such as the tail call
+// instruction RSEND.) A procedure may call other procedures. For example, when
+// a SEND instruction executes where the receiver is a block object, the block's
+// `code` procedure executes until a return instruction causes it to return to
+// the procedure which executed the SEND.
 //
 // Procedures are represented by the Bytecode type. This type has an interface
 // which facilitates building procedures (used by the compiler) and iterating
@@ -128,6 +129,7 @@ typedef struct {
         INSTR_BLOCKI,   // Block immediate
         INSTR_MSG,      // Get captured message
         INSTR_SEND,
+        INSTR_RSEND,
         INSTR_RET,
     } type;
 

@@ -1,15 +1,16 @@
 #include "internal/blimp.h"
 
 const BlimpOptions DEFAULT_BLIMP_OPTIONS = {
-    .recursion_limit      = 1000,
-    .stack_trace_limit    = 5,
-    .gc_batch_size        = (1ull<<20), // 1MB
-    .gc_tracing           = true,
-    .gc_batches_per_trace = 1,
-    .gc_refcount          = true,
-    .gc_cycle_detection   = true,
-    .gc_max_clump_size    = 0,
-    .gc_heap_check        = false,
+    .recursion_limit       = 1000,
+    .stack_trace_limit     = 5,
+    .gc_batch_size         = (1ull<<20), // 1MB
+    .gc_tracing            = true,
+    .gc_batches_per_trace  = 1,
+    .gc_refcount           = true,
+    .gc_cycle_detection    = true,
+    .gc_max_clump_size     = 0,
+    .gc_heap_check         = false,
+    .tail_call_elimination = true,
 };
 
 const char *BLIMP_OPTIONS_USAGE =
@@ -188,6 +189,11 @@ const char *BLIMP_OPTIONS_USAGE =
     "        Enabling this option will significantly slow down execution.\n"
     "\n"
     "        This option is disabled by default.\n"
+    "\n"
+    "    [no-]tail-call-elimination\n"
+    "        Enable or disable tail call elimination.\n"
+    "\n"
+    "        This option is enabled by default.\n"
 ;
 
 static const char *ParseUInt(const char *value, size_t *result)
@@ -306,6 +312,9 @@ const char *Blimp_ParseOption(const char *str, BlimpOptions *options)
         }
     } else if (strncmp("gc-heap-check", option, option_len) == 0) {
         options->gc_heap_check = !negate;
+        return NULL;
+    } else if (strncmp("tail-call-elimination", option, option_len) == 0) {
+        options->tail_call_elimination = !negate;
         return NULL;
     } else {
         return "unknown option";

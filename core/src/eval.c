@@ -165,6 +165,15 @@ static Status ExecuteSend(
             break;
     }
 
+    if (status && !status->has_range) {
+        // A lot of extension methods do not assign source locations to their
+        // errors. If this was one of those methods, or if for some other reason
+        // we got an error with no location, set the location to the location of
+        // the overall send expression.
+        status->range = *range;
+        status->has_range = true;
+    }
+
     BlimpObject_Release(receiver);
     BlimpObject_Release(message);
     return status;
@@ -193,6 +202,9 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
         // Save the number of objects on the result stack when we start, so that
         // if we encounter an error, we can remove any objects from the result
         // stack which were added during this function call.
+
+    assert(sp->return_address == NULL);
+    assert(sp->use_result == (result != NULL));
 
     while (true) {
         bool use_result =
@@ -299,8 +311,10 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                 break;
             }
 
-            case INSTR_SEND: {
+            case INSTR_SEND:
+            case INSTR_RSEND: {
                 SEND *instr = (SEND *)ip;
+                bool tail_call = ip->type == INSTR_RSEND;
 
                 // Get the receiver and message from the result stack. The
                 // message is computed and pushed onto the stack after the
@@ -309,31 +323,56 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                 Object *message  = ObjectStack_Pop(blimp, &blimp->result_stack);
                 Object *receiver = ObjectStack_Pop(blimp, &blimp->result_stack);
 
-                const Instruction *jump_to;
-                if (ExecuteSend(
-                        blimp,
-                        sp->scope,
-                        receiver,
-                        message,
-                        use_result,
-                        &instr->range,
-                        Instruction_Next(ip),
-                        &jump_to) != BLIMP_OK)
-                {
+                // Save what we need from the stack frame in case this is a tail
+                // call and we are about to pop the stack frame.
+                ScopedObject *scope = sp->scope;
+                const Instruction *return_address =
+                    tail_call ? sp->return_address
+                              : Instruction_Next(ip);
+
+                if (tail_call) {
+                    if (sp->message) BlimpObject_Release(sp->message);
+                        // We don't need the message from the stack frame
+                        // anymore. We cannot yet release `sp->scope`, though,
+                        // because we're still using it as the scope argument to
+                        // ExecuteSend. We will release it once that function
+                        // finishes.
+                    Stack_Pop(blimp, &blimp->stack);
+                }
+
+                Status status = ExecuteSend(
+                    blimp,
+                    sp->scope,
+                    receiver,
+                    message,
+                    use_result,
+                    &instr->range,
+                    return_address,
+                    &ip);
+                // Clean up scope if we're returning.
+                if (tail_call) {
+                    BlimpObject_Release((Object *)scope);
+                }
+                if (status != BLIMP_OK) {
                     goto error;
                 }
-                if (jump_to) {
-                    // If we're jumping to a new procedure, update the
-                    // instruction pointer and stack pointer, and start
-                    // executing from the new IP.
-                    ip = jump_to;
-                    sp = Stack_CurrentFrame(&blimp->stack);
-                    continue;
-                }
-                // Otherwise, fall through and continue executing from the
-                // instruction after the current IP.
 
-                break;
+                // Update the instruction pointer and stack pointer.
+                if (ip == NULL) {
+                    ip = return_address;
+                    if (ip == NULL) {
+                        if (result != NULL) {
+                            *result = ObjectStack_Pop(
+                                blimp, &blimp->result_stack);
+                        }
+
+                        return BLIMP_OK;
+                    }
+                }
+                sp = Stack_CurrentFrame(&blimp->stack);
+
+                // Start executing from the new IP.
+                continue;
             }
 
             case INSTR_RET: {
@@ -353,12 +392,8 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                 if (ip == NULL) {
                     // A NULL return address is a signal that we should return a
                     // result to our caller.
-                    Object *obj = ObjectStack_Pop(blimp, &blimp->result_stack);
                     if (result != NULL) {
-                        *result = obj;
-                    } else {
-                        // If the caller doesn't want a result, free it.
-                        BlimpObject_Release(obj);
+                        *result = ObjectStack_Pop(blimp, &blimp->result_stack);
                     }
 
                     return BLIMP_OK;

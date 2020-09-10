@@ -212,6 +212,13 @@ typedef struct {
      * This option is disabled by default.
      */
     bool gc_heap_check;
+
+    /**
+     * \brief Enables tail call elimination.
+     *
+     * This option is enabled by default.
+     */
+    bool tail_call_elimination;
 } BlimpOptions;
 
 extern const BlimpOptions DEFAULT_BLIMP_OPTIONS;

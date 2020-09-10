@@ -112,6 +112,11 @@ void BlimpBytecode_Print(FILE *file, const BlimpBytecode *code, bool recursive)
                 break;
             }
 
+            case INSTR_RSEND: {
+                fprintf(file, "RSEND\n");
+                break;
+            }
+
             case INSTR_RET: {
                 fprintf(file, "RET\n");
                 break;

@@ -1,0 +1,21 @@
+#: -frecursion-limit=100
+
+import std;
+
+direct_tail_call{^} {^n
+    ((^n == 1) if_true { {^} } { direct_tail_call }) (^n - 1)
+};
+
+nested_tail_call{^} {^n
+    print ^n;
+    (^n == 0) if_true {
+        .
+    } {
+        nested_tail_call (^n - 1)
+    }
+};
+
+direct_tail_call(digits([1,0,0,0]));
+nested_tail_call(digits([1,0,0,0]));
+
+.

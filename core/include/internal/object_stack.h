@@ -44,6 +44,8 @@ static inline void ObjectStack_Destroy(Blimp *blimp, ObjectStack *stack)
 
 static inline Status ObjectStack_Push(Blimp *blimp, ObjectStack *stack, Object *obj)
 {
+    assert(obj != NULL);
+
     if (stack->top >= stack->end) {
         return Error(blimp, BLIMP_STACK_OVERFLOW);
     }

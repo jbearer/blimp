@@ -1,4 +1,4 @@
-#: --skip-racket
+#: --skip-racket -fno-tail-call-elimination
 
 overflow{^{
     overflow[]
