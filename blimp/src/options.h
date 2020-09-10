@@ -6,6 +6,7 @@
 typedef enum {
     ACTION_EVAL,
     ACTION_DUMP,
+    ACTION_COMPILE,
 } Action;
 
 typedef struct {

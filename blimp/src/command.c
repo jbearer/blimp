@@ -216,6 +216,28 @@ static void PrintObjectChild(
     printf("  %-10s -> %p\n", BlimpSymbol_GetName(child_name), child);
 }
 
+static void PrintObjectInfo(BlimpObject *obj)
+{
+    BlimpObjectInfo info;
+    BlimpObject_Inspect(obj, &info);
+
+    BlimpObject_Print(stdout, obj);
+    printf("\n\n");
+
+    BlimpBytecode *code;
+    if (BlimpObject_ParseBlock(obj, &code) == BLIMP_OK) {
+        printf("Code\n");
+        BlimpBytecode_Print(stdout, code, false);
+    }
+
+    printf("GC State\n");
+    printf("  refcount: %zu\n",       info.refcount);
+    printf("  clump: %p\n",           info.clump);
+    printf("  clump_refcount: %zu\n", info.clump_refcount);
+    printf("Children\n");
+    BlimpObject_ForEachChild(obj, PrintObjectChild, NULL);
+}
+
 static BlimpStatus InspectObject(
     Blimp *blimp, BlimpObject **args, BlimpObject **result)
 {
@@ -224,19 +246,15 @@ static BlimpStatus InspectObject(
         return Blimp_Reraise(blimp);
     }
 
-    BlimpObjectInfo info;
-    BlimpObject_Inspect(obj, &info);
+    PrintObjectInfo(obj);
 
-    BlimpObject_Print(stdout, obj);
-    printf("\n\n");
+    return VoidReturn(blimp, result);
+}
 
-    printf("GC State\n");
-    printf("  refcount: %zu\n",       info.refcount);
-    printf("  clump: %p\n",           info.clump);
-    printf("  clump_refcount: %zu\n", info.clump_refcount);
-    printf("Children\n");
-    BlimpObject_ForEachChild(obj, PrintObjectChild, NULL);
-
+static BlimpStatus InspectExpr(
+    Blimp *blimp, BlimpObject **args, BlimpObject **result)
+{
+    PrintObjectInfo(args[0]);
     return VoidReturn(blimp, result);
 }
 
@@ -393,11 +411,25 @@ static BlimpStatus InspectBlimp(
     return VoidReturn(blimp, result);
 }
 
+static BlimpStatus InspectCode(
+    Blimp *blimp, BlimpObject **args, BlimpObject **result)
+{
+    BlimpBytecode *code = NULL;
+    if (ParseAddress(blimp, args[0], (BlimpObject **)&code) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    BlimpBytecode_Print(stdout, code, false);
+    return VoidReturn(blimp, result);
+}
+
 static const Command inspect_commands[] = {
     {"unreachable", "print information about unreachable heap objects",
         InspectUnreachable, 0},
     {"object", "print information about the internal state of an object",
         InspectObject, 1},
+    {"expr", "print information about the result of evaluating an expression",
+        InspectExpr, 1},
     {"owners", "print the owners of an object",
         InspectOwners, 1},
     {"clump", "print the clump containing an object",
@@ -406,6 +438,8 @@ static const Command inspect_commands[] = {
         InspectClumpOwners, 1},
     {"blimp", "print information about the bl:mp interpreter",
         InspectBlimp, 0},
+    {"code", "print a section of bytecode located at a given address",
+        InspectCode, 1},
     {0}
 };
 

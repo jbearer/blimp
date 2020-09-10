@@ -13,6 +13,7 @@ typedef BlimpStackTrace StackTrace;
 typedef BlimpSymbol Symbol;
 typedef BlimpStream Stream;
 typedef BlimpExpr Expr;
+typedef BlimpBytecode Bytecode;
 typedef BlimpObject Object;
 
 #ifdef NDEBUG

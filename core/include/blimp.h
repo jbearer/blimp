@@ -732,6 +732,69 @@ BlimpStatus Blimp_ParseString(Blimp *blimp, const char *str, BlimpExpr **output)
 /**
  * @}
  *
+ * \defgroup compiling Compiling
+ *
+ * Blimp expressions are compiled internally to a low-level, assembly-like
+ * bytecode language which is executed by the machine.
+ *
+ * This interface allows the programmer to manipulate and inspect sequences of
+ * bytecode instructions directly.
+ *
+ * @{
+ */
+
+/**
+ * \brief A sequence of bytecode instructions.
+ *
+ * BlimpBytecode objects can be shared (internally, for example, a single
+ * bytecode sequence may be shared by many instances of a block with the same
+ * expression.) Therefore, to easy memory management, they are reference
+ * counted. Each function which takes or returns a BlimpBytecode object will
+ * document its effect on the reference count. Once the reference count of a
+ * BlimpBytecode object reaches 0, the object may no longer be used.
+ */
+typedef struct BlimpBytecode BlimpBytecode;
+
+/**
+ * \brief Compile an expression to bytecode.
+ *
+ * If compilation succeeds, then `*code` is a new bytecode object with a
+ * reference count of 1. The reference is considered to be owned by the caller,
+ * so the caller is now responsible for eventually calling BlimpBytecode_Free.
+ */
+BlimpStatus BlimpExpr_Compile(
+    Blimp *blimp, BlimpExpr *expr, BlimpBytecode **code);
+
+/**
+ * \brief Release a reference to a BlimpBytecode object.
+ */
+void BlimpBytecode_Free(BlimpBytecode *code);
+
+/**
+ * \brief Increment the reference count of a BlimpBytecode object.
+ */
+void BlimpBytecode_Borrow(BlimpBytecode *code);
+
+/**
+ * \brief Print a sequence of bytecode.
+ *
+ * \param file
+ *      A file stream, which must be open for writing, to which to write the
+ *      code.
+ * \param code
+ *      The bytecode procedure to write.
+ * \param recursive
+ *      If `true`, then other bytecode procedures referenced by `code` will also
+ *      be printed, after `code`. Otherwise, only `code` will be printed, and
+ *      references to other bytecode procedures will be represented in `code` as
+ *      opaque numberic identifiers.
+ */
+void BlimpBytecode_Print(
+    FILE *file, const BlimpBytecode *code, bool recursive);
+
+/**
+ * @}
+ *
  * \defgroup objects Objects
  *
  * A BlimpObject is the runtime representation of a value. It is the result of
@@ -931,7 +994,7 @@ void BlimpObject_Print(FILE *file, const BlimpObject *obj);
  *      undefined.
  */
 BlimpStatus BlimpObject_ParseBlock(
-    const BlimpObject *obj, const BlimpExpr **code);
+    const BlimpObject *obj, BlimpBytecode **code);
 
 /**
  * \brief Retrieve the type-specific properties of an extension object.
@@ -1200,7 +1263,7 @@ void Blimp_ForEachObject(
  */
 BlimpStatus Blimp_Eval(
     Blimp *blimp,
-    const BlimpExpr *expr,
+    BlimpExpr *expr,
     BlimpObject *scope,
     BlimpObject **result);
 
@@ -1222,7 +1285,7 @@ BlimpStatus Blimp_Eval(
  */
 BlimpStatus Blimp_EvalSymbol(
     Blimp *blimp,
-    const BlimpExpr *expr,
+    BlimpExpr *expr,
     BlimpObject *scope,
     const BlimpSymbol **sym);
 

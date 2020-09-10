@@ -4,6 +4,7 @@
 #include "../blimp.h"
 #include "internal/common.h"
 #include "internal/object.h"
+#include "internal/object_stack.h"
 #include "internal/stack.h"
 #include "internal/symbol.h"
 
@@ -14,6 +15,7 @@ struct Blimp {
     SymbolTable symbols;
     ObjectPool objects;
     CallStack stack;
+    ObjectStack result_stack;
     GlobalObject *global;
 
     struct BlimpErrorInfo {

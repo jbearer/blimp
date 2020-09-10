@@ -210,7 +210,7 @@ void ObjectPool_Destroy(ObjectPool *pool)
         // Destroy concrete class data.
         switch (Object_Type((Object *)obj)) {
             case OBJ_BLOCK:
-                Blimp_FreeExpr(((BlockObject *)obj)->code);
+                BlimpBytecode_Free(((BlockObject *)obj)->code);
                 break;
             case OBJ_EXTENSION:
                 if (((ExtensionObject *)obj)->finalize != NULL) {
@@ -1798,7 +1798,7 @@ static void FreeObject(GC_Object *obj, bool recursive)
 
     // Release our reference to the code expression if this is a block.
     if (type == OBJ_BLOCK) {
-        Blimp_FreeExpr(((BlockObject *)obj)->code);
+        BlimpBytecode_Free(((BlockObject *)obj)->code);
     } else {
         assert(type == OBJ_EXTENSION);
 
@@ -1957,7 +1957,7 @@ static Status ScopedObject_New(
 
     // Get the currently in-scope message from the top of the stack.
     const StackFrame *frame = Stack_CurrentFrame(&blimp->stack);
-    if (frame != NULL) {
+    if (frame != NULL && frame->message != NULL) {
         if (capture_parents_message) {
             // Our parent does not capture this object, so we need to create a
             // new Ref and borrow it.
@@ -2104,7 +2104,7 @@ Status BlockObject_New(
     Blimp *blimp,
     ScopedObject *parent,
     const Symbol *msg_name,
-    Expr *code,
+    Bytecode *code,
     bool capture_parents_message,
     BlockObject **obj)
 {
@@ -2183,7 +2183,7 @@ Status ReferenceObject_Store(ReferenceObject *ref, Object *value)
     if (!Object_IsFree((Object *)ref->scope) &&
         ref->scope->seq == ref->scope_seq)
     {
-        ScopedObject_Set(ref->scope, ref->symbol, value);
+        return ScopedObject_Set(ref->scope, ref->symbol, value);
     }
 
     return BLIMP_OK;

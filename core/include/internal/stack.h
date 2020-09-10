@@ -4,12 +4,16 @@
 #include <stdint.h>
 
 #include "internal/common.h"
+#include "internal/instruction.h"
 #include "internal/object.h"
 
 typedef struct StackFrame {
     bool has_range;
     SourceRange range;
+    ScopedObject *scope;
     Object *message;
+    const Instruction *return_address;
+    bool use_result;
 } StackFrame;
 
 struct BlimpStackTrace {

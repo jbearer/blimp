@@ -90,6 +90,7 @@
 #include "internal/common.h"
 #include "internal/debruijn.h"
 #include "internal/hash_map.h"
+#include "internal/instruction.h"
 #include "internal/pool_alloc.h"
 #include "internal/random.h"
 
@@ -403,7 +404,7 @@ typedef struct {
         // Name of the message bound in this block. This is only used for
         // pretty-printing. Elsewhere, messages are referred to exclusively by
         // DeBruijn index.
-    Expr *code;
+    Bytecode *code;
         // Body of the block.
 } BlockObject;
 
@@ -411,7 +412,7 @@ PRIVATE Status BlockObject_New(
     Blimp *blimp,
     ScopedObject *parent,
     const Symbol *msg_name,
-    Expr *code,
+    Bytecode *code,
     bool capture_parents_message,
     BlockObject **object);
 

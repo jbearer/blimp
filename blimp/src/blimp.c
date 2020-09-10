@@ -238,8 +238,7 @@ static BlimpStatus Render(
     return BLIMP_OK;
 }
 
-static bool DoAction(
-    Blimp *blimp, const BlimpExpr *expr, const Options *options)
+static bool DoAction(Blimp *blimp, BlimpExpr *expr, const Options *options)
 {
     switch (options->action) {
         case ACTION_EVAL: {
@@ -261,6 +260,17 @@ static bool DoAction(
         case ACTION_DUMP: {
             Blimp_DumpExpr(blimp, stdout, expr);
             putchar('\n');
+            return true;
+        }
+
+        case ACTION_COMPILE: {
+            BlimpBytecode *code;
+            if (BlimpExpr_Compile(blimp, expr, &code) != BLIMP_OK) {
+                return false;
+            }
+
+            BlimpBytecode_Print(stdout, code, true);
+            BlimpBytecode_Free(code);
             return true;
         }
 
@@ -509,6 +519,8 @@ int main(int argc, char *const *argv)
                     options.action = ACTION_EVAL;
                 } else if (strcmp(optarg, "dump") == 0) {
                     options.action = ACTION_DUMP;
+                } else if (strcmp(optarg, "compile") == 0) {
+                    options.action = ACTION_COMPILE;
                 } else {
                     fprintf(stderr, "action: invalid argument\n");
                     PrintUsage(stderr, argc, argv);

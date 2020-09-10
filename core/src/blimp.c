@@ -1,4 +1,5 @@
 #include "internal/blimp.h"
+#include "internal/eval.h"
 #include "internal/expr.h"
 #include "internal/symbol.h"
 
@@ -27,6 +28,18 @@ Blimp *Blimp_New(const BlimpOptions *options)
         goto err_stack;
     }
 
+    if (ObjectStack_Init(blimp, &blimp->result_stack,
+                blimp->options.recursion_limit * 8)
+                    // We assume (somewhat arbitrarily) that there will be an
+                    // average of 8 objects on the stack at a time per call
+                    // stack frame. Errors in the size of the object stack will
+                    // be caught and turned into BLIMP_STACK_OVERFLOW runtime
+                    // errors.
+            != BLIMP_OK)
+    {
+        goto err_result_stack;
+    }
+
     // Create the global object.
     if (GlobalObject_New(blimp, &blimp->global) != BLIMP_OK) {
         goto err_global;
@@ -35,6 +48,8 @@ Blimp *Blimp_New(const BlimpOptions *options)
     return blimp;
 
 err_global:
+    ObjectStack_Destroy(blimp, &blimp->result_stack);
+err_result_stack:
     Stack_Destroy(blimp, &blimp->stack);
 err_stack:
     ObjectPool_Destroy(&blimp->objects);
@@ -47,6 +62,7 @@ err_malloc:
 
 void Blimp_Delete(Blimp *blimp)
 {
+    ObjectStack_Destroy(blimp, &blimp->result_stack);
     Stack_Destroy(blimp, &blimp->stack);
     ObjectPool_Destroy(&blimp->objects);
     SymbolTable_Destroy(&blimp->symbols);
@@ -80,11 +96,14 @@ Status BlimpObject_NewBlock(
             "parent of block must be block or extension");
     }
 
+    Bytecode *bytecode;
+    TRY(BlimpExpr_Compile(blimp, code, &bytecode));
+
     return BlockObject_New(
         blimp,
         (ScopedObject *)parent,
         msg_name,
-        code,
+        bytecode,
         true,
         (BlockObject **)obj);
 }
@@ -147,7 +166,8 @@ void BlimpObject_Print(FILE *f, const Object *obj)
             }
 
             fprintf(f, "{^%s ", ((BlockObject *)obj)->msg_name->name);
-            PrintClosure(f, ((BlockObject *)obj)->code, &scopes);
+            PrintClosure(
+                f, Bytecode_Expr(((BlockObject *)obj)->code), &scopes);
             fprintf(f, "}");
 
             DBMap_Destroy(&scopes);
@@ -167,7 +187,7 @@ void BlimpObject_Print(FILE *f, const Object *obj)
     }
 }
 
-Status BlimpObject_ParseBlock(const Object *obj, const Expr **code)
+Status BlimpObject_ParseBlock(const Object *obj, Bytecode **code)
 {
     if (Object_Type(obj) != OBJ_BLOCK) {
         return Error(Object_Blimp(obj), BLIMP_MUST_BE_BLOCK);
@@ -260,369 +280,39 @@ Status BlimpObject_GetCapturedMessageByName(
 // Evaluation
 //
 
-// Dynamic result types. This structure allows the caller of an evaluation
-// function to request a specific kind of result from the callee, by setting the
-// `type` field before passing a pointer to a `Value`. Depending on the
-// requested result type, the callee may be able to evaluate the expression more
-// efficiently. For example, if the caller requests a symbol, and the expression
-// is an EXPR_SYMBOL, the callee doesn't need to ever create an object
-// representing the result of evaluating the expression. They can pass the
-// symbol back to the caller directly.
-typedef struct {
-    enum {
-        VALUE_OBJECT,
-        VALUE_SYMBOL,
-        VALUE_VOID,
-    } type;
-
-    union {
-        Object *obj;
-        const Symbol *sym;
-    };
-} Value;
-
-// Initialize a `Value` union with a symbol literal, converting to an object if
-// requested by the creator of the `Value`.
-static inline Status ReturnSymbol(
-    Blimp *blimp, const Symbol *sym, Value *result)
-{
-    switch (result->type) {
-        case VALUE_OBJECT:
-            return BlimpObject_NewSymbol(blimp, sym, &result->obj);
-
-        case VALUE_SYMBOL:
-            result->sym = sym;
-            return BLIMP_OK;
-
-        case VALUE_VOID:
-            return BLIMP_OK;
-
-        default:
-            assert(false);
-            return Error(blimp, BLIMP_INVALID_EXPR);
-    }
-}
-
-// Initialize a `Value` union with a block literal, creating a new object only
-// if requested by the creator of the `Value`.
-static inline Status ReturnBlock(
-    Blimp *blimp,
-    ScopedObject *scope,
-    const Symbol *msg_name,
-    Expr *code,
-    bool capture_parents_message,
-    Value *result)
-{
-    switch (result->type) {
-        case VALUE_OBJECT:
-            return BlockObject_New(
-                blimp,
-                scope,
-                msg_name,
-                code,
-                capture_parents_message,
-                (BlockObject **)&result->obj);
-
-        case VALUE_SYMBOL:
-            return Error(blimp, BLIMP_MUST_BE_SYMBOL);
-
-        case VALUE_VOID:
-            return BLIMP_OK;
-
-        default:
-            assert(false);
-            return Error(blimp, BLIMP_INVALID_EXPR);
-    }
-}
-
-// Initialize a `Value` union with an object, parsing it as a symbol if
-// requested by the creator of the `Value`.
-//
-// This function consumes the caller's reference to the object. If the object
-// is stored in `result`, its reference count will not be incremented. If the
-// creator of `result` did not request an object, then a reference to `obj` will
-// be released.
-static inline Status ReturnObject(Blimp *blimp, Object *obj, Value *result)
-{
-    (void)blimp;
-
-    switch (result->type) {
-        case VALUE_OBJECT:
-            result->obj = obj;
-            return BLIMP_OK;
-
-        case VALUE_SYMBOL: {
-            Status ret = BlimpObject_ParseSymbol(obj, &result->sym);
-            BlimpObject_Release(obj);
-
-            if (ret != BLIMP_OK) {
-                return RuntimeReraise(blimp);
-            } else {
-                return BLIMP_OK;
-            }
-        }
-
-        case VALUE_VOID:
-            BlimpObject_Release(obj);
-            return BLIMP_OK;
-
-        default:
-            assert(false);
-            return Error(blimp, BLIMP_INVALID_EXPR);
-    }
-}
-
-static Status EvalExpr(
-    Blimp *blimp, const Expr *expr, ScopedObject *scope, Value *result);
-static Status EvalStmt(
-    Blimp *blimp, const Expr *expr, ScopedObject *scope, Value *result);
-static Status Send(
-    Blimp *blimp,
-    ScopedObject *scope,
-    Object *receiver,
-    Object *message,
-    Value *result,
-    const SourceRange *range);
-
-static Status EvalExpr(
-    Blimp *blimp, const Expr *expr, ScopedObject *scope, Value *result)
-{
-    // Evaluate all expressions except the last in the sequence of expressions.
-    // We don't care about the results here, this is just for side-effects.
-    while (expr->next) {
-        TRY(EvalStmt(blimp, expr, scope, &(Value){.type=VALUE_VOID}));
-        expr = expr->next;
-    }
-
-    // Evaluate the final expression in the sequence for its result.
-    return EvalStmt(blimp, expr, scope, result);
-}
-
-static Status EvalStmt(
-    Blimp *blimp,
-    const Expr *expr,
-    ScopedObject *scope,
-    Value *result)
-{
-    switch (expr->tag) {
-        case EXPR_SYMBOL:
-            return ReturnSymbol(blimp, expr->symbol, result);
-
-        case EXPR_BLOCK: {
-            return ReturnBlock(
-                blimp,
-                scope,
-                expr->block.msg_name,
-                expr->block.code,
-                expr->block.captures_parents_message,
-                result);
-        }
-
-        case EXPR_SEND: {
-            Status ret = BLIMP_OK;
-
-            Value receiver = {VALUE_OBJECT};
-            Value message  = {VALUE_OBJECT};
-
-            if ((ret = EvalExpr(blimp, expr->send.receiver, scope, &receiver))
-                    != BLIMP_OK)
-            {
-                goto err_receiver;
-            }
-
-            if ((ret = EvalExpr(blimp, expr->send.message, scope, &message))
-                    != BLIMP_OK)
-            {
-                goto err_message;
-            }
-
-            if ((ret = Send(
-                    blimp,
-                    scope,
-                    receiver.obj,
-                    message.obj,
-                    result,
-                    &expr->range)) != BLIMP_OK)
-            {
-                goto err_send;
-            }
-
-err_send:
-            BlimpObject_Release(message.obj);
-err_message:
-            BlimpObject_Release(receiver.obj);
-err_receiver:
-            if (ret && !ret->has_range) {
-                // A lot of specialized method handlers do not assign source.
-                // locations to their errors. If this was one of those methods,
-                // set the location to the location of the overal expression.
-                ret->range = expr->range;
-                ret->has_range = true;
-            }
-
-            return ret;
-        }
-
-        case EXPR_MSG: {
-            Object *msg;
-            if (expr->msg.index == 0) {
-                msg = Stack_CurrentFrame(&blimp->stack)->message;
-            } else {
-                TRY(ScopedObject_GetCapturedMessage(
-                    scope, expr->msg.index - 1, &msg));
-            }
-
-            BlimpObject_Borrow(msg);
-            return ReturnObject(blimp, msg, result);
-        }
-
-        default:
-            assert(false);
-            return ErrorFrom(
-                blimp,
-                expr->range,
-                BLIMP_INVALID_EXPR,
-                "internal error: expression is invalid");
-    }
-}
-
-static Status Send(
-    Blimp *blimp,
-    ScopedObject *context,
-    Object *receiver,
-    Object *message,
-    Value *result,
-    const SourceRange *range)
-{
-    Status status = Stack_Push(blimp, &blimp->stack, &(StackFrame){
-        .range     = range ? *range : ((SourceRange){{0},{0}}),
-        .has_range = range != NULL,
-        .message   = message,
-    }, 128);
-
-    if (status != BLIMP_OK) {
-        return status;
-    }
-
-    switch (Object_Type(receiver)) {
-        case OBJ_SYMBOL: {
-            const Symbol *sym = (const Symbol *)receiver;
-
-            // The behavior of a symbol when it receives a message depends on
-            // whether the symbol is already in scope or not:
-            Object *value;
-            if (ScopedObject_Get(context, sym, &value) == BLIMP_OK) {
-                // If the symbol already has a value in this scope, we simply
-                // forward the message on to the value of the symbol.
-                status = Send(blimp, context, value, message, result, NULL);
-            } else {
-                // Otherwise, the message is treated as an initializer for the
-                // symbol. We create a new reference object, which can be used
-                // to write a value to the symbol by sending a message to the
-                // reference, and we send the reference as a message to the
-                // message received by the symbol.
-                ReferenceObject *reference;
-                if ((status = ReferenceObject_New(
-                        blimp, context, sym, &reference))
-                    != BLIMP_OK)
-                {
-                    break;
-                }
-                status = Send(
-                    blimp, context, message, (Object *)reference, result, NULL);
-                BlimpObject_Release((Object *)reference);
-            }
-
-            break;
-        }
-
-        case OBJ_REFERENCE: {
-            // When a reference object (created in the previous case) receives a
-            // message, it sets the value of the associated symbol to the
-            // message.
-            ReferenceObject_Store((ReferenceObject *)receiver, message);
-
-            // The result is the symbol associated with the reference.
-            status = ReturnSymbol(
-                blimp, ((ReferenceObject *)receiver)->symbol, result);
-            break;
-        }
-
-        case OBJ_BLOCK: {
-            status = EvalExpr(
-                blimp,
-                ((BlockObject *)receiver)->code,
-                (ScopedObject *)receiver,
-                result);
-            break;
-        }
-
-        case OBJ_EXTENSION: {
-            Object *obj;
-            if ((status = ((ExtensionObject *)receiver)->method(
-                    blimp,
-                    (Object *)context,
-                    receiver,
-                    message,
-                    &obj))
-                != BLIMP_OK)
-            {
-                break;
-            }
-
-            status = ReturnObject(blimp, obj, result);
-            break;
-        }
-
-        default: {
-            status = Error(blimp, BLIMP_INVALID_OBJECT_TYPE);
-        }
-    }
-
-    Stack_Pop(blimp, &blimp->stack);
-    return status;
-}
-
 Status Blimp_Eval(
     Blimp *blimp,
-    const Expr *expr,
+    Expr *expr,
     Object *scope,
     Object **obj)
 {
-    Value v;
-    v.type = obj ? VALUE_OBJECT : VALUE_VOID;
-
     if (!IsScopedObject(scope)) {
         return Blimp_ErrorMsg(blimp, BLIMP_INVALID_OBJECT_TYPE,
             "evaluation scope must be a block or extension");
     }
 
-    TRY(EvalExpr(blimp, expr, (ScopedObject *)scope, &v));
+    Bytecode *code;
+    TRY(BlimpExpr_Compile(blimp, expr, &code));
 
-    if (obj) {
-        *obj = v.obj;
-    }
+    Status ret = EvalBytecode(blimp, (ScopedObject *)scope, code, obj);
+    BlimpBytecode_Free(code);
 
-    return BLIMP_OK;
+    return ret;
 }
 
 Status Blimp_EvalSymbol(
     Blimp *blimp,
-    const Expr *expr,
+    Expr *expr,
     Object *scope,
     const Symbol **sym)
 {
-    Value v = {.type=VALUE_SYMBOL};
+    Object *obj;
+    TRY(Blimp_Eval(blimp, expr, scope, &obj));
 
-    if (!IsScopedObject(scope)) {
-        return Blimp_ErrorMsg(blimp, BLIMP_INVALID_OBJECT_TYPE,
-            "evaluation scope must be a block or extension");
-    }
+    Status ret = BlimpObject_ParseSymbol(obj, sym);
+    BlimpObject_Release(obj);
 
-    TRY(EvalExpr(blimp, expr, (ScopedObject *)scope, &v));
-
-    *sym = v.sym;
-    return BLIMP_OK;
+    return ret;
 }
 
 BlimpStatus Blimp_Send(
@@ -632,21 +322,12 @@ BlimpStatus Blimp_Send(
     Object *message,
     Object **result)
 {
-    Value v = {.type=VALUE_OBJECT};
-
     if (!IsScopedObject(scope)) {
         return Blimp_ErrorMsg(blimp, BLIMP_INVALID_OBJECT_TYPE,
             "send scope must be a block or extension");
     }
 
-    TRY(Send(blimp, (ScopedObject *)scope, receiver, message, &v, NULL));
-
-    if (result != NULL) {
-        *result = v.obj;
-    } else {
-        BlimpObject_Release(v.obj);
-    }
-    return BLIMP_OK;
+    return Send(blimp, (ScopedObject *)scope, receiver, message, result);
 }
 
 BlimpStatus Blimp_SendAndParseSymbol(
@@ -658,8 +339,10 @@ BlimpStatus Blimp_SendAndParseSymbol(
 {
     Object *obj;
     TRY(Blimp_Send(blimp, scope, receiver, message, &obj));
+
     BlimpStatus status = BlimpObject_ParseSymbol(obj, sym);
     BlimpObject_Release(obj);
+
     return status;
 }
 
