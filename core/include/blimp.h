@@ -300,6 +300,7 @@ typedef enum BlimpErrorCode {
     // Parsing errors
     BLIMP_INVALID_CHARACTER,
     BLIMP_UNEXPECTED_TOKEN,
+    BLIMP_UNEXPECTED_EOF,
     BLIMP_INVALID_MESSAGE_NAME,
 
     // Runtime errors
@@ -582,6 +583,11 @@ BlimpErrorCode Blimp_GetLastError(
     const BlimpSourceRange **range,
     BlimpStackTrace **trace,
     const char **message);
+
+/**
+ * \brief Get the code of the last error recorded in `blimp`.
+ */
+BlimpErrorCode Blimp_GetLastErrorCode(Blimp *blimp);
 
 /**
  * @}

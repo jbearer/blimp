@@ -347,6 +347,11 @@ BlimpErrorCode Blimp_GetLastError(
     return blimp->last_error.code;
 }
 
+BlimpErrorCode Blimp_GetLastErrorCode(Blimp *blimp)
+{
+    return blimp->last_error.code;
+}
+
 static void DumpError(FILE *f, Status err, size_t trace_limit)
 {
     if (err->trace) {

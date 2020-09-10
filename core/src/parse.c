@@ -403,6 +403,14 @@ static const char *StringOfTokenType(TokenType t)
     }
 }
 
+static BlimpErrorCode UnexpectedTokenError(TokenType t)
+{
+    switch (t) {
+        case TOK_EOF: return BLIMP_UNEXPECTED_EOF;
+        default:      return BLIMP_UNEXPECTED_TOKEN;
+    }
+}
+
 static void Lexer_Init(Lexer *lex, Blimp *blimp, Stream *input)
 {
     lex->blimp = blimp;
@@ -465,7 +473,7 @@ static Status Lexer_Peek(Lexer *lex, Token *tok)
 
             if (c == EOF) {
                 // If the comment terminated with EOF rather than a newline,
-                // than we actually do produce a token here:
+                // then we actually do produce a token here:
                 tok->type = TOK_EOF;
                 break;
             }
@@ -527,7 +535,7 @@ static Status Lexer_Peek(Lexer *lex, Token *tok)
                 if (c == EOF) {
                     return Blimp_ErrorAt(
                         lex->blimp, Stream_Location(lex->input),
-                        BLIMP_UNEXPECTED_TOKEN,
+                        UnexpectedTokenError(TOK_EOF),
                         "unexpected end of input (expecting ``')"
                     );
                 }
@@ -626,7 +634,7 @@ static Status Lexer_ConsumeWithLoc(
     Token tok;
     TRY(Lexer_Next(lex, &tok));
     if (tok.type != expected_token) {
-        return ErrorFrom(lex->blimp, tok.range, BLIMP_UNEXPECTED_TOKEN,
+        return ErrorFrom(lex->blimp, tok.range, UnexpectedTokenError(tok.type),
             "unexpected %s: expecting %s",
             StringOfTokenType(tok.type),
             StringOfTokenType(expected_token));
@@ -895,7 +903,8 @@ static Status ParseTerm(Lexer *lex, Expr **term, Expr **tail)
             return BLIMP_OK;
 
         default:
-            return ErrorFrom(lex->blimp, tok.range, BLIMP_UNEXPECTED_TOKEN,
+            return ErrorFrom(lex->blimp, tok.range,
+                UnexpectedTokenError(tok.type),
                 "unexpected %s: expecting term", StringOfTokenType(tok.type));
     }
 }
@@ -956,7 +965,7 @@ Status Blimp_Parse(Blimp *blimp, Stream *input, Expr **output)
         Token tok;
         ret = Lexer_Next(&lex, &tok);
         if (ret == BLIMP_OK && tok.type != TOK_EOF) {
-            ret = ErrorFrom(blimp, tok.range, BLIMP_UNEXPECTED_TOKEN,
+            ret = ErrorFrom(blimp, tok.range, UnexpectedTokenError(tok.type),
                 "unexpected %s: expecting %s or %s",
                 StringOfTokenType(tok.type),
                 StringOfTokenType(TOK_SEMI),

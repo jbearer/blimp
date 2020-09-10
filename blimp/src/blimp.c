@@ -323,6 +323,11 @@ static void WriteHistory(const Options *options)
     }
 }
 
+static void ReplaceLastHistoryEntry(const char *line)
+{
+    replace_history_entry(history_length - 1, line, NULL);
+}
+
 #else
 
 static char *Readline(const char *prompt)
@@ -387,7 +392,46 @@ static void SetHistoryLimit(const Options *options)
     (void)options;
 }
 
+static void ReplaceLastHistoryEntry(const char *line)
+{
+    (void)line;
+}
+
 #endif
+
+// Append a line to a string.
+//
+// If `*input` is `NULL`, then this function causes `*input` to point to a
+// dynamically allocated string whose contents match those of `line`.
+//
+// Otherwise, `*input` must point to a dynamically allocated string created by a
+// previous call to AppendLine. A newline character is appended to `*input`,
+// followed by the contents of `line`, resizing `*input` if necessary.
+//
+// The memory pointed to by `input` must be freed by the caller, using free().
+static BlimpStatus AppendLine(Blimp *blimp, char **input, const char *line)
+{
+    size_t line_len = strlen(line);
+    size_t input_len = 0;
+    if (*input != NULL) {
+        // Append a newline character to `*input`. This newline overwrites the
+        // terminating null character. This is alright, since we've saved the
+        // length of the string and we're about to append `line` to the end of
+        // it, which will make it null-terminated wonce again.
+        input_len = strlen(*input) + 1;
+        (*input)[input_len - 1] = '\n';
+    }
+
+    // Resize the buffer to account for `line` and a trailing null character.
+    *input = realloc(*input, input_len + line_len + 1);
+    if (*input == NULL) {
+        return Blimp_Error(blimp, BLIMP_OUT_OF_MEMORY);
+    }
+
+    // Append `line`.
+    strncpy(*input + input_len, line, line_len + 1);
+    return BLIMP_OK;
+}
 
 static int ReplMain(Blimp *blimp, const Options *options)
 {
@@ -400,13 +444,49 @@ static int ReplMain(Blimp *blimp, const Options *options)
     char *line;
     while ((line = Readline("bl:mp> ")) != NULL) {
         if (!*line) {
+            free(line);
             goto err_empty_line;
         }
 
+        // Start a new input, which for now consists solely of `line`. We may
+        // append more to it later if this ends up being a multi-line input.
+        char *input = NULL;
+        Blimp_Check(AppendLine(blimp, &input, line));
+        free(line);
+
+        // Try to parse the input we have so far. This will tell us if the input
+        // is a complete expression or not. If not, we will ask the users for
+        // more lines of input.
         BlimpExpr *expr;
-        if (Blimp_ParseString(blimp, line, &expr) != BLIMP_OK) {
-            Blimp_DumpLastError(blimp, stdout);
-            goto err_parse;
+        while (Blimp_ParseString(blimp, input, &expr) != BLIMP_OK) {
+            if (Blimp_GetLastErrorCode(blimp) == BLIMP_UNEXPECTED_EOF) {
+                // If we were expecting more input, print a continuation prompt
+                // and read another line.
+                line = Readline("   ... ");
+                if (line == NULL) {
+                    free(input);
+                    goto err_end_of_input;
+                } else if (!*line) {
+                    // If the user hits return twice (that is, enters a blank
+                    // line) we assume they really to enter their input as is,
+                    // even if it causes a parse error.
+                    free(line);
+                    Blimp_DumpLastError(blimp, stdout);
+                    goto err_parse;
+                }
+
+                // Add the new line to the input.
+                Blimp_Check(AppendLine(blimp, &input, line));
+                free(line);
+
+                // Remove the partial input that was missing a line from the
+                // history, and replace it with the updated input that contains
+                // the most recent line.
+                ReplaceLastHistoryEntry(input);
+            } else {
+                Blimp_DumpLastError(blimp, stdout);
+                goto err_parse;
+            }
         }
 
         if (!DoAction(blimp, expr, options)) {
@@ -417,9 +497,10 @@ static int ReplMain(Blimp *blimp, const Options *options)
 err_action:
         Blimp_FreeExpr(expr);
 err_parse:
-err_empty_line:
-        free(line);
+        free(input);
+err_empty_line:;
     }
+err_end_of_input:
 
     putchar('\n');
         // Write a newline so the user's terminal prompt doesn't appear on
