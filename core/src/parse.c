@@ -75,6 +75,20 @@
 // list (via the `next` field on the `Expr` datatype) which makes them a bit
 // easier to process without blowing up the stack.
 //
+// Representing expressions which are sequences of statements as a flat list has
+// implications on how sequences are appended: a statement in a sequence cannot
+// be a sequence recursively, because it can only point to one next statement:
+// the next statement in the overall sequence, _or_ the next statement in the
+// nested sequence. In other words, we cannot represent the grouping `(a ; b) ;
+// c` in our AST. We can, however, represent the equivalent grouping `a ; b ; c`
+// (or `a ; (b ; c)`). Therefore, we have to take care when building sequences
+// in ParseExpr that we do not append a sequence to an expression which is
+// already a sequence. If the first statement we parse is `(a ; b)`, then we
+// need to append `c` to `b`, not to `a`. To facilitate this, all the parsing
+// functions which return an expression also return a `tail` pointer, which
+// points to the last statement in the sequence if the result expression is a
+// sequence, or to the result expression if it is not a sequence.
+//
 // The parser's responsibilities also include resolving references to message
 // names (^name) to DeBruijn indices; that is, the parser must convert {^a {^b
 // ^a } } to {{1}}. To that end, we maintain a DeBruijnMap of the message names
@@ -689,12 +703,12 @@ static Status Lexer_FreshSymbol(Lexer *lex, const Symbol **symbol)
 // Parser
 //
 
-static Status ParseExpr(Lexer *lex, Expr **expr);
-static Status ParseStmt(Lexer *lex, Expr **stmt);
-static Status ParseTerm(Lexer *lex, Expr **term);
+static Status ParseExpr(Lexer *lex, Expr **expr, Expr **tail);
+static Status ParseStmt(Lexer *lex, Expr **stmt, Expr **tail);
+static Status ParseTerm(Lexer *lex, Expr **term, Expr **tail);
 static Status TryTerm(Lexer *lex, Expr **term);
 
-static Status ParseExpr(Lexer *lex, Expr **expr)
+static Status ParseExpr(Lexer *lex, Expr **expr, Expr **tail)
 {
     // The <expr> non-terminal consists of two productions:
     //
@@ -706,13 +720,12 @@ static Status ParseExpr(Lexer *lex, Expr **expr)
     // by parsing statements one at a time, left-to-right, and folding them into
     // a list as we go. In either case, though, we must first parse at least one
     // statement.
-    TRY(ParseStmt(lex, expr));
+    TRY(ParseStmt(lex, expr, tail));
 
     // Now we look ahead to see if the next token is a semicolon. If it is, we
     // parse another statement and add it to the sequence expression we're
     // building up. We keep doing this until we hit something other than a
     // semicolon.
-    Expr *prev = *expr;
     while (true) {
         Token tok;
         TRY(Lexer_Peek(lex, &tok));
@@ -724,14 +737,14 @@ static Status ParseExpr(Lexer *lex, Expr **expr)
         TRY(Lexer_Consume(lex, tok.type));
             // Consume the peeked token, comitting to the ';' production.
 
-        TRY(ParseStmt(lex, &prev->next));
-            // Parse the next statement in the sequence.
-
-        prev = prev->next;
+        TRY(ParseStmt(lex, &(*tail)->next, tail));
+            // Parse the next statement in the sequence, storing it in the
+            // `next` field of the tail of the current sequence. Update `tail`
+            // to point to the tail of the new sequence.
     }
 }
 
-static Status ParseStmt(Lexer *lex, Expr **expr)
+static Status ParseStmt(Lexer *lex, Expr **expr, Expr **tail)
 {
     // The <stmt> non-terminal consists of two productions:
     //
@@ -743,7 +756,7 @@ static Status ParseStmt(Lexer *lex, Expr **expr)
     // by parsing terms one at a time, left-to-right, and folding them into a
     // statement as we go. In either case, though, we must first parse at least
     // one term.
-    TRY(ParseTerm(lex, expr));
+    TRY(ParseTerm(lex, expr, tail));
 
     // Parse as many more terms as we can, folding them together as we go into a
     // left associative tree of message sends.
@@ -769,10 +782,14 @@ static Status ParseStmt(Lexer *lex, Expr **expr)
             { receiver->range.start, message->range.end };
         (*expr)->send.receiver = receiver;
         (*expr)->send.message  = message;
+
+        *tail = *expr;
+            // The expression we've just created is not a sequence, so `tail`
+            // just refers to the expression itself.
     }
 }
 
-static Status ParseTerm(Lexer *lex, Expr **term)
+static Status ParseTerm(Lexer *lex, Expr **term, Expr **tail)
 {
     TRY(Malloc(lex->blimp, sizeof(Expr), term));
     (*term)->refcount = 1;
@@ -794,10 +811,22 @@ static Status ParseTerm(Lexer *lex, Expr **term)
         // We'll update the end of this range later if we have to, but the start
         // should be accurate.
 
+    *tail = *term;
+        // Most terms are not sequences. The only way a term can be a sequence
+        // is via the parenthsized expression production, '(' <expr> ')' where
+        // <expr> happens to be a sequence, e.g. `(a;b)`. Therefore, we will
+        // set `tail` to point at `term` (the common case) and then update it if
+        // we find we have created a sequence after all.
+
     switch (tok.type) {
         case TOK_LPAREN:
             Free(lex->blimp, term);
-            TRY(ParseExpr(lex, term));
+                // This production simply delegates to the expression parser,
+                // which will allocate a new expression for us, so we can get
+                // rid of `term`.
+            TRY(ParseExpr(lex, term, tail));
+                // Parse the parenthsized expression and get its tail in case it
+                // is a sequence.
             (*term)->range.start = tok.range.start;
                 // ParseExpr overwrites the source range, so we have to reset it
                 // here to include the open parenthesis.
@@ -820,7 +849,8 @@ static Status ParseTerm(Lexer *lex, Expr **term)
 
             // Parse the body of the block with the new message name in scope.
             Lexer_PushScope(lex, *term);
-            Status status = ParseExpr(lex, &(*term)->block.code);
+            Expr *body_tail;
+            Status status = ParseExpr(lex, &(*term)->block.code, &body_tail);
             Lexer_PopScope(lex);
             if (status != BLIMP_OK) {
                 return status;
@@ -873,6 +903,7 @@ static Status ParseTerm(Lexer *lex, Expr **term)
 static Status TryTerm(Lexer *lex, Expr **term)
 {
     Token tok;
+    Expr *tail;
 
     // Check if the next token is one of the four that can start a <term>.
     TRY(Lexer_Peek(lex, &tok));
@@ -881,7 +912,7 @@ static Status TryTerm(Lexer *lex, Expr **term)
         case TOK_LBRACE:
         case TOK_SYMBOL:
         case TOK_MSG_NAME:
-            return ParseTerm(lex, term);
+            return ParseTerm(lex, term, &tail);
         default:
             *term = NULL;
             return BLIMP_OK;
@@ -918,7 +949,8 @@ Status Blimp_Parse(Blimp *blimp, Stream *input, Expr **output)
     Lexer lex;
     Lexer_Init(&lex, blimp, input);
 
-    Status ret = ParseExpr(&lex, output);
+    Expr *tail;
+    Status ret = ParseExpr(&lex, output, &tail);
     if (ret == BLIMP_OK) {
         // Check that we consumed all the input.
         Token tok;

@@ -1,0 +1,24 @@
+{
+    foo{^ ^};
+    initialize_foo{^} {^val
+        foo ^val
+    };
+
+    (x; initialize_foo {bar}); y;
+
+    !expect_eq (foo[]) bar
+}[];
+
+{
+    foo{^ ^};
+    initialize_foo{^} {^val
+        foo ^val;
+        {^}
+    };
+
+    (x; initialize_foo {bar}) y;
+
+    !expect_eq (foo[]) bar
+}[];
+
+.
