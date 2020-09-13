@@ -45,6 +45,8 @@ Blimp *Blimp_New(const BlimpOptions *options)
         goto err_global;
     }
 
+    InitSignals(blimp, &blimp->signals);
+
     return blimp;
 
 err_global:

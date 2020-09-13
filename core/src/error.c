@@ -175,6 +175,7 @@ static const char *GenericErrorCodeMessage(BlimpErrorCode code)
         case BLIMP_OUT_OF_MEMORY:     return "out of memory";
         case BLIMP_IO_ERROR:          return "I/O error";
         case BLIMP_NOT_SUPPORTED:     return "operation not supported";
+        case BLIMP_INTERRUPTED:       return "interrupted by user";
         default:                      return "unknown error";
     }
 }

@@ -207,6 +207,10 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
     assert(sp->use_result == (result != NULL));
 
     while (true) {
+        if (HandleSignals(&blimp->signals) != BLIMP_OK) {
+            return Reraise(blimp);
+        }
+
         bool use_result =
             ip->result_type == RESULT_USE ||
             (ip->result_type == RESULT_INHERIT && sp->use_result);
@@ -459,7 +463,30 @@ Status EvalBytecode(
         return Reraise(blimp);
     }
 
-    return ExecuteFrom(blimp, Bytecode_Begin(code), result);
+    EnableSignals(&blimp->signals);
+        // We're about to start executing, which means we need to prepare to get
+        // interrupted if the user calls Blimp_RaiseSignal().
+
+    if (ExecuteFrom(blimp, Bytecode_Begin(code), result) != BLIMP_OK) {
+        if (Stack_Empty(&blimp->stack)) {
+            // If we're returning from the top stack frame, execution is
+            // finished, so we don't need to handle interruptions any more.
+            //
+            // Since we're returning with an error, we won't pause to execute
+            // pending signal handlers; thence ClearAndDisableSignals() rather
+            // than DisableSignals().
+            ClearAndDisableSignals(&blimp->signals);
+        }
+        return Reraise(blimp);
+    } else {
+        if (Stack_Empty(&blimp->stack)) {
+            // If we're returning from the top stack frame, execution is
+            // finished, so we don't need to handle interruptions any more.
+            return DisableSignals(&blimp->signals);
+        } else {
+            return BLIMP_OK;
+        }
+    }
 }
 
 PRIVATE Status Send(

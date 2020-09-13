@@ -46,4 +46,9 @@ PRIVATE void Stack_Pop(Blimp *blimp, CallStack *stack);
 PRIVATE const StackFrame *Stack_CurrentFrame(const CallStack *stack);
 PRIVATE const StackFrame *StackTrace_CurrentFrame(const StackTrace *trace);
 
+static inline bool Stack_Empty(CallStack *stack)
+{
+    return stack->trace.next == stack->trace.frames;
+}
+
 #endif

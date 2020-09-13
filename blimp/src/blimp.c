@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <getopt.h>
+#include <setjmp.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -11,6 +12,7 @@
 #include <blimp/module.h>
 
 #include "command.h"
+#include "interrupt.h"
 #include "options.h"
 
 #define VERSION_MAJOR 0
@@ -238,56 +240,100 @@ static BlimpStatus Render(
     return BLIMP_OK;
 }
 
-static bool DoAction(Blimp *blimp, BlimpExpr *expr, const Options *options)
+#define BLIMP_INTERRUPT_SIGNAL 0
+
+static BlimpStatus InterruptBlimp(Blimp *blimp, size_t signum, void *arg)
 {
+    (void)signum;
+    (void)arg;
+
+    BlimpStackTrace *trace;
+    Blimp_Check(Blimp_SaveStackTrace(blimp, &trace));
+    BlimpStackTrace_Print(stdout, trace, 0);
+    Blimp_FreeStackTrace(blimp, trace);
+
+    return Blimp_Error(blimp, BLIMP_INTERRUPTED);
+}
+
+static void InterruptAction(void *arg)
+{
+    Blimp *blimp = (Blimp *)arg;
+    Blimp_RaiseSignal(blimp, BLIMP_INTERRUPT_SIGNAL);
+}
+
+static BlimpStatus DoAction(
+    Blimp *blimp, BlimpExpr *expr, const Options *options)
+{
+    BlimpStatus status = BLIMP_OK;
+
+    Blimp_HandleSignal(blimp, BLIMP_INTERRUPT_SIGNAL, InterruptBlimp, NULL);
+    OnInterrupt(InterruptAction, blimp);
+
     switch (options->action) {
         case ACTION_EVAL: {
             BlimpObject *result;
-            if (Blimp_Eval(
-                blimp, expr, Blimp_GlobalObject(blimp), &result) != BLIMP_OK)
+            if ((status = Blimp_Eval(
+                    blimp, expr, Blimp_GlobalObject(blimp), &result))
+                != BLIMP_OK)
             {
-                return false;
+                break;
             }
 
-            if (Render(blimp, result, options) != BLIMP_OK) {
-                return false;
+            if ((status = Render(blimp, result, options)) != BLIMP_OK) {
+                break;
             }
 
             BlimpObject_Release(result);
-            return true;
+            break;
         }
 
         case ACTION_DUMP: {
             Blimp_DumpExpr(blimp, stdout, expr);
             putchar('\n');
-            return true;
+            break;
         }
 
         case ACTION_COMPILE: {
             BlimpBytecode *code;
-            if (BlimpExpr_Compile(blimp, expr, &code) != BLIMP_OK) {
-                return false;
+            if ((status = BlimpExpr_Compile(blimp, expr, &code)) != BLIMP_OK) {
+                break;
             }
 
             BlimpBytecode_Print(stdout, code, true);
             BlimpBytecode_Free(code);
-            return true;
+            break;
         }
 
         default: {
             assert(false);
-            return false;
+            break;
         }
     }
+
+    OnInterrupt(NULL, NULL);
+    return status;
 }
 
 #ifdef HAVE_READLINE
 
 #include <readline/readline.h>
 
+static void InterruptReadline(void *arg)
+{
+    siglongjmp(*(sigjmp_buf *)arg, 1);
+}
+
 static char *Readline(const char *prompt)
 {
+    sigjmp_buf env;
+    if (sigsetjmp(env, true)) {
+        putchar('\n');
+    }
+
+    OnInterrupt(InterruptReadline, &env);
     char *line = readline(prompt);
+    OnInterrupt(NULL, NULL);
+
     if (line && *line && !isspace(*line)) {
         add_history(line);
     }
@@ -489,7 +535,7 @@ static int ReplMain(Blimp *blimp, const Options *options)
             }
         }
 
-        if (!DoAction(blimp, expr, options)) {
+        if (DoAction(blimp, expr, options) != BLIMP_OK) {
             Blimp_DumpLastError(blimp, stdout);
             goto err_action;
         }
@@ -519,7 +565,7 @@ static int EvalMain(Blimp *blimp, const char *path, const Options *options)
     }
 
     int ret = EXIT_SUCCESS;
-    if (!DoAction(blimp, expr, options)) {
+    if (DoAction(blimp, expr, options) != BLIMP_OK) {
         Blimp_DumpLastError(blimp, stderr);
         ret = EXIT_FAILURE;
     }

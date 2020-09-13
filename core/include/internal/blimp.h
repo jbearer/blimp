@@ -5,6 +5,7 @@
 #include "internal/common.h"
 #include "internal/object.h"
 #include "internal/object_stack.h"
+#include "internal/signal.h"
 #include "internal/stack.h"
 #include "internal/symbol.h"
 
@@ -17,6 +18,7 @@ struct Blimp {
     CallStack stack;
     ObjectStack result_stack;
     GlobalObject *global;
+    Signals signals;
 
     struct BlimpErrorInfo {
         BlimpErrorCode code;

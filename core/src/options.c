@@ -1,16 +1,16 @@
 #include "internal/blimp.h"
 
 const BlimpOptions DEFAULT_BLIMP_OPTIONS = {
-    .recursion_limit       = 1000,
-    .stack_trace_limit     = 5,
-    .gc_batch_size         = (1ull<<20), // 1MB
-    .gc_tracing            = true,
-    .gc_batches_per_trace  = 1,
-    .gc_refcount           = true,
-    .gc_cycle_detection    = true,
-    .gc_max_clump_size     = 0,
-    .gc_heap_check         = false,
-    .tail_call_elimination = true,
+    .recursion_limit        = 1000,
+    .stack_trace_limit      = 5,
+    .gc_batch_size          = (1ull<<20), // 1MB
+    .gc_tracing             = true,
+    .gc_batches_per_trace   = 1,
+    .gc_refcount            = true,
+    .gc_cycle_detection     = true,
+    .gc_max_clump_size      = 0,
+    .gc_heap_check          = false,
+    .tail_call_elimination  = true,
 };
 
 const char *BLIMP_OPTIONS_USAGE =

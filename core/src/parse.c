@@ -103,6 +103,7 @@
 #include <assert.h>
 #include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -115,8 +116,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 // I/O
 //
-
-#define PATH_MAX 256
 
 typedef struct {
     Stream base;

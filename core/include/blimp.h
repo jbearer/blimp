@@ -1,6 +1,7 @@
 #ifndef BLIMP_H
 #define BLIMP_H
 
+#include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -294,7 +295,7 @@ void Blimp_Delete(Blimp *blimp);
  * @{
  */
 typedef struct BlimpErrorInfo *BlimpStatus;
-#define BLIMP_OK ((BlimpStatus)NULL)
+#define BLIMP_OK ((BlimpStatus)0)
 
 typedef enum BlimpErrorCode {
     // Parsing errors
@@ -313,6 +314,9 @@ typedef enum BlimpErrorCode {
     BLIMP_STACK_OVERFLOW,
     BLIMP_ILLEGAL_SCOPE,
     BLIMP_OPTIMIZED_AWAY,
+
+    // Interrupts
+    BLIMP_INTERRUPTED,
 
     // Internal consistency errors
     BLIMP_INVALID_EXPR,
@@ -1336,6 +1340,94 @@ BlimpStatus Blimp_SendAndParseSymbol(
     BlimpObject *receiver,
     BlimpObject *message,
     const BlimpSymbol **sym);
+
+/**
+ * @}
+ *
+ * \defgroup signals Signals
+ *
+ * Much like POSIX signals can be used to asynchronously inerrupt a thread,
+ * `bl:mp` signals can be used to asynchronously interrupt a running `bl:mp`
+ * interpreter. However, signals generated through the `bl:mp` API are
+ * guaranteed not to be delivered until the interpreter is in a consistent state
+ * where it can be safely interrupted. Therefore, `bl:mp` signal handlers are
+ * not subject to the normal constraints on signal handlers regarding atomicity
+ * of access to shared data, and they may make full use of the `bl:mp` API.
+ *
+ *@{
+ */
+
+/**
+ * \brief The largest unsigned integer which represents a valid `bl:mp` signal.
+ *
+ * `BLIMP_MAX_SIGNAL` is guaranteed to be at least 6 (and on most architectures,
+ * it is significantly larger, on the order of 30).
+ */
+#define BLIMP_MAX_SIGNAL (sizeof(sig_atomic_t)*CHAR_BIT - 2)
+    // Internally, we use a bitmap of type `sig_atomic_t` to represent sets of
+    // signals. The C standard guarantees that `sig_atomic_t` is at least one
+    // byte, but one of the guaranteed 8 bits is reserved as the status bit,
+    // which indicates whether signals are enabled. Thus, we are left with 7
+    // bits that can represent signals, so the valid signal identifiers are 0-6.
+    //
+    // Note that in practice this will probably be somewhat larger than 6
+    // (likely 30 or 62) as almost all modern architectures support atomic
+    // access to 4-byte or 8-byte words.
+
+typedef BlimpStatus(*BlimpSignalCallback)(
+    Blimp *blimp, size_t signum, void *arg);
+
+typedef enum {
+    BLIMP_SIGNAL_OK,
+    BLIMP_SIGNAL_INVALID,
+    BLIMP_SIGNAL_DISABLED,
+} BlimpSignalError;
+
+/**
+ * \brief Register a signal handler.
+ *
+ * After Blimp_HandleSignal() returns `BLIMP_SIGNAL_OK`, the function `callback`
+ * will be registered as a handler for the signal indicated by `signum` (which
+ * must not exceed `BLIMP_MAX_SIGNAL`). If a subsequent call to
+ * `Blimp_RaiseSignal(blimp, signum)` returns `BLIMP_SIGNAL_OK`, then the
+ * function `callback` will be called at the next time the interpreter reaches a
+ * safe interruption point.
+ *
+ * The callback function receives the interpreter, the signal identifier, and
+ * the arbitrary additional parameter `arg` as inputs.
+ *
+ * If the callback function returns `BLIMP_OK`, then the interpreter will
+ * continue execution normally (possibly invoking handlers for other pending
+ * signals). Otherwise, the interpreter will exit, returning the error code from
+ * the callback function to the caller who invoked the interpreter.
+ *
+ * \par Errors
+ *  * `BLIMP_SIGNAL_INVALID`:
+ *      `signum` is greater than `BLIMP_MAX_SIGNAL`.
+ */
+BlimpSignalError Blimp_HandleSignal(
+    Blimp *blimp, size_t signum, BlimpSignalCallback callback, void *arg);
+
+/**
+ * \brief Generate a signal.
+ *
+ * If Blimp_RaiseSignal() returns `BLIMP_OK`, then the interpreter will stop and
+ * invoke the handler for the signal identified by `signum` at the next point
+ * where it is safe to do so. If no handler is registered for `signum`, the
+ * default action is to exit the interpreter with the error `BLIMP_INTERRUPTED`.
+ *
+ * This function is both thread-safe and signal-safe, meaning it can be used to
+ * asynchronously interrupt a running interpreter from another thread or from a
+ * POSIX signal handler.
+ *
+ * \par Errors
+ *  * `BLIMP_SIGNAL_INVALID`:
+ *      `signum` is greater than `BLIMP_MAX_SIGNAL`.
+ *  * `BLIMP_SIGNAL_DISABLED`
+ *      No signal can be raised because the interpreter is not currently
+ *      running.
+ */
+BlimpSignalError Blimp_RaiseSignal(Blimp *blimp, size_t signum);
 
 /**
  * @}
