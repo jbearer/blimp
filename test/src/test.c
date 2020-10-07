@@ -118,6 +118,33 @@ static void PassTest(Test *test, size_t racket_ms, size_t blimp_ms)
 // Running tests
 //
 
+static bool SetupRacket(Racket *racket, const Options *options)
+{
+    if (!Racket_Init(racket, options)) {
+        if (options->verbosity >= VERB_SUITE) {
+            fprintf(stderr,
+                "failed to open Racket "
+                "(maybe you meant to run with --skip-racket)\n");
+        }
+        return false;
+    }
+
+    if (!Racket_Exec(racket, "(require redex)")) {
+        if (options->verbosity >= VERB_SUITE) {
+            fprintf(stderr, "racket: failed to import redex\n");
+        }
+        return false;
+    }
+    if (!Racket_Exec(racket, "(require (file \"" SEMANTICS_PATH "\"))")) {
+        if (options->verbosity >= VERB_SUITE) {
+            fprintf(stderr, "racket: failed to import semantics.rkt\n");
+        }
+        return false;
+    }
+
+    return true;
+}
+
 static bool FindString(
     const char *string, const char **strings, size_t num_strings)
 {
@@ -159,6 +186,19 @@ static void RunTest(Test *test)
     }
 
     if (test->options.use_racket) {
+        if (!Racket_Initialized(test->racket)) {
+            if (!SetupRacket(test->racket, &test->options)) {
+                SkipTest(test, "failed to open racket");
+                return;
+            }
+        }
+
+        if (test->options.verbosity >= VERB_DEBUG) {
+            printf("racket> ");
+            Blimp_DumpExpr(test->blimp, stdout, expr);
+            printf("\n");
+        }
+
         FILE *command = Racket_BeginCommand(test->racket);
         fprintf(command, "(judgment-holds (test-eval ");
         Blimp_DumpExpr(test->blimp, command, expr);
@@ -315,6 +355,9 @@ static void PrintUsage(FILE *f, int argc, char **argv)
     fprintf(f, "    --skip-racket\n");
     fprintf(f, "        Do not run Racket semantics tests.\n");
     fprintf(f, "\n");
+    fprintf(f, "    --use-racket\n");
+    fprintf(f, "        Do run Racket semantics tests (this is the default behavior).\n");
+    fprintf(f, "\n");
     fprintf(f, "    --skip-blimp\n");
     fprintf(f, "        Do not run bl:mp evaluation tests.\n");
     fprintf(f, "\n");
@@ -371,6 +414,9 @@ static void PrintUsage(FILE *f, int argc, char **argv)
     fprintf(f, "        Specify values for tunable interpreter properties. See below for a list\n");
     fprintf(f, "        of interpreter options.\n");
     fprintf(f, "\n");
+    fprintf(f, "    -O\n");
+    fprintf(f, "        Enable all compiler optimizations.\n");
+    fprintf(f, "\n");
     fprintf(f, "    -v, --verbose [LEVEL]\n");
     fprintf(f, "        Show verbose output at LEVEL. LEVEL may be one of the following\n");
     fprintf(f, "        (each named verbosity level implies the level below it):\n");
@@ -410,6 +456,7 @@ typedef enum {
     FLAG_FILTER             = 'F',
     FLAG_IMPORT             = 'i',
     FLAG_BLIMP_OPTION       = 'f',
+    FLAG_OPTIMIZE           = 'O',
     FLAG_PERF_REPORT        = 'p',
     FLAG_VERBOSE            = 'v',
     FLAG_HELP               = 'h',
@@ -422,6 +469,7 @@ typedef enum {
         // all the flags have unique values.
 
     FLAG_SKIP_RACKET,
+    FLAG_USE_RACKET,
     FLAG_SKIP_BLIMP,
     FLAG_RACKET_TIMEOUT,
     FLAG_BLIMP_TIMEOUT,
@@ -477,6 +525,7 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
         {"group",          required_argument, NULL, FLAG_GROUP },
         {"filter",         required_argument, NULL, FLAG_FILTER },
         {"skip-racket",    no_argument,       NULL, FLAG_SKIP_RACKET },
+        {"use-racket",     no_argument,       NULL, FLAG_USE_RACKET },
         {"skip-blimp",     no_argument,       NULL, FLAG_SKIP_BLIMP },
         {"racket-timeout", required_argument, NULL, FLAG_RACKET_TIMEOUT },
         {"blimp-timeout",  required_argument, NULL, FLAG_BLIMP_TIMEOUT },
@@ -493,7 +542,7 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
         // parse test-specific options) we need to reset this global variable
         // each time.
     int option, i = 1;
-    while ((option = getopt_long(argc, argv, "t:g:F:i:f:p:v::h", cli_options, &i)) != -1) {
+    while ((option = getopt_long(argc, argv, "t:g:F:i:f:Op:v::h", cli_options, &i)) != -1) {
         switch (option) {
             case FLAG_TEST:
                 ++options->num_tests;
@@ -536,6 +585,10 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
 
             case FLAG_SKIP_RACKET:
                 options->use_racket = false;
+                break;
+
+            case FLAG_USE_RACKET:
+                options->use_racket = true;
                 break;
 
             case FLAG_SKIP_BLIMP:
@@ -604,6 +657,12 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
                     return true;
                 }
 
+                break;
+            }
+
+            case FLAG_OPTIMIZE: {
+                options->blimp_options.tail_call_elimination = true;
+                options->blimp_options.constant_elision = true;
                 break;
             }
 
@@ -703,25 +762,7 @@ static Suite *FindTests(const Options *options)
     size_t groups_capacity = 0;
 
     if (suite->options.use_racket) {
-        if (!Racket_Init(&suite->racket, &suite->options)) {
-            if (suite->options.verbosity >= VERB_SUITE) {
-                fprintf(stderr,
-                    "failed to open Racket "
-                    "(maybe you meant to run with --skip-racket)\n");
-            }
-            return NULL;
-        }
-
-        if (!Racket_Exec(&suite->racket, "(require redex)")) {
-            if (suite->options.verbosity >= VERB_SUITE) {
-                fprintf(stderr, "racket: failed to import redex\n");
-            }
-            return NULL;
-        }
-        if (!Racket_Exec(&suite->racket, "(require (file \"" SEMANTICS_PATH "\"))")) {
-            if (suite->options.verbosity >= VERB_SUITE) {
-                fprintf(stderr, "racket: failed to import semantics.rkt\n");
-            }
+        if (!SetupRacket(&suite->racket, &suite->options)) {
             return NULL;
         }
     }

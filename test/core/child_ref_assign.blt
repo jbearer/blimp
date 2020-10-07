@@ -1,0 +1,38 @@
+#: -O
+
+parent_ref{^ ^};
+child_ref{^ ^};
+
+# Send to `foo`, but don't initialize it. Just save the reference (which is
+# bound to the global scope) in `parent_ref`.
+foo{
+    parent_ref ^
+};
+
+{
+    # Send to `foo`, but don't initialize it. Just save the reference (which is
+    # bound in this block scope) in `child_ref`.
+    foo{
+        child_ref ^
+    };
+
+    # Now initialize `foo` in the global scope.
+    parent_ref {bar};
+    !expect_eq (foo[]) bar;
+        # This lookup inherits the value from the global scope.
+
+    # Now initialize `foo` with a different value in the child scope. Since
+    # `foo` is already present in the parent scope, this will change the value
+    # there.
+    child_ref {baz};
+    !expect_eq (foo[]) baz;
+        # This lookup gets its value from this scope.
+
+    .
+}[];
+
+# Check that the value of `foo` in the global scope is the value assigned using
+# `child_ref`.
+!expect_eq (foo[]) baz;
+
+.

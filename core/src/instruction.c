@@ -25,13 +25,20 @@ void BlimpBytecode_Free(Bytecode *code)
     Blimp_FreeExpr(code->expr);
 
     // Traverse the instructions, releasing references to other procedures in
-    // BLOCKI operands.
+    // BLOCKI operands and reference to objects in SENDTO operands.
     for (const Instruction *instr = Bytecode_Begin(code);
          instr != Bytecode_End(code);
          instr = Instruction_Next(instr))
     {
-        if (instr->type == INSTR_BLOCKI) {
-            BlimpBytecode_Free(((BLOCKI *)instr)->code);
+        switch (instr->type) {
+            case INSTR_BLOCKI:
+                BlimpBytecode_Free(((BLOCKI *)instr)->code);
+                break;
+            case INSTR_SENDTO:
+                BlimpObject_Release(((SENDTO *)instr)->receiver);
+                break;
+            default:
+                break;
         }
     }
 
@@ -62,6 +69,9 @@ Status Bytecode_Append(Bytecode *code, const Instruction *instr)
     return BLIMP_OK;
 }
 
+#define PRINT_INSTR(file, mnemonic, fmt, ...) \
+    fprintf(file, "%-8s" fmt "\n", #mnemonic, ##__VA_ARGS__)
+
 void BlimpBytecode_Print(FILE *file, const BlimpBytecode *code, bool recursive)
 {
     fprintf(file, "  %p\n", code);
@@ -88,42 +98,52 @@ void BlimpBytecode_Print(FILE *file, const BlimpBytecode *code, bool recursive)
         switch (ip->type) {
             case INSTR_BLOCKI: {
                 BLOCKI *instr = (BLOCKI *)ip;
-                fprintf(file, "BLOCKI  %s, %p, %d\n",
+                PRINT_INSTR(file, BLOCKI, "%s, %p, %d, %zu",
                     instr->msg_name->name,
                     instr->code,
-                    instr->capture_parents_message);
+                    instr->capture_parents_message,
+                    instr->specialized);
                 break;
             }
 
             case INSTR_SYMI: {
                 SYMI *instr = (SYMI *)ip;
-                fprintf(file, "SYMI    %s\n", instr->sym->name);
+                PRINT_INSTR(file, SYMI, "%s", instr->sym->name);
                 break;
             }
 
             case INSTR_MSG: {
                 MSG *instr = (MSG *)ip;
-                fprintf(file, "MSG     %zu\n", instr->index);
+                PRINT_INSTR(file, MSG, "%zu", instr->index);
                 break;
             }
 
             case INSTR_SEND: {
-                fprintf(file, "SEND\n");
+                SEND *instr = (SEND *)ip;
+                PRINT_INSTR(file, SEND, "%#x", instr->flags);
                 break;
             }
 
-            case INSTR_RSEND: {
-                fprintf(file, "RSEND\n");
+            case INSTR_SENDTO: {
+                SENDTO *instr = (SENDTO *)ip;
+                if (Object_Type(instr->receiver) == OBJ_SYMBOL) {
+                    PRINT_INSTR(
+                        file, SENDTO, "%s, %#x",
+                        ((const Symbol *)instr->receiver)->name, instr->flags);
+                } else {
+                    PRINT_INSTR(
+                        file, SENDTO, "%p, %#x", instr->receiver, instr->flags);
+                }
                 break;
             }
 
             case INSTR_RET: {
-                fprintf(file, "RET\n");
+                PRINT_INSTR(file, RET, "");
                 break;
             }
 
             default: {
-                fprintf(file, "???\n");
+                PRINT_INSTR(file, ???, "");
                 break;
             }
         }

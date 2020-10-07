@@ -1,0 +1,32 @@
+#: -O
+
+parent_ref_ref{^ ^};
+parent_ref{
+    parent_ref_ref ^
+};
+child_ref{^ ^};
+
+# Create a rglobal reference to `foo`.
+foo{parent_ref_ref ^};
+
+{
+    # Create a local reference to `foo`.
+    foo{child_ref ^};
+
+    # Initialize `foo` in the global scope.
+    parent_ref {bar};
+
+    # Leak the global reference.
+    parent_ref_ref .;
+
+    # Modify `foo` using the alias bound in the child scope.
+    child_ref {baz};
+
+    .
+}[];
+
+# Check that the value of `foo` in the global scope is the value assigned using
+# `child_ref`.
+!expect_eq (foo[]) baz;
+
+.

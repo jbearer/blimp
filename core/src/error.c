@@ -166,6 +166,8 @@ static const char *GenericErrorCodeMessage(BlimpErrorCode code)
     switch (code) {
         case BLIMP_INVALID_CHARACTER: return "invalid character";
         case BLIMP_UNEXPECTED_TOKEN:  return "unexpected token";
+        case BLIMP_UNEXPECTED_EOF:    return "unexpected end of input";
+        case BLIMP_INVALID_MESSAGE_NAME: return "invalid message name or index";
         case BLIMP_NO_SUCH_SYMBOL:    return "no such symbol";
         case BLIMP_NO_SUCH_METHOD:    return "no such method";
         case BLIMP_MUST_BE_BLOCK:     return "expected block";

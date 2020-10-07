@@ -104,4 +104,21 @@
     '(bar)
 )
 
+; Check initialize a symbol in both the global scope and a child scope simultaneously.
+(check-equal?
+    (judgment-holds
+        (eval (seq (parent-ref (block ^ (^ ^)))
+              (seq (child-ref  (block ^ (^ ^)))
+              (seq (foo        (block ^ (parent-ref ^)))
+                   ((block -
+                        (seq (foo (block ^ (child-ref ^)))
+                        (seq (parent-ref (block ^ foo))
+                        (seq (child-ref  (block ^ bar))
+                             (foo -))))
+                    )-))))
+            H x)
+        x)
+    '(bar)
+)
+
 )

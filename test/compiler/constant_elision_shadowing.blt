@@ -1,0 +1,8 @@
+#: -fconstant-elision
+
+{
+    fooref{^ ^};
+    foo{
+        fooref ^
+    }
+}

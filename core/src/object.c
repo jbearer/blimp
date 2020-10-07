@@ -1,4 +1,5 @@
 #include "internal/blimp.h"
+#include "internal/compile.h"
 #include "internal/expr.h"
 #include "internal/hash_map.h"
 #include "internal/pool_alloc.h"
@@ -53,21 +54,6 @@ static inline Status Scope_Update(Scope *scope, const Symbol *sym, Ref *ref)
 
 typedef HashMapEntry *ScopeIterator;
 
-static inline ScopeIterator Scope_Begin(Scope *scope)
-{
-    return HashMap_Begin(scope);
-}
-
-static inline ScopeIterator Scope_Next(Scope *scope, ScopeIterator it)
-{
-    return HashMap_Next(scope, it);
-}
-
-static inline ScopeIterator Scope_End(Scope *scope)
-{
-    return HashMap_End(scope);
-}
-
 static inline const Symbol *Scope_GetKey(Scope *scope, ScopeIterator it)
 {
     return *(const Symbol **)HashMap_GetKey(scope, it);
@@ -78,6 +64,31 @@ static inline Ref *Scope_GetValue(Scope *scope, ScopeIterator it)
     return *(Ref **)HashMap_GetValue(scope, it);
 }
 
+static inline ScopeIterator Scope_End(Scope *scope)
+{
+    return HashMap_End(scope);
+}
+
+static inline ScopeIterator Scope_Next(Scope *scope, ScopeIterator it)
+{
+    assert(it != Scope_End(scope));
+
+    do {
+        it = HashMap_Next(scope, it);
+    } while (it != Scope_End(scope) && Scope_GetValue(scope, it)->to == NULL);
+
+    return it;
+}
+
+static inline ScopeIterator Scope_Begin(Scope *scope)
+{
+    ScopeIterator it = HashMap_Begin(scope);
+    if (it != Scope_End(scope) && Scope_GetValue(scope, it)->to == NULL) {
+        it = Scope_Next(scope, it);
+    }
+
+    return it;
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 // ObjectPool
@@ -207,6 +218,8 @@ void ObjectPool_Destroy(ObjectPool *pool)
     for (ObjectPoolIterator it = ObjectPool_Begin(pool);
          (obj = ObjectPool_Next(pool, &it)) != NULL; )
     {
+        Object_SetType((Object *)obj, OBJ_FREE);
+
         // Destroy concrete class data.
         switch (Object_Type((Object *)obj)) {
             case OBJ_BLOCK:
@@ -1761,6 +1774,12 @@ static void FreeObject(GC_Object *obj, bool recursive)
     Blimp *blimp = Object_Blimp((Object *)obj);
     ObjectType type = Object_Type((Object *)obj);
     if (type == OBJ_REFERENCE) {
+        if (((ReferenceObject *)obj)->unique) {
+            // When a unique reference is freed, the value it refers to becomes
+            // constant.
+            ReferenceObject_Freeze((ReferenceObject *)obj);
+        }
+
         Object_SetType((Object *)obj, OBJ_FREE);
         PoolAllocator_Free(&blimp->objects.reference_object_pool, obj);
         return;
@@ -1980,15 +1999,12 @@ static Status ScopedObject_New(
     return BLIMP_OK;
 }
 
-static Ref *Lookup(
-    const ScopedObject *obj,
-    const Symbol *sym,
-    const ScopedObject **owner)
+static Ref *Lookup(ScopedObject *obj, const Symbol *sym, ScopedObject **owner)
 {
-    const ScopedObject *curr = obj;
+    ScopedObject *curr = obj;
     while (curr) {
         Ref *ret = Scope_Lookup(&curr->scope, sym);
-        if (ret) {
+        if (ret && ret->to) {
             if (owner) {
                 *owner = curr;
             }
@@ -2001,8 +2017,24 @@ static Ref *Lookup(
     return NULL;
 }
 
-Status ScopedObject_Get(
-    const ScopedObject *obj, const Symbol *sym, Object **ret)
+bool ScopedObject_Lookup(
+    ScopedObject *obj,
+    const Symbol *sym,
+    Object **ret,
+    ScopedObject **owner,
+    bool *is_const)
+{
+    Ref *ref = Lookup(obj, sym, owner);
+    if (ref == NULL) {
+        return false;
+    }
+
+    *ret = ref->to;
+    *is_const = ref->is_const;
+    return true;
+}
+
+Status ScopedObject_Get(ScopedObject *obj, const Symbol *sym, Object **ret)
 {
     Ref *value = Lookup(obj, sym, NULL);
     if (value) {
@@ -2021,13 +2053,21 @@ Status ScopedObject_Set(ScopedObject *obj, const Symbol *sym, Object *val)
     Blimp *blimp = Object_Blimp((Object *)obj);
 
     // If the symbol is already in scope, update the existing value.
-    const ScopedObject *owner;
+    ScopedObject *owner;
     Ref *ref = Lookup(obj, sym, &owner);
     if (ref) {
-        ReleaseRef((GC_Object *)owner, ref);
-            // This scope owned a reference to the existing value. After this
-            // operation, the old value will no longer be reachable through this
-            // scope, so we have to release our reference.
+        if (ref->is_const) {
+            return RuntimeErrorMsg(
+                blimp, BLIMP_VALUE_IS_IMMUTABLE,
+                "cannot modify immutable value `%s'", sym->name);
+        }
+
+        if (ref->to) {
+            ReleaseRef((GC_Object *)owner, ref);
+                // This scope owned a reference to the existing value. After
+                // this operation, the old value will no longer be reachable
+                // through this scope, so we have to release our reference.
+        }
 
         ref->to = val;
             // Reinitialize the reference to point to the new value.
@@ -2035,10 +2075,17 @@ Status ScopedObject_Set(ScopedObject *obj, const Symbol *sym, Object *val)
         BorrowRef((GC_Object *)owner, ref);
             // Borrow the new value on behalf of the existing owner of the scope
             // entry.
+    } else if ((ref = Scope_Lookup(&obj->scope, sym)) != NULL) {
+        assert(ref->to == NULL);
+        assert(!ref->is_const);
+        ref->to = val;
+        BorrowRef((GC_Object *)obj, ref);
     } else {
         // Otherwise, add it to the innermost scope.
         TRY(AllocRef(blimp, &ref));
         ref->to = val;
+        ref->is_const = false;
+        ref->reserved = false;
         TRY(Scope_Update(&obj->scope, sym, ref));
         BorrowRef((GC_Object *)obj, ref);
     }
@@ -2085,6 +2132,41 @@ Status ScopedObject_GetCapturedMessageByName(
     return ScopedObject_GetCapturedMessage(obj, index, message);
 }
 
+static Status ScopedObject_Reserve(
+    ScopedObject *obj,
+    const Symbol *sym,
+    bool *reserved)
+{
+    *reserved = true;
+
+    for (ScopedObject *curr = obj; curr; curr = curr->parent) {
+        Ref *ref = Scope_Lookup(&curr->scope, sym);
+        if (ref != NULL) {
+            ref->reserved = false;
+            *reserved = false;
+            if (ref->to != NULL) {
+                break;
+            }
+        } else {
+            TRY(AllocRef(Object_Blimp((Object *)obj), &ref));
+            ref->to = NULL;
+            ref->reserved = true;
+            ref->is_const = false;
+            TRY(Scope_Update(&curr->scope, sym, ref));
+        }
+    }
+
+    return BLIMP_OK;
+}
+
+static void ScopedObject_Freeze(ScopedObject *obj, const Symbol *sym)
+{
+    Ref *ref = Lookup(obj, sym, NULL);
+    if (ref != NULL && ref->reserved) {
+        ref->is_const = true;
+    }
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // GlobalObject
 //
@@ -2106,6 +2188,7 @@ Status BlockObject_New(
     const Symbol *msg_name,
     Bytecode *code,
     bool capture_parents_message,
+    size_t specialized,
     BlockObject **obj)
 {
     TRY(ScopedObject_New(
@@ -2118,9 +2201,97 @@ Status BlockObject_New(
     // Initialize derived fields.
     (*obj)->msg_name = msg_name;
     (*obj)->code = code;
+    (*obj)->specialized_seq =
+        specialized ? specialized : ((ScopedObject *)blimp->global)->seq;
+    assert((*obj)->specialized_seq <= ((ScopedObject *)obj)->seq);
     ++code->refcount;
 
     HeapCheck(blimp);
+    return BLIMP_OK;
+}
+
+Status BlockObject_Specialize(BlockObject *obj, ScopedObject *scope)
+{
+    assert(scope->seq <= ((ScopedObject *)obj)->seq);
+
+    if (BlockObject_IsSpecialized(obj, scope)) {
+        return BLIMP_OK;
+    }
+
+    // Starting from `obj`, we will specialize one block object at a time,
+    // working our way up parent pointers until we reach `scope`. At each step,
+    // we will remember the last subroutine we specialized and the new
+    // specialized version of it, and replace references to that subroutine with
+    // the specialized version in the next parent's subroutine.
+    //
+    // Whenever `old_sub` and `new_sub` are not NULL, they will own a reference
+    // to the bytecode routines they point to. These references must be freed
+    // when they are overwritten.
+    Bytecode *old_sub = NULL;
+    Bytecode *new_sub = NULL;
+    for (ScopedObject *curr = (ScopedObject *)obj; curr ; curr = curr->parent) {
+        if (Object_Type((Object *)curr) != OBJ_BLOCK) {
+            if (curr == scope) {
+                break;
+            }
+
+            // If this is not a block object (maybe it's an extension, e.g.)
+            // then there is no bytecode routine that we're specializing at this
+            // step, so clear `old_sub` and `new_sub`.
+            if (old_sub) {
+                BlimpBytecode_Free(old_sub);
+                old_sub = NULL;
+            }
+            if (new_sub) {
+                BlimpBytecode_Free(new_sub);
+                new_sub = NULL;
+            }
+            continue;
+        }
+
+        BlockObject *block = (BlockObject *)curr;
+
+        // Optimize this object's code.
+        Bytecode *code = block->code;
+        Bytecode *optimized;
+        TRY(OptimizeForScope(
+            code, curr, old_sub, new_sub, scope->seq, &optimized));
+
+        // Update `old_sub` and `new_sub` for the next iteration.
+        if (old_sub) {
+            BlimpBytecode_Free(old_sub);
+        }
+        old_sub = code;
+
+        if (new_sub) {
+            BlimpBytecode_Free(new_sub);
+        }
+        new_sub = optimized;
+
+        // Currently we only have one reference to `optimized`, which is owned
+        // by `new_sub`. We're going to store it in `block->code`, which is also
+        // supposed to own a reference, so we need to increment the reference
+        // count.
+        ++optimized->refcount;
+        block->code = optimized;
+
+        block->specialized_seq = scope->seq;
+            // Record that the block has been specialized.
+
+        if (curr == scope) {
+            break;
+        }
+    }
+
+    // We're done with `old_sub` and `new_sub`, so release references if they
+    // are non-NULL.
+    if (old_sub) {
+        BlimpBytecode_Free(old_sub);
+    }
+    if (new_sub) {
+        BlimpBytecode_Free(new_sub);
+    }
+
     return BLIMP_OK;
 }
 
@@ -2153,7 +2324,10 @@ Status ExtensionObject_New(
 //
 
 Status ReferenceObject_New(
-    Blimp *blimp, ScopedObject *scope, const Symbol *sym, ReferenceObject **obj)
+    Blimp *blimp,
+    ScopedObject *scope,
+    const Symbol *sym,
+    ReferenceObject **obj)
 {
     *obj = PoolAllocator_Alloc(&blimp->objects.reference_object_pool);
     if (*obj == NULL) {
@@ -2167,6 +2341,7 @@ Status ReferenceObject_New(
     (*obj)->scope = scope;
     (*obj)->scope_seq = scope->seq;
     (*obj)->symbol = sym;
+    TRY(ScopedObject_Reserve(scope, sym, &(*obj)->unique));
 
     ++blimp->objects.seq;
         // We don't actually need to reserve a sequence number for this object,
@@ -2187,4 +2362,15 @@ Status ReferenceObject_Store(ReferenceObject *ref, Object *value)
     }
 
     return BLIMP_OK;
+}
+
+void ReferenceObject_Freeze(ReferenceObject *ref)
+{
+    assert(ref->unique);
+
+    if (!Object_IsFree((Object *)ref->scope) &&
+        ref->scope->seq == ref->scope_seq)
+    {
+        ScopedObject_Freeze(ref->scope, ref->symbol);
+    }
 }

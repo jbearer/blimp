@@ -129,7 +129,7 @@ typedef struct {
         INSTR_BLOCKI,   // Block immediate
         INSTR_MSG,      // Get captured message
         INSTR_SEND,
-        INSTR_RSEND,
+        INSTR_SENDTO,
         INSTR_RET,
     } type;
 
@@ -149,6 +149,7 @@ typedef struct {
     const Symbol *msg_name;
     Bytecode *code;
     bool capture_parents_message;
+    size_t specialized;
 } BLOCKI;
 
 // Get a captured message at the given index in the current scope, and push it
@@ -158,6 +159,11 @@ typedef struct {
     size_t index;
 } MSG;
 
+typedef enum {
+    SEND_DEFAULT = 0x0,
+    SEND_TAIL    = 0x1,
+} SendFlags;
+
 // Push a new frame onto the call stack, where the message comes from the top of
 // the result stack, the scope is the next obect from the result stack, and the
 // return address is the address of the instruction after this one. Jump to the
@@ -165,9 +171,20 @@ typedef struct {
 typedef struct {
     Instruction header;
     SourceRange range;
+    SendFlags flags;
     // message: stack
     // receiver: stack
 } SEND;
+
+// Same as SEND, except the receiving object is not stored on the result stack;
+// it is stored with the instruction itself.
+typedef struct {
+    Instruction header;
+    SourceRange range;
+    SendFlags flags;
+    Object *receiver;
+    // message: stack
+} SENDTO;
 
 // Pop the current frame off of the call stack, and continue executing at the
 // instruction saved in the `return_address` field. If the return address is

@@ -1,0 +1,36 @@
+#: -fconstant-elision --use-racket
+#
+# This test ensures that constant references through mutable references are not
+# elided completely.
+
+mutable_ref{^ ^};
+    # Initialized to a setter for itself, we will soon set this to a setter for
+    # `mutable`.
+mutable{mutable_ref ^};
+    # Set `mutable_ref` to a setter for `mutable` in the global scope.
+
+# Create two constant symbols.
+const1{^} {foo};
+const2{^} {bar};
+
+# Create an object which just delegates to whatever `mutable` happens to refer
+# to when it is called.
+scope{^} {
+    mutable[]
+};
+
+# Point `mutable` at a constant symbol and call the block. If the constant
+# elision optimization is incorrect, this might dereference `mutable` to get
+# `const1`, realize that `const1` is constant, and replace the bytecode for
+# `scope` with an instruction that just sends directly to the {foo} object
+# referred to by `const1`. This will cause problems later...
+mutable_ref const1;
+!expect_eq (scope[]) foo;
+
+# ...when we change `mutable` to point to `const2` and try to run `scope` again.
+# Now the result should be `bar`, but if we incorrectly specialized `scope` in
+# the previous step, the result will not change; it will still be `foo`.
+mutable_ref const2;
+!expect_eq (scope[]) bar;
+
+.

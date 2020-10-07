@@ -1,0 +1,2 @@
+#: -fno-constant-elision
+import bench_constant_elision

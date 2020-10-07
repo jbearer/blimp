@@ -11,6 +11,7 @@ Status BlimpExpr_NewSymbol(Blimp *blimp, const Symbol *sym, Expr **expr)
 
     (*expr)->tag      = EXPR_SYMBOL;
     (*expr)->refcount = 1;
+    (*expr)->analysis = NULL;
     (*expr)->next     = NULL;
     (*expr)->symbol   = sym;
 
@@ -24,6 +25,10 @@ void Blimp_FreeExpr(Expr *expr)
 
         if (--expr->refcount != 0) {
             return;
+        }
+
+        if (expr->analysis != NULL) {
+            free(expr->analysis);
         }
 
         // Free subexpressions.

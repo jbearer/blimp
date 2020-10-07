@@ -1,6 +1,7 @@
 #ifndef BLIMP_EXPR_H
 #define BLIMP_EXPR_H
 
+#include "internal/analyze.h"
 #include "internal/blimp.h"
 #include "internal/symbol.h"
 
@@ -14,6 +15,7 @@ struct BlimpExpr {
 
     size_t refcount;
     SourceRange range;
+    Analysis *analysis;
 
     Expr *next;
         // Next expression in a sequene of expressions starting with this one.
@@ -39,7 +41,6 @@ struct BlimpExpr {
                 // time, not as names, so this name is only used for debugging
                 // and pretty-printing.
             Expr *code;
-            bool captures_parents_message;
         } block;
 
         struct {

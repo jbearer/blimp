@@ -1,0 +1,8 @@
+#: -O
+
+foo {^ ^};
+
+!expect_eq ((foo {bar}; baz) {foobar}) foobar;
+!expect_eq (foo[]) bar;
+
+.

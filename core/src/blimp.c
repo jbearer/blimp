@@ -107,6 +107,7 @@ Status BlimpObject_NewBlock(
         msg_name,
         bytecode,
         true,
+        0,
         (BlockObject **)obj);
 }
 
@@ -230,7 +231,7 @@ Status BlimpObject_ParseSymbol(const Object *obj, const Symbol **sym)
 }
 
 
-Status BlimpObject_Get(const Object *obj, const Symbol *sym, Object **ret)
+Status BlimpObject_Get(Object *obj, const Symbol *sym, Object **ret)
 {
     assert(Object_Type(obj) != OBJ_FREE);
 
@@ -239,7 +240,7 @@ Status BlimpObject_Get(const Object *obj, const Symbol *sym, Object **ret)
             "cannot get from non-scoped object");
     }
 
-    return ScopedObject_Get((const ScopedObject *)obj, sym, ret);
+    return ScopedObject_Get((ScopedObject *)obj, sym, ret);
 }
 
 Status BlimpObject_Set(Object *obj, const Symbol *sym, Object *val)

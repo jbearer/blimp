@@ -220,6 +220,21 @@ typedef struct {
      * This option is enabled by default.
      */
     bool tail_call_elimination;
+
+
+    /**
+     * \brief Enables constant elision.
+     *
+     * Constant elision is an optimization which allows the interpreter to
+     * detect when a symbol receiving a message is constant, and replace the
+     * code with bytecode that sends the message directly to the value of the
+     * symbol. This saves time by eliminating the need to look up the constant
+     * value of the symbol each time that code executes. It also serves as a
+     * gateway to further optimization, such as inlining.
+     *
+     * This option is disabled by default.
+     */
+    bool constant_elision;
 } BlimpOptions;
 
 extern const BlimpOptions DEFAULT_BLIMP_OPTIONS;
@@ -314,6 +329,9 @@ typedef enum BlimpErrorCode {
     BLIMP_STACK_OVERFLOW,
     BLIMP_ILLEGAL_SCOPE,
     BLIMP_OPTIMIZED_AWAY,
+
+    // API errors
+    BLIMP_VALUE_IS_IMMUTABLE,
 
     // Interrupts
     BLIMP_INTERRUPTED,
@@ -1106,7 +1124,7 @@ void BlimpObject_ForEachChild(
  *      `obj` is not a scoped object (for example, it is a symbol).
  */
 BlimpStatus BlimpObject_Get(
-    const BlimpObject *obj, const BlimpSymbol *sym, BlimpObject **ret);
+    BlimpObject *obj, const BlimpSymbol *sym, BlimpObject **ret);
 
 /**
  * \brief Set the value of a symbol in an object's scope.
@@ -1132,6 +1150,10 @@ BlimpStatus BlimpObject_Get(
  *  * `BLIMP_OUT_OF_MEMORY`
  *  * `BLIMP_INVALID_OBJECT_TYPE`:
  *      `obj` is not a scoped object (for example, it is a symbol).
+ *  * `BLIMP_VALUE_IS_IMMUTABLE`:
+ *      The value of `sym` in the scope of `obj` is immutable, because the
+ *      runtime has detected that all references to that value have been
+ *      destroyed using constant elision (option `constant_elision`).
  */
 BlimpStatus BlimpObject_Set(
     BlimpObject *obj, const BlimpSymbol *sym, BlimpObject *val);

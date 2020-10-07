@@ -1,0 +1,61 @@
+global{^} {.};
+
+!benchmark{n{^}1000000; constant_elision_global} {
+    global[]
+};
+
+{
+    scope{^} {
+        local{^} {{.}}
+    };
+    scope[];
+
+    !benchmark{n{^}1000000; consant_elision_local_long_lived} {
+        scope[]
+    }
+}[];
+
+!benchmark{n{^}200000; ops{^}5; constant_elision_local_short_lived} {
+    {
+        local{^} {.};
+        local[];
+        local[];
+        local[];
+        local[];
+        local[]
+    }[]
+};
+
+{
+    scope{^} ({
+        local{^} {.};
+
+        {{{{
+            local[]
+        }}}}[] [] []
+    }[]);
+
+    !benchmark{n{^}1000000; constant_elision_ancestor_long_lived} {
+        scope[]
+    }
+}[];
+
+{
+    scope{^} ({
+        local{^} {.};
+
+        {{{{
+            local[];
+            local[];
+            local[];
+            local[];
+            local[]
+        }}}}[] []
+    }[]);
+
+    !benchmark{n{^}200000; ops{^}5; constant_elision_ancestor_short_lived} {
+        scope[] []
+    }
+}[];
+
+.

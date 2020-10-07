@@ -245,6 +245,8 @@ typedef HashMap Scope;
 
 typedef struct Ref {
     Object *to;
+    bool reserved;
+    bool is_const;
     struct Ref *next;
     struct Ref *prev;
 } Ref;
@@ -306,8 +308,14 @@ typedef struct ScopedObject {
 
 PRIVATE Status ScopedObject_Set(
     ScopedObject *obj, const Symbol *sym, Object *value);
+PRIVATE bool ScopedObject_Lookup(
+    ScopedObject *obj,
+    const Symbol *sym,
+    Object **value,
+    ScopedObject **owner,
+    bool *is_const);
 PRIVATE Status ScopedObject_Get(
-    const ScopedObject *obj, const Symbol *sym, Object **value);
+    ScopedObject *obj, const Symbol *sym, Object **value);
 PRIVATE Status ScopedObject_GetCapturedMessage(
     const ScopedObject *obj, size_t index, Object **message);
 PRIVATE Status ScopedObject_GetCapturedMessageByName(
@@ -374,6 +382,8 @@ typedef struct {
         // created. Thereafter, we can determine if the weak reference is live
         // by checking if `((BlockObject)scope)->seq == scope_seq`.
     size_t scope_seq;
+
+    bool unique;
 } ReferenceObject;
 
 PRIVATE Status ReferenceObject_New(
@@ -382,6 +392,7 @@ PRIVATE Status ReferenceObject_New(
     const Symbol *symbol,
     ReferenceObject **object);
 PRIVATE Status ReferenceObject_Store(ReferenceObject *ref, Object *value);
+PRIVATE void ReferenceObject_Freeze(ReferenceObject *ref);
 
 ////////////////////////////////////////////////////////////////////////////////
 // concrete class GlobalObject extends ScopedObject
@@ -406,6 +417,11 @@ typedef struct {
         // DeBruijn index.
     Bytecode *code;
         // Body of the block.
+    size_t specialized_seq;
+        // Sequence number of the scope in which this object's code is
+        // specialized. The object with this sequence number is an ancestor of
+        // this object (that is, this object itself, or its parent, or its
+        // parent's parent, etc.).
 } BlockObject;
 
 PRIVATE Status BlockObject_New(
@@ -414,7 +430,40 @@ PRIVATE Status BlockObject_New(
     const Symbol *msg_name,
     Bytecode *code,
     bool capture_parents_message,
+    size_t specialized,
     BlockObject **object);
+
+/**
+ * \brief Determine if a block's code is already specialized in a given scope.
+ *
+ * Returns `true` if and only if `obj` is specialized in `scope` or a descendant
+ * of `scope`.
+ *
+ * \pre `scope` is an ancestor of `obj`.
+ */
+static inline bool BlockObject_IsSpecialized(
+    BlockObject *obj, ScopedObject *scope)
+{
+    return scope->seq <= obj->specialized_seq;
+        // Since `scope` and the scope in which `obj` is specialized are both
+        // ancestors of `obj`, they must be related; that is, one is an ancestor
+        // of the other. Therefore, we can determine if `scope` is an ancestor
+        // of the specialization scope by comparing sequence numbers, using the
+        // property that an ancestor's sequence number is always less than its
+        // descendants'.
+}
+
+/**
+ * \brief Specialize a block's code for the scope of one of its ancestors.
+ *
+ * If `obj` is already specialized in `scope`, this has no effect. Otherwise,
+ * the code of `obj`, `scope`, and every object in between is updated to new
+ * procedures which are only executed in descendants of `scope`, and which are
+ * optimized accordingly.
+ *
+ * \pre `scope` is an ancestor of `obj`.
+ */
+PRIVATE Status BlockObject_Specialize(BlockObject *obj, ScopedObject *scope);
 
 ////////////////////////////////////////////////////////////////////////////////
 // concrete class ExtensionObject extends ScopedObject

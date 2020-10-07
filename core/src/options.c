@@ -11,6 +11,7 @@ const BlimpOptions DEFAULT_BLIMP_OPTIONS = {
     .gc_max_clump_size      = 0,
     .gc_heap_check          = false,
     .tail_call_elimination  = true,
+    .constant_elision       = false,
 };
 
 const char *BLIMP_OPTIONS_USAGE =
@@ -194,6 +195,19 @@ const char *BLIMP_OPTIONS_USAGE =
     "        Enable or disable tail call elimination.\n"
     "\n"
     "        This option is enabled by default.\n"
+    "\n"
+    "    [no-]constant-elision\n"
+    "        Enable or disable constant elision.\n"
+    "\n"
+    "        Constant elision is an optimization which allows the interpreter\n"
+    "        to detect when a symbol receiving a message is constant, and\n"
+    "        replace the code with bytecode that sends the message directly\n"
+    "        to the value of the symbol. This saves time by eliminating the\n"
+    "        need to look up the constant value of the symbol each time that\n"
+    "        code executes. It also serves as a gateway to further\n"
+    "        optimization, such as inlining.\n"
+    "\n"
+    "        This option is disabled by default.\n"
 ;
 
 static const char *ParseUInt(const char *value, size_t *result)
@@ -315,6 +329,9 @@ const char *Blimp_ParseOption(const char *str, BlimpOptions *options)
         return NULL;
     } else if (strncmp("tail-call-elimination", option, option_len) == 0) {
         options->tail_call_elimination = !negate;
+        return NULL;
+    } else if (strncmp("constant-elision", option, option_len) == 0) {
+        options->constant_elision = !negate;
         return NULL;
     } else {
         return "unknown option";

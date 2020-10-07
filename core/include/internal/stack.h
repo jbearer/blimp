@@ -13,6 +13,7 @@ typedef struct StackFrame {
     ScopedObject *scope;
     Object *message;
     const Instruction *return_address;
+    Bytecode *executing;
     bool use_result;
 } StackFrame;
 

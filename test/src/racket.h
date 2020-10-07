@@ -30,6 +30,11 @@ typedef struct {
 bool Racket_Init(Racket *racket, const Options *options);
 
 /**
+ * \brief Check if a Racket interpreter is initialized.
+ */
+bool Racket_Initialized(const Racket *racket);
+
+/**
  * Racket_Close - close a Racket interpreter.
  *
  * Closes a connection to a Racket interpreter which was previously opened by
