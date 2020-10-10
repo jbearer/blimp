@@ -291,7 +291,7 @@ static Status OptimizeInstructionForScope(
                     &owner,
                     &is_const) &&
                 is_const &&
-                owner->seq <= scope->seq
+                owner->seq <= specialized
             ) {
                 BlimpObject_Release(new_instr.receiver);
                 new_instr.receiver = BlimpObject_Borrow(new_receiver);

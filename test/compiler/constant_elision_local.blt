@@ -1,0 +1,29 @@
+#: -fconstant-elision
+
+f{^} {^val
+    const{^} {^};
+
+    {
+        sym {^} {(^val)};
+            # Initialize `sym` to a constant value in this scope.
+        const[];
+            # Reference a constant from our parent's scope, forcing
+            # specialization in that scope. During the specialization pass, the
+            # optimizer will determine that the references to `sym` above and
+            # below are constant in this scope. However, it must not elide them,
+            # because the optimized bytecode will be referenced from the parent
+            # scope (in a BLOCKI instruction), and the value of `sym` is not the
+            # same constant in every child created via that BLOCKI instruction.
+        sym[]
+    }[]
+};
+
+!expect_eq (f foo) foo;
+    # Cause the inner scope above to be executed with a value of `foo`. If the
+    # optimizer is misbehaving, this will cause the parent scope to reference a
+    # specialization procedure where `foo` is hardcoded into the bytecode.
+!expect_eq (f bar) bar;
+    # If the optimizer bug described above happened, then `f bar` will return
+    # `foo`, not `bar`, because `foo` is now hardcoded.
+
+.
