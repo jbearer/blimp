@@ -20,6 +20,9 @@ The `bl:mp` test runner, `blimp-test`, interprets "`bl:mp` test" files, denoted 
 | `!gc_expect_clean`      | Checks that all allocated objects are reachable.
 | `!gc_check_collect`     | Triggers a garbage collection sweep and then checks that all allocated objects are reachable.
 | `!gc_collect`           | Triggers a garbage collection sweep.
+| `!print_code`           | Prints the bytecode for the program.
+
+In addition, test programs can also use the commands provided by the REPL (prefixed with `?`).
 
 The semantics of this extended `bl:mp` language are documented in `test-semantics.rkt`, which extends the `bl:mp-machine` semantics from `docs/semantics.rkt` to interpret these additional primitives.
 

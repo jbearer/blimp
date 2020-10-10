@@ -81,6 +81,16 @@ Object *Blimp_GlobalObject(Blimp *blimp)
     return (Object *)blimp->global;
 }
 
+Bytecode *Blimp_GlobalBytecode(Blimp *blimp)
+{
+    const StackFrame *frame = Stack_BottomFrame(&blimp->stack);
+    if (frame == NULL) {
+        return NULL;
+    } else {
+        return frame->executing;
+    }
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Object API
 //

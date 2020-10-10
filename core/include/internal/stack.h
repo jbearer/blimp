@@ -45,6 +45,7 @@ PRIVATE Status Stack_Push(
     Blimp *blimp, CallStack *stack, StackFrame *frame, size_t space_request);
 PRIVATE void Stack_Pop(Blimp *blimp, CallStack *stack);
 PRIVATE const StackFrame *Stack_CurrentFrame(const CallStack *stack);
+PRIVATE const StackFrame *Stack_BottomFrame(const CallStack *stack);
 PRIVATE const StackFrame *StackTrace_CurrentFrame(const StackTrace *trace);
 
 static inline bool Stack_Empty(CallStack *stack)

@@ -101,6 +101,16 @@ const StackFrame *Stack_CurrentFrame(const CallStack *stack)
     return StackTrace_CurrentFrame(&stack->trace);
 }
 
+const StackFrame *Stack_BottomFrame(const CallStack *stack)
+{
+    const StackTrace *trace = &stack->trace;
+    if (trace->frames == trace->end) {
+        return NULL;
+    } else {
+        return trace->frames;
+    }
+}
+
 Status Blimp_SaveStackTrace(Blimp *blimp, StackTrace **trace)
 {
     return Blimp_CopyStackTrace(blimp, &blimp->stack.trace, trace);

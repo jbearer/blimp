@@ -565,13 +565,16 @@ error:
 }
 
 Status EvalBytecode(
-    Blimp *blimp, ScopedObject *scope, const Bytecode *code, Object **result)
+    Blimp *blimp, ScopedObject *scope, Bytecode *code, Object **result)
 {
     BlimpObject_Borrow((Object *)scope);
         // We have to borrow `scope`, because the stack frame that we're about
         // to create will own a reference to it, but the reference that we
         // currently have belongs to our caller and must remain valid even after
         // the reference owned by the stack frame is released.
+    ++code->refcount;
+        // We also have to borrow the code we're going to execute, as the stack
+        // frame owns a reference to that as well.
 
     StackFrame frame = {
          .return_address = NULL,
@@ -581,7 +584,8 @@ Status EvalBytecode(
         .scope          = scope,
         .message        = NULL,
         .has_range      = false,
-        .use_result     = result != NULL
+        .use_result     = result != NULL,
+        .executing      = code,
     };
     if (Stack_Push(blimp, &blimp->stack, &frame, 128) != BLIMP_OK) {
             // Unlike in ExecuteSend, where we requested 0 additional bytes on
@@ -590,6 +594,7 @@ Status EvalBytecode(
             // to account for the fact that we are using one C stack frame here
             // and one for ExecuteFrom().
         BlimpObject_Release((Object *)scope);
+        BlimpBytecode_Free(code);
         return Reraise(blimp);
     }
 

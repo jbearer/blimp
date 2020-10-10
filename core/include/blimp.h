@@ -811,6 +811,17 @@ void BlimpBytecode_Free(BlimpBytecode *code);
 void BlimpBytecode_Borrow(BlimpBytecode *code);
 
 /**
+ * \brief Get the bytecode currently being executed in the global scope.
+ *
+ * If no code is currently being executed, the result is `NULL`. Otherwise, the
+ * result is a BlimpBytecode object. The caller does not own a reference to the
+ * returned bytecode object, so the object may be destroyed or invalidated after
+ * any subsequent `bl:mp` API call (except BlimpBytecode_Print()). To persist
+ * their reference to the bytecode, the caller must call BlimpBytecode_Borrow().
+ */
+BlimpBytecode *Blimp_GlobalBytecode(Blimp *blimp);
+
+/**
  * \brief Print a sequence of bytecode.
  *
  * \param file

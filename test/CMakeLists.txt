@@ -9,6 +9,7 @@ target_compile_options(blimp-test PRIVATE
 target_include_directories(blimp-test PRIVATE src)
 target_link_libraries(blimp-test blimp)
 target_link_libraries(blimp-test blimpmodule)
+target_link_libraries(blimp-test blimprepl)
 target_link_libraries(blimp-test m)
 
 if (NOT TEST_PERF_FACTOR)

@@ -1,5 +1,9 @@
 file(GLOB BLIMP_SRC "src/*.c")
 
+add_library(blimprepl src/command.c)
+target_include_directories(blimprepl PUBLIC src)
+target_link_libraries(blimprepl blimp)
+
 add_executable(blimp-interpreter ${BLIMP_SRC})
 set_target_properties(blimp-interpreter PROPERTIES OUTPUT_NAME blimp)
 target_link_libraries(blimp-interpreter blimp)

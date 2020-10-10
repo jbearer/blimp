@@ -1,1 +1,1 @@
---skip-racket
+--skip-racket -O

@@ -2,6 +2,7 @@
 #include <math.h>
 #include <string.h>
 
+#include "command.h"
 #include "options.h"
 #include "test_blimp.h"
 #include "timing.h"
@@ -473,6 +474,20 @@ static BlimpStatus GC_PrintStats(
     return VoidReturn(blimp, result);
 }
 
+static BlimpStatus PrintCode(
+    Blimp *blimp, Test *test, BlimpObject **args, BlimpObject **result)
+{
+    (void)args;
+
+    const Options *options = &test->options;
+
+    if (options->verbosity >= VERB_DEBUG) {
+        BlimpBytecode_Print(stdout, Blimp_GlobalBytecode(blimp), true);
+    }
+
+    return VoidReturn(blimp, result);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // The TestBlimp object (bound to ! in the global scope).
 //
@@ -585,6 +600,7 @@ static const TestBlimpMethod methods[] = {
     {"gc_expect_clean",     0,  GC_ExpectClean  },
     {"gc_check_collect",    0,  GC_CheckCollect },
     {"gc_print_stats",      0,  GC_PrintStats   },
+    {"print_code",          0,  PrintCode       },
 };
 
 static BlimpStatus TestBlimp_Receive(
@@ -653,6 +669,12 @@ Blimp *TestBlimp_New(Test *test)
         return NULL;
     }
     BlimpObject_Release(obj);
+
+    // Initialize REPL commands (`?').
+    if (InitCommands(blimp) != BLIMP_OK) {
+        Blimp_Delete(blimp);
+        return NULL;
+    }
 
     return blimp;
 }

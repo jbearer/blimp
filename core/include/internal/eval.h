@@ -7,7 +7,7 @@
 PRIVATE Status EvalBytecode(
     Blimp *blimp,
     ScopedObject *scope,
-    const Bytecode *code,
+    Bytecode *code,
     Object **result);
 
 PRIVATE Status Send(
