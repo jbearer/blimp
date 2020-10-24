@@ -14,7 +14,7 @@ node{^
     }
 };
 
-!benchmark{n{^ 5000}; ops{^ 10}; refcount_cycle_broken} {
+!benchmark{n{^ 5000}; ops{^ 10}; tracing_cycle} {
     __push_stack_frame[];
 
     # Create 10 nodes.

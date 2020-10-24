@@ -8,23 +8,63 @@
 # counting version of the test, otherwise reference counting isn't gaining us
 # anything compared to tracing.
 
-import runtime;
+import std;
 
-!benchmark{n{^ 100000}; refcount_cycle_self} {
-    obj{^ (__cell[]) };
+node{^
+    {
+        {^cell
+            {^next
+                ^cell {(^next)}
+            }
+        }(__cell[])
+    }
+};
 
-    # Create an object which is just a setter for `self`.
-    obj {
-        {^self
-            self {^ (^self)}
-        }
-    };
+!benchmark{n{^ 5000}; obs{^ 10}; tracing_cycle_broken} {
+    __push_stack_frame[];
 
-    # Create a self-cycle.
-    obj{^} (obj{^});
+    # Create 10 nodes.
+    n1 := (node[]);
+    n2 := (node[]);
+    n3 := (node[]);
+    n4 := (node[]);
+    n5 := (node[]);
+    n6 := (node[]);
+    n7 := (node[]);
+    n8 := (node[]);
+    n9 := (node[]);
+    n10 := (node[]);
 
-    # Leak the object
-    obj{.}
+    # Link them into a cycle.
+    ($n1) ($n2);
+    ($n2) ($n3);
+    ($n3) ($n4);
+    ($n4) ($n5);
+    ($n5) ($n6);
+    ($n6) ($n7);
+    ($n7) ($n8);
+    ($n8) ($n9);
+    ($n9) ($n10);
+    ($n10) ($n1);
+
+    # Break the cycle.
+    ($n10) nil;
+
+    # Leak the nodes.
+    n1 := nil;
+    n2 := nil;
+    n3 := nil;
+    n4 := nil;
+    n5 := nil;
+    n6 := nil;
+    n7 := nil;
+    n8 := nil;
+    n9 := nil;
+    n10 := nil;
+
+    __pop_stack_frame[];
+
+    .
 };
 
 !gc_collect;
