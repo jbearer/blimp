@@ -20,7 +20,7 @@ node{^
     }
 };
 
-!benchmark{n{^ 5000}; ops{^ 10}; refcount_cycle_broken} {
+!benchmark{n{^ 5000}; ops{^ 10}; erc_cycle_broken} {
     __push_stack_frame[];
 
     # Create 10 nodes.

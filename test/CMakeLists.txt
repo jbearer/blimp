@@ -17,6 +17,18 @@ if (NOT TEST_PERF_FACTOR)
 endif()
 target_compile_options(blimp-test PRIVATE -DDEFAULT_PERF_FACTOR=${TEST_PERF_FACTOR})
 
+if(COVERAGE AND CMAKE_COMPILER_IS_GNUCXX)
+    include(CodeCoverage)
+    append_coverage_compiler_flags()
+    setup_target_for_coverage_lcov(
+        NAME blimp-coverage
+        EXECUTABLE test/blimp-test --disable-racket
+        DEPENDENCIES blimp-test
+        BASE_DIRECTORY ${PROJECT_BINARY_DIR}
+        EXCLUDE CMakeCCompilerID.c
+    )
+endif()
+
 find_program(RACKET racket)
 
 set(BLIMP_TEST_FLAGS --verbose=test)

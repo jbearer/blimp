@@ -185,14 +185,7 @@ static void RunTest(Test *test)
         return;
     }
 
-    if (test->options.use_racket) {
-        if (!Racket_Initialized(test->racket)) {
-            if (!SetupRacket(test->racket, &test->options)) {
-                SkipTest(test, "failed to open racket");
-                return;
-            }
-        }
-
+    if (test->options.enable_racket && test->options.use_racket) {
         if (test->options.verbosity >= VERB_DEBUG) {
             printf("racket> ");
             Blimp_DumpExpr(test->blimp, stdout, expr);
@@ -352,11 +345,18 @@ static void PrintUsage(FILE *f, int argc, char **argv)
     fprintf(f, "    -F, --filter REGEX\n");
     fprintf(f, "        Run only tests whose name matches with REGEX (case-insensitive).\n");
     fprintf(f, "\n");
+    fprintf(f, "    --disable-racket\n");
+    fprintf(f, "        Do not run Racket semantics tests. This option overrides\n");
+    fprintf(f, "        --use-racket. Use this to skip Racket tests for the entire test\n");
+    fprintf(f, "        suite\n");
+    fprintf(f, "\n");
     fprintf(f, "    --skip-racket\n");
-    fprintf(f, "        Do not run Racket semantics tests.\n");
+    fprintf(f, "        Do not run Racket semantics tests. Use this to skip Racket tests\n");
+    fprintf(f, "        for individual tests or groups.\n");
     fprintf(f, "\n");
     fprintf(f, "    --use-racket\n");
-    fprintf(f, "        Do run Racket semantics tests (this is the default behavior).\n");
+    fprintf(f, "        Do run Racket semantics tests (this is the default behavior).Use\n");
+    fprintf(f, "        this to enable Racket tests for individual tests or groups\n");
     fprintf(f, "\n");
     fprintf(f, "    --skip-blimp\n");
     fprintf(f, "        Do not run bl:mp evaluation tests.\n");
@@ -469,6 +469,7 @@ typedef enum {
         // all the flags have unique values.
 
     FLAG_SKIP_RACKET,
+    FLAG_DISABLE_RACKET,
     FLAG_USE_RACKET,
     FLAG_SKIP_BLIMP,
     FLAG_RACKET_TIMEOUT,
@@ -484,6 +485,7 @@ static Options DefaultOptions(void)
         .num_tests      = 0,
         .groups         = NULL,
         .num_groups     = 0,
+        .enable_racket  = true,
         .use_racket     = true,
         .use_blimp      = true,
         .racket_timeout = 5000,
@@ -524,6 +526,7 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
         {"test",           required_argument, NULL, FLAG_TEST },
         {"group",          required_argument, NULL, FLAG_GROUP },
         {"filter",         required_argument, NULL, FLAG_FILTER },
+        {"disable-racket", no_argument,       NULL, FLAG_DISABLE_RACKET },
         {"skip-racket",    no_argument,       NULL, FLAG_SKIP_RACKET },
         {"use-racket",     no_argument,       NULL, FLAG_USE_RACKET },
         {"skip-blimp",     no_argument,       NULL, FLAG_SKIP_BLIMP },
@@ -581,6 +584,10 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
                     *status = EXIT_FAILURE;
                     return true;
                 }
+                break;
+
+            case FLAG_DISABLE_RACKET:
+                options->enable_racket = false;
                 break;
 
             case FLAG_SKIP_RACKET:
@@ -660,11 +667,9 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
                 break;
             }
 
-            case FLAG_OPTIMIZE: {
-                options->blimp_options.tail_call_elimination = true;
-                options->blimp_options.constant_elision = true;
+            case FLAG_OPTIMIZE:
+                Blimp_OptimizationsOn(&options->blimp_options);
                 break;
-            }
 
             case FLAG_PERF_REPORT: {
                 options->perf_report = fopen(optarg, "w");
@@ -761,7 +766,7 @@ static Suite *FindTests(const Options *options)
     suite->num_groups = 0;
     size_t groups_capacity = 0;
 
-    if (suite->options.use_racket) {
+    if (suite->options.enable_racket) {
         if (!SetupRacket(&suite->racket, &suite->options)) {
             return NULL;
         }

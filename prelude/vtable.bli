@@ -25,9 +25,9 @@
 #      emulate a class interface while wrapping a lower-level or lighter-weight
 #      implementation. Contrasting with standard instances, when a wrapper
 #      instance is created, no constructor is invoked, but the argument to
-#      `__new` is saved for later. When a wrapper instance receives a method
+#      `__wrap` is saved for later. When a wrapper instance receives a method
 #      call, its implicit first argument is not a reference to the instance
-#      itself, but rather whatever argument was passed to `__new` when the
+#      itself, but rather whatever argument was passed to `__wrap` when the
 #      instance was created. Wrapper instances do not have fields.
 #
 # A tabular summary of the differences between standard and wrapper instances:
@@ -53,7 +53,7 @@
 #           }
 #
 # Note that the `^self` parameter above would actually be the argument to
-# `__new` if the method is called on a wrapper instance.
+# `__wrap` if the method is called on a wrapper instance.
 #
 # There is a complication when trying to bind a method whose name is a symbol
 # which is already bound at the global scope. __bind relies on being able to set

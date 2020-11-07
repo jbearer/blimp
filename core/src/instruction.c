@@ -1,5 +1,40 @@
+#include <stddef.h>
+
 #include "internal/expr.h"
 #include "internal/instruction.h"
+
+static void Instruction_Destroy(const Instruction *instr)
+{
+    switch (instr->type) {
+        case INSTR_BLOCKI:
+            BlimpBytecode_Free(((BLOCKI *)instr)->code);
+            break;
+        case INSTR_CLOSEI:
+            BlimpObject_Release((Object *)((CLOSEI *)instr)->scope);
+            BlimpBytecode_Free(((CLOSEI *)instr)->code);
+            break;
+        case INSTR_OBJI:
+            if (((OBJI *)instr)->object) {
+                BlimpObject_Release(((OBJI *)instr)->object);
+            }
+            break;
+        case INSTR_MSGOF:
+            BlimpObject_Release((Object *)((MSGOF *)instr)->scope);
+            break;
+        case INSTR_SENDTO:
+            BlimpObject_Release(((SENDTO *)instr)->receiver);
+            break;
+        case INSTR_CALL:
+            BlimpObject_Release((Object *)((CALL *)instr)->scope);
+            break;
+        case INSTR_CALLTO:
+            BlimpObject_Release((Object *)((CALLTO *)instr)->scope);
+            BlimpObject_Release(((CALLTO *)instr)->receiver);
+            break;
+        default:
+            break;
+    }
+}
 
 Status Bytecode_New(Blimp *blimp, Expr *expr, Bytecode **code)
 {
@@ -30,16 +65,7 @@ void BlimpBytecode_Free(Bytecode *code)
          instr != Bytecode_End(code);
          instr = Instruction_Next(instr))
     {
-        switch (instr->type) {
-            case INSTR_BLOCKI:
-                BlimpBytecode_Free(((BLOCKI *)instr)->code);
-                break;
-            case INSTR_SENDTO:
-                BlimpObject_Release(((SENDTO *)instr)->receiver);
-                break;
-            default:
-                break;
-        }
+        Instruction_Destroy(instr);
     }
 
     Free(code->blimp, &code->instructions);
@@ -67,6 +93,92 @@ Status Bytecode_Append(Bytecode *code, const Instruction *instr)
     code->size += instr->size;
 
     return BLIMP_OK;
+}
+
+void Bytecode_Delete(Bytecode *code, Instruction *instr)
+{
+    assert(Bytecode_Begin(code) <= instr && instr < Bytecode_End(code));
+
+    Instruction_Destroy(instr);
+        // Release references to objects and other bytecode procedures owned by
+        // the instruction we're deleting.
+
+    if ((char *)instr + instr->size == (char *)code->instructions + code->size)
+    {
+        // If this instruction is the last instruction in the procedure, we can
+        // delete it by simply shrinking the size of the procedure so it no
+        // longer includes the last instruction.
+        code->size -= instr->size;
+    } else {
+        // Otherwise, to have to actually delete the instruction, we'd need to
+        // shift all of the following instructions backwards, which would be
+        // expensive and would cause the offsets of instructions to change
+        // unpredictably. Instead, we'll keep this instruction in place but
+        // replace it with a NOP opcode. The caller can strip all NOPs out of
+        // the procedur at once by calling Bytecode_RemoveNops() at a time when
+        // they are ready for instruction offsets to change.
+        instr->type = INSTR_NOP;
+        instr->result_type = RESULT_IGNORE;
+            // NOP instructions never produce a result, so we have to ignore the
+            // non-existent result value.
+    }
+}
+
+void Bytecode_RemoveNops(Bytecode *code)
+{
+    // We will traverse the instructions in `code` sequentially with two
+    // cursors:
+    Instruction *read = code->instructions;
+        // `read` will move along one instruction at a time...
+    Instruction *write = code->instructions;
+        // `write` will trail behind it. We will copy instructions from `read`
+        // to `write` only if they are not NOPs.
+
+    while ((char *)read - (char *)code->instructions < (ptrdiff_t)code->size) {
+        assert(write <= read);
+
+        Instruction *next_read = (Instruction *)((char *)read + read->size);
+            // Get the next value of `read` now, since copying from `read` to
+            // `write` below might overwrite all or part of `read`, potentially
+            // changing its `size`.
+
+        if (read->type != INSTR_NOP) {
+            if (write != read) {
+                // Copy non-NOP instruction from `read` to `write`, but only if
+                // `read` and `write` refer to different addresses (otherwise a
+                // copy would be redundant).
+                memmove(write, read, read->size);
+            }
+            write = (Instruction *)((char *)write + write->size);
+                // Advance write.
+        } else {
+            // Don't copy the instruction or advance the `write` pointer if the
+            // instruction is a NOP.
+        }
+
+        read = next_read;
+    }
+
+    code->size = (char *)write - (char *)code->instructions;
+        // Recompute size.
+}
+
+void Bytecode_Truncate(Bytecode *code, size_t offset)
+{
+    if (offset >= code->size) {
+        return;
+    }
+
+    // Clean up references owned by instructions between the new end of the
+    // procedure and the current end.
+    const Instruction *ip = Bytecode_Get(code, offset);
+    while (ip < Bytecode_End(code)) {
+        const Instruction *next = Instruction_Next(ip);
+        Instruction_Destroy(ip);
+        ip = next;
+    }
+
+    code->size = offset;
 }
 
 #define PRINT_INSTR(file, mnemonic, fmt, ...) \
@@ -98,11 +210,24 @@ void BlimpBytecode_Print(FILE *file, const BlimpBytecode *code, bool recursive)
         switch (ip->type) {
             case INSTR_BLOCKI: {
                 BLOCKI *instr = (BLOCKI *)ip;
-                PRINT_INSTR(file, BLOCKI, "%s, %p, %d, %zu",
+                PRINT_INSTR(file, BLOCKI, "%s, %p, %#x, %zu, %zu",
                     instr->msg_name->name,
                     instr->code,
-                    instr->capture_parents_message,
-                    instr->specialized);
+                    instr->flags,
+                    instr->specialized,
+                    instr->captures);
+                break;
+            }
+
+            case INSTR_CLOSEI: {
+                CLOSEI *instr = (CLOSEI *)ip;
+                PRINT_INSTR(file, CLOSEI, "%p, %s, %p, %#x, %zu, %zu",
+                    instr->scope,
+                    instr->msg_name->name,
+                    instr->code,
+                    instr->flags,
+                    instr->specialized,
+                    instr->captures);
                 break;
             }
 
@@ -112,15 +237,33 @@ void BlimpBytecode_Print(FILE *file, const BlimpBytecode *code, bool recursive)
                 break;
             }
 
+            case INSTR_OBJI: {
+                OBJI *instr = (OBJI *)ip;
+                PRINT_INSTR(file, OBJI, "%p", instr->object);
+                break;
+            }
+
             case INSTR_MSG: {
                 MSG *instr = (MSG *)ip;
                 PRINT_INSTR(file, MSG, "%zu", instr->index);
                 break;
             }
 
+            case INSTR_MSGOF: {
+                MSGOF *instr = (MSGOF *)ip;
+                PRINT_INSTR(file, MSGOF, "%p, %zu", instr->scope, instr->index);
+                break;
+            }
+
             case INSTR_SEND: {
                 SEND *instr = (SEND *)ip;
                 PRINT_INSTR(file, SEND, "%#x", instr->flags);
+                break;
+            }
+
+            case INSTR_CALL: {
+                CALL *instr = (CALL *)ip;
+                PRINT_INSTR(file, CALL, "%p, %#x", instr->scope, instr->flags);
                 break;
             }
 
@@ -137,8 +280,29 @@ void BlimpBytecode_Print(FILE *file, const BlimpBytecode *code, bool recursive)
                 break;
             }
 
+            case INSTR_CALLTO: {
+                CALLTO *instr = (CALLTO *)ip;
+                if (Object_Type(instr->receiver) == OBJ_SYMBOL) {
+                    PRINT_INSTR(
+                        file, SENDTO, "%p, %s, %#x",
+                        instr->scope,
+                        ((const Symbol *)instr->receiver)->name,
+                        instr->flags);
+                } else {
+                    PRINT_INSTR(
+                        file, SENDTO, "%p, %p, %#x",
+                        instr->scope, instr->receiver, instr->flags);
+                }
+                break;
+            }
+
             case INSTR_RET: {
                 PRINT_INSTR(file, RET, "");
+                break;
+            }
+
+            case INSTR_NOP: {
+                PRINT_INSTR(file, NOP, "%zu", ip->size);
                 break;
             }
 
@@ -160,11 +324,17 @@ void BlimpBytecode_Print(FILE *file, const BlimpBytecode *code, bool recursive)
              ip != Bytecode_End(code);
              ip = Instruction_Next(ip))
         {
-            if (ip->type == INSTR_BLOCKI) {
-                fputc('\n', file);
-                BlimpBytecode_Print(file, ((BLOCKI *)ip)->code, true);
-            } else if (ip->type == INSTR_RET) {
-                break;
+            switch (ip->type) {
+                case INSTR_BLOCKI:
+                    fputc('\n', file);
+                    BlimpBytecode_Print(file, ((BLOCKI *)ip)->code, true);
+                    break;
+                case INSTR_CLOSEI:
+                    fputc('\n', file);
+                    BlimpBytecode_Print(file, ((CLOSEI *)ip)->code, true);
+                    break;
+                default:
+                    break;
             }
         }
     }

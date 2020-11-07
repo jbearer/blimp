@@ -224,11 +224,6 @@ bool Racket_Init(Racket *racket, const Options *options)
     return true;
 }
 
-bool Racket_Initialized(const Racket *racket)
-{
-    return racket->in != NULL;
-}
-
 void Racket_Close(Racket *racket)
 {
     fclose(racket->in);

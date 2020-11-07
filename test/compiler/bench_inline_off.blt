@@ -1,0 +1,2 @@
+#: -fno-inlining
+import bench_inline
