@@ -177,10 +177,15 @@ void BlimpObject_Print(FILE *f, const Object *obj)
                  cur != NULL;
                  cur = cur->parent)
             {
+                size_t i = 0;
                 if (Object_Type((Object *)cur) == OBJ_BLOCK) {
-                    DBMap_Shift(&scopes, (void *)((BlockObject *)cur)->msg_name);
-                } else {
-                    DBMap_Shift(&scopes, (void *)"");
+                    BlockObject *block = (BlockObject *)cur;
+                    DBMap_Shift(&scopes, (void *)block->msg_name);
+                    ++i;
+                }
+
+                for (; i < cur->owned_captures; ++i) {
+                    DBMap_Shift(&scopes, NULL);
                 }
             }
 

@@ -184,10 +184,9 @@ void Bytecode_Truncate(Bytecode *code, size_t offset)
 #define PRINT_INSTR(file, mnemonic, fmt, ...) \
     fprintf(file, "%-8s" fmt "\n", #mnemonic, ##__VA_ARGS__)
 
-void BlimpBytecode_Print(FILE *file, const BlimpBytecode *code, bool recursive)
+static void PrintProcedure(
+    FILE *file, const BlimpBytecode *code, bool recursive)
 {
-    fprintf(file, "  %p\n", code);
-
     for (const Instruction *ip = Bytecode_Begin(code);
          ip != Bytecode_End(code);
          ip = Instruction_Next(ip))
@@ -284,13 +283,13 @@ void BlimpBytecode_Print(FILE *file, const BlimpBytecode *code, bool recursive)
                 CALLTO *instr = (CALLTO *)ip;
                 if (Object_Type(instr->receiver) == OBJ_SYMBOL) {
                     PRINT_INSTR(
-                        file, SENDTO, "%p, %s, %#x",
+                        file, CALLTO, "%p, %s, %#x",
                         instr->scope,
                         ((const Symbol *)instr->receiver)->name,
                         instr->flags);
                 } else {
                     PRINT_INSTR(
-                        file, SENDTO, "%p, %p, %#x",
+                        file, CALLTO, "%p, %p, %#x",
                         instr->scope, instr->receiver, instr->flags);
                 }
                 break;
@@ -333,9 +332,56 @@ void BlimpBytecode_Print(FILE *file, const BlimpBytecode *code, bool recursive)
                     fputc('\n', file);
                     BlimpBytecode_Print(file, ((CLOSEI *)ip)->code, true);
                     break;
+                case INSTR_SENDTO: {
+                    SENDTO *instr = (SENDTO *)ip;
+
+                    // If this is a send to a symbol, dereference const symbols
+                    // as long as we can. If we eventually prove the receiver is
+                    // equalt to a block object, we can print the block's code.
+                    ScopedObject *scope = (ScopedObject *)code->blimp->global;
+                    Object *receiver = instr->receiver;
+                    Object *value;
+                    bool is_const;
+                    while (
+                        Object_Type(receiver) == OBJ_SYMBOL &&
+                        ScopedObject_Lookup(
+                            scope,
+                            (const Symbol *)receiver,
+                            &value,
+                            NULL,
+                            &is_const) &&
+                        is_const
+                    ) {
+                        receiver = value;
+                    }
+
+                    // If the receiver is a block, print its code.
+                    if (Object_Type(receiver) == OBJ_BLOCK) {
+                        BlockObject *block = (BlockObject *)receiver;
+                        if (Object_Type(instr->receiver) == OBJ_SYMBOL) {
+                            fprintf(
+                                file,
+                                "  %p <%s>\n",
+                                block->code,
+                                ((const Symbol *)instr->receiver)->name
+                            );
+                        } else {
+                            fprintf(file, "  %p <%p>\n", block->code, block);
+                        }
+                        PrintProcedure(file, block->code, true);
+                    }
+
+                    break;
+                }
                 default:
                     break;
             }
         }
     }
+}
+
+void BlimpBytecode_Print(FILE *file, const BlimpBytecode *code, bool recursive)
+{
+    fprintf(file, "  %p\n", code);
+    PrintProcedure(file, code, recursive);
 }

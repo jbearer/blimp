@@ -203,8 +203,8 @@ typedef struct {
 typedef struct {
     Instruction header;
     SourceRange range;
-    SendFlags flags;
     Object *receiver;
+    SendFlags flags;
     // message: stack
 } SENDTO;
 
@@ -213,8 +213,8 @@ typedef struct {
 typedef struct {
     Instruction header;
     SourceRange range;
-    SendFlags flags;
     ScopedObject *scope;
+    SendFlags flags;
     // message: stack
     // receiver: stack
 } CALL;
@@ -224,9 +224,9 @@ typedef struct {
 typedef struct {
     Instruction header;
     SourceRange range;
-    SendFlags flags;
     ScopedObject *scope;
     Object *receiver;
+    SendFlags flags;
     // message: stack
 } CALLTO;
 

@@ -38,7 +38,7 @@ $test_fib($fib_iter);
     $fib_rec(9)
 };
 
-!benchmark{n{^ 100}; fib_iter} {
+!benchmark{n{^ 1000}; fib_iter} {
     $fib_iter(9)
 };
 

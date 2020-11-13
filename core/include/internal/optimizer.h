@@ -107,9 +107,10 @@ typedef struct SymbolicObject {
 
         struct SymbolicObject *captures;
             // If this object was pushed on the stack by a BLOCKI or CLOSEI
-            // instruction, this is the symbolic representation of the top first
-            // message object (outermost capture) which was popped from the
-            // stack by that instruction.
+            // instruction, this is the head of a list of the symbolic
+            // representations the captured objects which were popped from the
+            // stack by that instruction. The list is ordered from innermost to
+            // outermost capture in terms of lexical scope.
     };
     struct SymbolicObject *next;
         // If this object is in a list of messages captured by a BLOCKI or
@@ -157,15 +158,6 @@ typedef struct SymbolicObject {
             BlockFlags flags;
             size_t specialized;
             ScopedObject *scope;
-
-            struct SymbolicObject *captures;
-                // A NULL-terminated linked list containing all of the objects
-                // which should be captured in the scope of this lambda, which
-                // are not captured by the parent object of the lambda's scope.
-                // This includes, from outermost to innermost, the message which
-                // the parent object is processing when the lambda is created
-                // and all the messages being processed by objects which were
-                // inlined in that scope.
         } lambda;
     } value;
 } SymbolicObject;
@@ -220,7 +212,17 @@ typedef struct SymbolicFrame {
     SymbolicObject *arg;
         // The argument to the procedure call being inlined.
     SymbolicObject *captures;
-        // Messages captured by the parent object.
+        // Arguments to procedure calls above the current call on the inline
+        // stack. This list contains the messages which would have been captured
+        // by the scope corresponding to this stack frame had it (and possibly
+        // some of its parents) not been inlined. It does not contain messages
+        // captured by the innermost enclosing scope which is not inlined; that
+        // scope is either reified in `scope`, or will be represented on the
+        // call stack at runtime. Therefore, its captured messages can be
+        // obtained by emitting a MSGOF or MSG instruction.
+        //
+        // The arguments in this list are ordered from innermost to outermost in
+        // terms of lexical scope.
     BlockFlags flags;
         // Object creation flags describing the object whose code is being
         // inlined.
@@ -230,6 +232,7 @@ typedef struct SymbolicFrame {
     bool use_result;
         // Should the ultimate result of the inlined call appear on the result
         // stack?
+    bool closure;
 } SymbolicFrame;
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -340,6 +343,9 @@ PRIVATE Status Optimizer_Begin(
  * pairs of calls may not be nested.
  */
 PRIVATE void Optimizer_End(Optimizer *opt, Bytecode **code);
+
+PRIVATE Status Optimizer_SymbolizeObject(
+    Optimizer *opt, Object *obj, SymbolicObject **result);
 
 /**
  * \brief
@@ -463,7 +469,6 @@ PRIVATE SymbolicObject *Optimizer_GetMessage(Optimizer *opt, size_t index);
 PRIVATE void Optimizer_ReplaceSubroutine(
     Optimizer *opt, Bytecode **to_replace, size_t *specialized);
 
-
 /**
  * \brief Get the Blimp associated with an Optimizer.
  */
@@ -471,7 +476,6 @@ static inline Blimp *Optimizer_Blimp(Optimizer *opt)
 {
     return opt->messages.blimp;
 }
-
 
 /**
  * \brief Should the result of an instruction be pushed onto the result stack?

@@ -1,4 +1,4 @@
-# Module libarary.
+# Module library.
 file(GLOB MODULE_SRC "module/*.c")
 add_library(blimpmodule ${MODULE_SRC})
 target_compile_options(blimpmodule PRIVATE -Wall -Wextra -Werror -ansi -std=c99)
@@ -6,11 +6,16 @@ target_include_directories(blimpmodule PUBLIC include)
 target_link_libraries(blimpmodule blimp)
 target_link_libraries(blimpmodule ${CMAKE_DL_LIBS})
 
+# System libraries.
+function(system_lib NAME)
+    add_library(${NAME} SHARED src/${NAME}.c src/system.c)
+    target_compile_options(${NAME} PRIVATE -Wall -Wextra -Werror -ansi -std=c99)
+    target_include_directories(${NAME} PRIVATE src/)
+    target_link_libraries(${NAME} blimpmodule)
+endfunction()
 
-# system.io
-add_library(io SHARED src/io.c)
-target_compile_options(io PRIVATE -Wall -Wextra -Werror -ansi -std=c99)
-target_link_libraries(io blimpmodule)
+system_lib(io)
+system_lib(debug)
 
 # Build API documentation.
 if (DOXYGEN_FOUND)

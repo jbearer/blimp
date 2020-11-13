@@ -36,4 +36,16 @@
     } foo
 };
 
+{
+    const_local{^} {foo};
+    !benchmark{n{^}1000000; inline_const_local} {
+        const_local[]
+    }
+}[];
+
+const_global{^} {foo};
+!benchmark{n{^}1000000; inline_const_global} {
+    const_global[]
+};
+
 .

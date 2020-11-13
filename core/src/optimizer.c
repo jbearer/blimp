@@ -20,6 +20,22 @@ static inline Status SymbolicObject_New(Optimizer *opt, SymbolicObject **obj)
     return BLIMP_OK;
 }
 
+Status Optimizer_SymbolizeObject(
+    Optimizer *opt, Object *obj, SymbolicObject **result)
+{
+    TRY(SymbolicObject_New(opt, result));
+
+    if (Object_Type(obj) == OBJ_SYMBOL) {
+        (*result)->value_type = VALUE_SYMBOL;
+        (*result)->value.symbol = (const Symbol *)obj;
+    } else {;
+        (*result)->value_type = VALUE_OBJECT;
+        (*result)->value.object = obj;
+    }
+
+    return BLIMP_OK;
+}
+
 Status Optimizer_Init(Blimp *blimp, Optimizer *opt)
 {
     TRY(SymbolicObjectStack_Init(
@@ -295,6 +311,8 @@ void Optimizer_Delete(Optimizer *opt, SymbolicObject *obj)
             // we don't care about its result.
             instr->result_type = RESULT_IGNORE;
         }
+
+        obj->instr_offset = UNKNOWN_INSTR_OFFSET;
     }
 }
 

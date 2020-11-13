@@ -3,7 +3,10 @@
 #include "internal/optimizer.h"
 
 static Status SymEvalProcedure(
-    Optimizer *opt, Bytecode *code, ScopedObject *scope);
+    Optimizer *opt,
+    Bytecode *code,
+    ScopedObject *scope,
+    SymbolicObject **result);
 
 // Is there enough static information about the value of `obj` to generate code
 // which cmoputes an equivalent value?
@@ -14,12 +17,52 @@ static inline bool CanSymEvalObject(SymbolicObject *obj)
         case VALUE_OBJECT:
             return true;
         case VALUE_LAMBDA:
-            return obj->value.lambda.captures == NULL;
-                // For simplicity, we don't treat BLOCKI or SCOPEI instructions
-                // which capture arguments as values, because to compute an
-                // equivalent value, we'd have to recursively check if we can
-                // compute equivalent values for the captured arguments, which
-                // gets extremely messy.
+            if (!(obj->value.lambda.flags & BLOCK_LAMBDA)) {
+                // If the object is not a lambda (that is, it might use its
+                // scope for internally mutable state) then a new object with
+                // the same code is not equivalent; we would need to generate
+                // code which produces the same reference, which is impossible.
+                //
+                // TODO This check is currently a bit too conservative because
+                //  1. The compiler is conservative about setting the
+                //     BLOCK_LAMBDA flag, because it doesn't have as much
+                //     information as we do at runtime. For example, if the
+                //     compiler sees a send to a symbol, it can never prove that
+                //     that send does not use its scope. At runtime, though, we
+                //     know the send will not use the scope as long as the
+                //     symbol is already defined in a parent scope. We can fix
+                //     this by doing a runtime check to update the BLOCK_LAMBDA
+                //     flag if it is not set by the compiler. Ideally, we'd want
+                //     to save the result of this runtime check in the generated
+                //     code, not just in this SymbolicObject, so we can take
+                //     advantage of that information in future optimiztion
+                //     passes.
+                //  2. If this object is in an affine position, then generating
+                //     code to emit a new object with the same code _is_
+                //     equivalent, since there are no other references to this
+                //     object. For example,
+                //          {^scope (^scope msg)} {^sym (^sym{^} value)}
+                //     the second block is not a lambda, because it does use its
+                //     scope whenever it is sent a symbol. However, since the
+                //     first block is affine (actually linear) we can still
+                //     inline the computation of the second block:
+                //          {^sym (^sym{^} value)}
+                //     The new code is equivalent to the original code.
+                return false;
+            }
+
+            // In order to symbolically evaluate a lambda, we need to
+            // symbolically evaluate all of the objects which it captures.
+            for (SymbolicObject *capture = obj->captures;
+                 capture != NULL;
+                 capture = capture->next)
+            {
+                if (!CanSymEvalObject(capture)) {
+                    return false;
+                }
+            }
+
+            return true;
         default:
             return false;
     }
@@ -27,23 +70,59 @@ static inline bool CanSymEvalObject(SymbolicObject *obj)
 
 // If CanSymEvalObject(obj), SymEvalObject() actually produces code which pushes
 // a new object equivalent to `obj` onto the result stack.
-static inline Status SymEvalObject(
-    Optimizer *opt, SymbolicObject *obj, ResultType result_type)
+static Status SymEvalObject(
+    Optimizer *opt,
+    SymbolicObject *obj,
+    ResultType result_type,
+    SymbolicObject **result)
 {
     assert(CanSymEvalObject(obj));
 
-    SymbolicObject *result;
     switch (obj->value_type) {
         case VALUE_SYMBOL: {
             SYMI new_instr = {
                 {INSTR_SYMI, result_type, sizeof(SYMI)}, obj->value.symbol
             };
-            TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, &result));
+            TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, result));
             break;
         }
 
         case VALUE_LAMBDA: {
-            assert(obj->value.lambda.captures == NULL);
+            SymbolicObject *captures = NULL;
+            SymbolicObject *captures_end = NULL;
+            size_t num_captures = 0;
+
+            // Recursively evaluate objects captured by this object. The list of
+            // captures is in order from innermost to outermost, so if we
+            // evaluate them in order, the top of the result stack will end up
+            // being the last object evaluated -- the outermost. This is the
+            // order expected by the runtime interpreter.
+            //
+            // We want the new list of evaluated SymbolicObjects --
+            // `captures` -- to be in in-to-out order, so each newly evaluated
+            // object will be appended to the end of `captures` using
+            // `captures_end`, which will track the last object in the list.
+            for (SymbolicObject *capture = obj->captures;
+                 capture != NULL;
+                 capture = capture->next)
+            {
+                // Recursively evaluate the captured object.
+                SymbolicObject *eval_capture;
+                TRY(SymEvalObject(opt, capture, RESULT_USE, &eval_capture));
+                Optimizer_Pop(opt);
+
+                // Append the newly evaluated object to `captures`.
+                if (captures_end == NULL) {
+                    assert(captures == NULL);
+                    captures = eval_capture;
+                    captures_end = eval_capture;
+                } else {
+                    captures_end->next = eval_capture;
+                    captures_end = eval_capture;
+                }
+
+                ++num_captures;
+            }
 
             if (obj->value.lambda.scope == NULL) {
                 BLOCKI new_instr = {
@@ -52,10 +131,10 @@ static inline Status SymEvalObject(
                     obj->value.lambda.code,
                     obj->value.lambda.flags,
                     obj->value.lambda.specialized,
-                    0,
+                    num_captures,
                 };
                 ++new_instr.code->refcount;
-                TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, &result));
+                TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, result));
             } else {
                  CLOSEI new_instr = {
                     {INSTR_CLOSEI, result_type, sizeof(CLOSEI)},
@@ -64,19 +143,25 @@ static inline Status SymEvalObject(
                     obj->value.lambda.code,
                     obj->value.lambda.flags,
                     obj->value.lambda.specialized,
-                    0,
+                    num_captures,
                 };
                 ++new_instr.code->refcount;
-                TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, &result));
+                TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, result));
             }
+
+            (*result)->captures = captures;
             break;
         }
 
         case VALUE_OBJECT: {
+            if (obj->value.object != NULL) {
+                BlimpObject_Borrow(obj->value.object);
+            }
+
             OBJI new_instr = {
                 {INSTR_OBJI, result_type, sizeof(OBJI)}, obj->value.object
             };
-            TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, &result));
+            TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, result));
             break;
         }
 
@@ -84,7 +169,7 @@ static inline Status SymEvalObject(
             assert(false);
     }
 
-    SymbolicObject_CopyValue(obj, result);
+    SymbolicObject_CopyValue(obj, *result);
         // The entire point of this function is to compute a new object whose
         // value is equivaent to `obj`. So copy the static information about
         // the value from `obj` into the result.
@@ -110,13 +195,13 @@ static Status SymEvalSendTo(
         // Used for constant elision if the receiver is a symbol.
     bool *ret,
         // Does this instruction result in a return?
-    ResultType result_type)
+    ResultType result_type,
+    SymbolicObject **result)
 {
     Blimp *blimp = Optimizer_Blimp(opt);
 
     *ret = !!(flags & SEND_TAIL);
 
-    SymbolicObject *result;
     if (blimp->options.constant_elision) {
         // Try constant elision: while the receiver is a symbol whose value in
         // `scope` is constant, replace it with its value.
@@ -144,19 +229,63 @@ static Status SymEvalSendTo(
         }
     }
 
-    // We need to specify the scope for the send explicitly if...
+    // Try inlining if the receiver is a block object and the message is a pure
+    // value.
+    if (blimp->options.inlining &&
+        Object_Type(receiver) == OBJ_BLOCK &&
+        message->value_type != VALUE_UNKNOWN)
+    {
+        // Create a symbolic stack frame to represent information about this
+        // inline send, which will not be on the call stack at runtime since we
+        // are inlining it.
+        SymbolicFrame frame = {
+            .flags      = BLOCK_DEFAULT,
+            .tail_call  = flags & SEND_TAIL,
+            .scope      = (ScopedObject *)receiver,
+            .use_result = Optimizer_UseResult(opt, result_type),
+            .arg        = message,
+            .captures   = NULL,
+        };
+        if (opt->stack && !opt->stack->tail_call) {
+            // Clear the tail_call flag if we're already inlining a call
+            // which is not in a tail position in its parent procedure.
+            frame.tail_call = false;
+        }
+
+        Optimizer_InlineCall(opt, &frame);
+        Status status = SymEvalProcedure(
+            opt,
+            ((BlockObject *)receiver)->code,
+            (ScopedObject *)receiver,
+            result);
+        Optimizer_InlineReturn(opt);
+
+        if (status == BLIMP_OK) {
+            Optimizer_Delete(opt, message);
+            return BLIMP_OK;
+        }
+    }
+
+    // If we weren't able to inline the send, then we will generate an actual
+    // send instruction. That will be either SENDTO or CALLTO, depending on
+    // whether we need to specify the scope for the send explicitly in the
+    // instruction. We need to specify the scope if...
     if (explicit_scope ||
             // ...we are executing a CALLTO instruction, which already specified
             // an explict scope, or...
         (opt->stack && Object_Type(receiver) == OBJ_SYMBOL &&
-         !ScopedObject_Lookup(
-            scope, (const Symbol *)receiver, NULL, NULL, NULL)
+            // ...we are inlining, and sending a message to a symbol in a scope
+            // which...
+            (opt->stack->scope ||
+                // ...is not the ambient scope, or...
+            !ScopedObject_Lookup(
+                scope, (const Symbol *)receiver, NULL, NULL, NULL)
+                // ...does not already have a value for the symbol. In this
+                // case, the symbol should be initialized in the scope
+                // containing the procedure we're inlining, not in the scope
+                // we're the inlined code will ultimately execute.
+            )
         )
-            // ... we are inlining, and we are sending a message to a symbol
-            // which does not exist in `scope`; that is, we are initializing the
-            // symbol. In this case, the symbol should be initialized in the
-            // scope containing the procedure we're inlining, not in the scope
-            // we're the inlined code will ultimately execute.
     ) {
         // We're going to emit a CALLTO instruction. Figure out which scope to
         // explicitly specify.
@@ -168,7 +297,7 @@ static Status SymEvalSendTo(
         } else {
             // Otherwise, we want to use the scope of the object whose code is
             // being inlined.
-            if (opt->stack->scope == NULL) {
+            if (opt->stack->scope == NULL || opt->stack->closure) {
                 // If we don't know the scope, we can't inline this procedure.
                 return Error(blimp, BLIMP_ERROR);
             }
@@ -177,16 +306,16 @@ static Status SymEvalSendTo(
 
         // Emit the CALLTO.
         CALLTO new_instr = {
-            {INSTR_CALLTO, result_type, sizeof(SENDTO)},
-            *range, flags, ScopedObject_Borrow(call_scope),
-            BlimpObject_Borrow(receiver)
+            {INSTR_CALLTO, result_type, sizeof(CALLTO)},
+            *range, ScopedObject_Borrow(call_scope),
+            BlimpObject_Borrow(receiver), flags
         };
         if (opt->stack && !opt->stack->tail_call) {
             // Clear the tail call bit if the call being inlined is not in a
             // tail position in the overall procedure.
             new_instr.flags &= ~SEND_TAIL;
         }
-        TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, &result));
+        TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, result));
     } else {
         // In the case where the original instruction did not specify an
         // explicit scope and we are not initializing an out-of-scope symbol, we
@@ -194,17 +323,17 @@ static Status SymEvalSendTo(
         // constant elision) receiver.
         SENDTO new_instr = {
             {INSTR_SENDTO, result_type, sizeof(SENDTO)},
-            *range, flags, BlimpObject_Borrow(receiver)
+            *range, BlimpObject_Borrow(receiver), flags
         };
         if (opt->stack && !opt->stack->tail_call) {
             // Clear the tail call bit if the call being inlined is not in a
             // tail position in the overall procedure.
             new_instr.flags &= ~SEND_TAIL;
         }
-        TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, &result));
+        TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, result));
     }
 
-    result->message = message;
+    (*result)->message = message;
 
     return BLIMP_OK;
 }
@@ -226,13 +355,12 @@ static Status SymEvalSend(
         // Used for constant elision if the receiver is a symbol.
     bool *ret,
         // Does this instruction result in a return?
-    ResultType result_type)
+    ResultType result_type,
+    SymbolicObject **result)
 {
     Blimp *blimp = Optimizer_Blimp(opt);
 
     *ret = !!(flags & SEND_TAIL);
-
-    SymbolicObject *result;
 
     // See if we statically know something about the value of the receiver which
     // we can use to generate more efficient code.
@@ -252,7 +380,8 @@ static Status SymEvalSend(
                 flags,
                 scope,
                 ret,
-                result_type));
+                result_type,
+                result));
 
             Optimizer_Delete(opt, receiver);
             return BLIMP_OK;
@@ -271,7 +400,8 @@ static Status SymEvalSend(
                 flags,
                 scope,
                 ret,
-                result_type));
+                result_type,
+                result));
 
             Optimizer_Delete(opt, receiver);
             return BLIMP_OK;
@@ -304,10 +434,11 @@ static Status SymEvalSend(
             SymbolicFrame frame = {
                 .flags      = receiver->value.lambda.flags,
                 .tail_call  = flags & SEND_TAIL,
-                .scope      = NULL,
+                .scope      = receiver->value.lambda.scope,
+                .closure    = true,
                 .use_result = Optimizer_UseResult(opt, result_type),
                 .arg        = message,
-                .captures   = receiver->value.lambda.captures,
+                .captures   = receiver->captures,
             };
             if (opt->stack && !opt->stack->tail_call) {
                 // Clear the tail_call flag if we're already inlining a call
@@ -319,7 +450,7 @@ static Status SymEvalSend(
             Status status = SymEvalProcedure(
                 opt,
                 receiver->value.lambda.code,
-                scope
+                scope,
                     // We evaluate the inlined lambda in the same scope we're
                     // currently in. This would be the parent of the block's
                     // actual scope, but since the lambda will not create any
@@ -335,6 +466,7 @@ static Status SymEvalSend(
                     // procedure actually will (or might) try to define a symbol
                     // which is not already in scope, it will return an error,
                     // and we will bail out of this optimization.
+                result
             );
             Optimizer_InlineReturn(opt);
 
@@ -405,14 +537,14 @@ static Status SymEvalSend(
         // Emit the CALL.
         CALL new_instr = {
             {INSTR_CALL, result_type, sizeof(CALL)},
-            *range, flags, ScopedObject_Borrow(call_scope)
+            *range, ScopedObject_Borrow(call_scope), flags
         };
-        if (!opt->stack->tail_call) {
+        if (opt->stack && !opt->stack->tail_call) {
             // Clear the tail call bit if the call being inlined is not
             // in a tail position in the overall procedure.
             new_instr.flags &= ~SEND_TAIL;
         }
-        TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, &result));
+        TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, result));
     } else {
         // In the normal case, there is no explicit scope encoded in the
         // original instruction, and the scope which should be affected if the
@@ -425,32 +557,37 @@ static Status SymEvalSend(
         if (opt->stack && !opt->stack->tail_call) {
             new_instr.flags &= ~SEND_TAIL;
         }
-        TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, &result));
+        TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, result));
     }
 
-    result->receiver = receiver;
-    result->message = message;
+    (*result)->receiver = receiver;
+    (*result)->message = message;
 
     return BLIMP_OK;
 }
 
-static Status SymEvalInstruction(
-    Optimizer *opt, const Instruction *ip, ScopedObject *scope, bool *ret)
+static Status SymEvalInstructionAndPushResult(
+    Optimizer *opt,
+    const Instruction *ip,
+    ScopedObject *scope,
+    bool *ret,
+    SymbolicObject **result)
 {
+    Blimp *blimp = Optimizer_Blimp(opt);
+
     *ret = false;
 
-    SymbolicObject *result;
     switch (ip->type) {
         case INSTR_SYMI: {
             SYMI *instr = (SYMI *)ip;
 
             // No special optimizations to do for symbol literals; just emit a
             // copy of the instruction.
-            TRY(Optimizer_Emit(opt, ip, &result));
+            TRY(Optimizer_Emit(opt, ip, result));
 
             // We do know something about the result though.
-            result->value_type = VALUE_SYMBOL;
-            result->value.symbol = instr->sym;
+            (*result)->value_type = VALUE_SYMBOL;
+            (*result)->value.symbol = instr->sym;
 
             return BLIMP_OK;
         }
@@ -468,11 +605,11 @@ static Status SymEvalInstruction(
             if (instr->object != NULL) {
                 BlimpObject_Borrow(instr->object);
             }
-            TRY(Optimizer_Emit(opt, ip, &result));
+            TRY(Optimizer_Emit(opt, ip, result));
 
             // We know exactly what the result of this instruction will be.
-            result->value_type = VALUE_OBJECT;
-            result->value.object = instr->object;
+            (*result)->value_type = VALUE_OBJECT;
+            (*result)->value.object = instr->object;
 
             return BLIMP_OK;
         }
@@ -499,28 +636,23 @@ static Status SymEvalInstruction(
                 }
             }
 
+            // Now, if we're inlining, there are one or more objects between the
+            // object we're creating and the object which will be its parent. We
+            // need to capture the argument to the innermost inlined scope, as
+            // well as any messages captured by that scope. These objects are
+            // represented on the inline stack.
+            size_t num_captures = 0;
             if (opt->stack) {
-                // If this instruction appears in a procedure that we're
-                // inlining, we need to capture the messages corresponding to
-                // each frame on the symbolic stack. These correspond to
-                // messages which would have been captured by the object's
-                // parent, but will not be because after inlining the object's
-                // parent is not the scope which immediately contains it
-                // (because the scope got inlined) but rather some ancestor
-                // thereof.
-                //
-                // We'll work from in to out, since the symbolic stack is
-                // ordered in this way. This means each new capture will be
-                // appended to the end of the `captures` list, which is also in
-                // in-to-out order.
-
-                // First capture the message being processed by the innermost
-                // inline frame (which would have been the new object's
-                // immediate parent if not for inlining).
-                SymbolicFrame *frame = opt->stack;
+                // The innermost object we need to capture is the argument to
+                // the current inlined procedure.
                 SymbolicObject *capture;
                 if (instr->flags & BLOCK_CLOSURE) {
-                    TRY(SymEvalObject(opt, frame->arg, RESULT_USE));
+                    // Only capture it if the compiler flags suggest it is going
+                    // to be used.
+                    if (!CanSymEvalObject(opt->stack->arg)) {
+                        return Error(blimp, BLIMP_ERROR);
+                    }
+                    TRY(SymEvalObject(opt, opt->stack->arg, RESULT_USE, &capture));
                 } else {
                     // If the compiler has determined that the new object should
                     // not be closed over its parent message (and hence the
@@ -548,140 +680,94 @@ static Status SymEvalInstruction(
                     captures_end->next = capture;
                 }
                 captures_end = capture;
+                ++num_captures;
 
-                // That takes care of the capture which this object would always
-                // be responsible for, inlining or no: its parent's message.
-                //
-                // Now we also have to capture all objects captured by ancestors
-                // of the new object which have been inlined. Work our way up
-                // the inline stack starting from the innermost frame.
-                size_t num_captures = 1;
-                    // We need to count the number of captures which we push
-                    // onto the result stack. The count starts at 1 because we
-                    // already unconditionally pushed one object onto the stack
-                    // above.
-                while (true) {
-                    for (SymbolicObject *capture = frame->captures;
-                         capture;
-                         capture = capture->next)
-                    {
-                        TRY(SymEvalObject(opt, capture, RESULT_USE));
-                        ++num_captures;
+                // Now capture any objects which are also captured by the
+                // current inlined scope.
+                for (capture = opt->stack->captures;
+                     capture != NULL;
+                     capture = capture->next)
+                {
+                    SymbolicObject *obj;
+                    TRY(SymEvalObject(opt, capture, RESULT_USE, &obj));
+                    Optimizer_Pop(opt);
+                    ++num_captures;
 
-                        SymbolicObject *obj = Optimizer_Pop(opt);
-                        assert(obj->next == NULL);
-                        assert(captures_end != NULL);
-                        captures_end->next = obj;
-                        captures_end = obj;
-                    }
-
-                    if (frame->scope != NULL || frame->up == NULL) {
-                        // If we get to a frame with a scope, we can stop,
-                        // because we will use that scope as the new object's
-                        // parent, and any messages captured farther up the
-                        // stack should already be captured and owned by
-                        // `frame->scope`.
-                        //
-                        // Also, if we've reached the top frame, we must stop,
-                        // and in this case the ambient scope which is on the
-                        // call stack at runtime will serve as the new object's
-                        // parent, fulfilling a similar role as `frame->scope`
-                        // in the first case.
-                        break;
-                    }
-
-                    frame = frame->up;
+                    assert(obj->next == NULL);
+                    assert(captures_end != NULL);
+                    captures_end->next = obj;
+                    captures_end = obj;
                 }
+            }
 
-                // Replace the new block's code with a more optimized version if
-                // one is available.
-                size_t specialized = instr->specialized;
-                Bytecode *code = instr->code;
-                ++code->refcount;
-                    // We take a new reference to the code because it's going to
-                    // be owned by the instruction we emit.
-                Optimizer_ReplaceSubroutine(opt, &code, &specialized);
+            // Determine whether the new object's parent should be the scope
+            // from the call stack at runtime (`parent == NULL`, in which case
+            // we will emit a BLOCKI instruction) or whether it should be a
+            // specific, statically-known scope (in which case we will emit a
+            // SCOPEI instruction).
+            //
+            // In the former case, we need to tell the runtime interpreter
+            // whether it should capture the message currently being processed
+            // by the parent when it reads the parent from the call stack. This
+            // is determined by the `flags` field of the outermost inline
+            // object; that is, the object closest to the parent object in the
+            // lexical hierarchy. That is this object itself, if there are no
+            // scopes on the inline stack. Otherwise, we can get the `flags`
+            // field from the inline stack frame.
+            ScopedObject *parent = NULL;
+            BlockFlags flags = instr->flags;
+            if (opt->stack) {
+                parent = opt->stack->scope;
 
-                if (frame->scope == NULL) {
-                    // As mentioned above, if we didn't find an inline frame
-                    // with an explicit scope, then we have captured all objects
-                    // captured by all frames on the inline stack:
-                    assert(frame->up == NULL);
-                    // Therefore, we can use the scope from the runtime call
-                    // stack as the parent of the new object, and we won't miss
-                    // any captures. The BLOCKI instruciton implicitly uses the
-                    // call stack scope as the parent.
-                    BLOCKI new_instr = {
-                        {INSTR_BLOCKI, ip->result_type, sizeof(BLOCKI)},
-                        instr->msg_name,
-                        code,
-                        frame->flags | BLOCK_LAMBDA,
-                            // Use `frame->flag`, because whether or not we
-                            // capture the message being processed by the
-                            // current frame on the runtime stack should depend
-                            // on the BLOCK_CLOSURE flag from the outermost
-                            // inlined scope.
-                        specialized,
-                        instr->captures + num_captures
-                    };
-                    TRY(Optimizer_Emit(
-                        opt, (Instruction *)&new_instr, &result));
-                } else {
-                    // If we found a frame with an explicit scope, then we use a
-                    // CLOSEI instruction to encode that scope. This instruction
-                    // will not require any information from the runtime call
-                    // stack.
-                    CLOSEI new_instr = {
-                        {INSTR_CLOSEI, ip->result_type, sizeof(CLOSEI)},
-                        ScopedObject_Borrow(frame->scope),
-                        instr->msg_name,
-                        code,
-                        BLOCK_LAMBDA,
-                            // The BLOCK_CLOSURE flag would be ignored for the
-                            // CLOSEI instruction. This is alright, because
-                            // we've explicitly handled all the captures we need
-                            // by
-                            //  1. explicitly capturing the argument to the
-                            //     innermost inline scope, and
-                            //  2. capturing all captures of all inline scopes,
-                            //     which include the arguments to the inline
-                            //     scope above each scope.
-                        specialized,
-                        instr->captures + num_captures
-                    };
-                    TRY(Optimizer_Emit(
-                        opt, (Instruction *)&new_instr, &result));
-                    result->value.lambda.scope = frame->scope;
-                }
+                // Keep all of the flags except BLOCK_CLOSURE the same. The new
+                // BLOCK_CLOSURE flag comes from the stack to reflect that the
+                // scope in which the new object is a closure is not its
+                // immediate parent (which is inlined) but rather the ultimate
+                // parent of whatever is currently on the inline stack.
+                flags &= ~BLOCK_CLOSURE;
+                flags |= (opt->stack->flags & BLOCK_CLOSURE);
+            }
+
+            // Replace the new block's code with a more optimized version if
+            // one is available.
+            size_t specialized = instr->specialized;
+            Bytecode *code = instr->code;
+            ++code->refcount;
+                // We take a new reference to the code because it's going to
+                // be owned by the instruction we emit.
+            Optimizer_ReplaceSubroutine(opt, &code, &specialized);
+
+            if (parent == NULL) {
+                // If the parent of the new object is supposed to be the scope
+                // from the runtime call stack, emit a BLOCKI instruction.
+                BLOCKI new_instr = {
+                    {INSTR_BLOCKI, ip->result_type, sizeof(BLOCKI)},
+                    instr->msg_name, code, flags, specialized,
+                    instr->captures + num_captures
+                };
+                TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, result));
             } else {
-                // If we're not inlining, we don't have to worry about capturing
-                // messages from the inline stack. We will emit a BLOCK
-                // instruction which is very nearly a copy of the original
-                // instruction:
-                BLOCKI new_instr = *instr;
-
-                // Except we replace the bytecode with a more optimized version
-                // if one is available.
-                ++new_instr.code->refcount;
-                Optimizer_ReplaceSubroutine(
-                    opt, &new_instr.code, &new_instr.specialized);
-
-                TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, &result));
+                // Otherwise, use the statically-known parent object to emit a
+                // CLOSEI instruction.
+                CLOSEI new_instr = {
+                    {INSTR_CLOSEI, ip->result_type, sizeof(CLOSEI)},
+                    ScopedObject_Borrow(parent), instr->msg_name, code,
+                    flags, specialized, instr->captures + num_captures
+                };
+                TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, result));
             }
 
             // We have some static information about the value of this BLOCKI or
             // CLOSEI instruction (for example, we know it's captures and we
             // know what bytecode procedure it references). This can be useful
             // later on for potentially inlining sends to this object.
-            result->captures = captures;
-            if (instr->flags & BLOCK_LAMBDA) {
-                result->value_type = VALUE_LAMBDA;
-                result->value.lambda.msg_name = instr->msg_name;
-                result->value.lambda.code = instr->code;
-                result->value.lambda.flags = instr->flags;
-                result->value.lambda.specialized = instr->specialized;
-                result->value.lambda.captures = captures;
-            }
+            (*result)->captures = captures;
+            (*result)->value_type = VALUE_LAMBDA;
+            (*result)->value.lambda.scope = parent;
+            (*result)->value.lambda.msg_name = instr->msg_name;
+            (*result)->value.lambda.code = instr->code;
+            (*result)->value.lambda.flags = flags;
+            (*result)->value.lambda.specialized = instr->specialized;
 
             return BLIMP_OK;
         }
@@ -709,87 +795,111 @@ static Status SymEvalInstruction(
             ScopedObject_Borrow(instr->scope);
                 // We need to borrow the scope object since both the old and new
                 // instruction will now reference it.
-            TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, &result));
+            TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, result));
 
             // Fill in information about the result.
-            result->captures = captures;
-            if (instr->flags & BLOCK_LAMBDA) {
-                result->value_type = VALUE_LAMBDA;
-                result->value.lambda.scope = instr->scope;
-                result->value.lambda.msg_name = instr->msg_name;
-                result->value.lambda.code = instr->code;
-                result->value.lambda.flags = instr->flags;
-                result->value.lambda.specialized = instr->specialized;
-                result->value.lambda.captures = captures;
-            }
+            (*result)->captures = captures;
+            (*result)->value_type = VALUE_LAMBDA;
+            (*result)->value.lambda.scope = instr->scope;
+            (*result)->value.lambda.msg_name = instr->msg_name;
+            (*result)->value.lambda.code = instr->code;
+            (*result)->value.lambda.flags = instr->flags;
+            (*result)->value.lambda.specialized = instr->specialized;
 
             return BLIMP_OK;
         }
 
         case INSTR_MSG: {
             MSG *instr = (MSG *)ip;
-
-            // The index of the message possibly includes messages which are
-            // captured on the inline stack. So work our way up the stack from
-            // innermost frame to outermost frame counting captures. If we reach
-            // `index` captures, then we have our result. Otherwise, we will be
-            // retrieving a captured message from the scope on the runtime call
-            // stack, with an adjusted index to account for the number of inline
-            // captures.
             SymbolicObject *obj = NULL;
             size_t index = instr->index;
-            ScopedObject *capturing_scope = NULL;
-                // An existing object which captures the desired message, in
-                // case we have to emit a MSGOF instruction.
-            size_t capturing_scope_index = 0;
-                // The offset of indices of messages captured by
-                // `capturing_scope` relative to their indices in the innermost
-                // scope.
-            for (SymbolicFrame *frame = opt->stack; frame; frame = frame->up) {
-                // If `index` is 0, the argument is the object we're looking
-                // for.
+
+            // Messages relative to the current scope can be represented in
+            // several places. The innermost message (index 0) is the argument
+            // to the current procedure, which is either represented in
+            // `opt->stack->arg` if we are inlining or on the call stack at
+            // runtime if we're not inlining. Subsequent messages may be
+            // captured by the inline stack frame, if there is one. And then the
+            // outermost messages are captured by either the statically-known
+            // scope object in which we are inlining, or the scope which will be
+            // represented on the runtime stack if we are not inlining.
+            //
+            // We will attempt to create a symbolic representation of the object
+            // corresponding to `instr->index` by searching all of these
+            // possible locations from innermost to outermost, updating `index`
+            // as we go. Once we find a symbolic representation, we will try a
+            // variety of strategies to evaluate it, such as recomputing an
+            // equivalent value if possible using SymEvalObject, or emitting a
+            // MSG or MSGOF instruction to look up the object at runtime if
+            // SymEvalObject fails.
+            //
+            // We begin by looking at the argument to the procedure currently
+            // being inlined, if there is one.
+            if (opt->stack) {
                 if (index == 0) {
-                    obj = frame->arg;
-                    break;
-                }
-
-                // Otherwise just move one message farther up the stack.
-                assert(capturing_scope == NULL);
-                --index;
-                ++capturing_scope_index;
-
-                if (capturing_scope == NULL && frame->scope != NULL) {
-                    capturing_scope = frame->scope;
-                        // If we haven't found the message we're looking for
-                        // yet, then it must be captured by this frame or an
-                        // ancestor of it. Therefore, if this frame has a scope,
-                        // we can potentially use that scope to look up the
-                        // message by an adjusted index, if we end up being
-                        // unable to find the message on the inline stack.
-                }
-
-                // Search each message captured by this frame.
-                for (SymbolicObject *capture = frame->captures;
-                     capture != NULL;
-                     capture = capture->next)
-                {
-                    if (index == 0) {
-                        // If `index` gets to 0, we've found our captured
-                        // message.
-                        obj = capture;
-                        break;
-                    }
-
-                    // Otherwise, move one message farther up the stack.
+                    // If `index` is 0, we've found our object.
+                    obj = opt->stack->arg;
+                } else {
+                    // Otherwise, decrement `index` to account for the fact that
+                    // we are skipping this capture.
                     --index;
-                    if (capturing_scope == NULL) ++capturing_scope_index;
+
+                    // Next, we'll search through the objects captured by this
+                    // stack frame. This list is already in the correct,
+                    // in-to-out order.
+                    for (SymbolicObject *capture = opt->stack->captures;
+                         capture != NULL;
+                         capture = capture->next)
+                    {
+                        if (index == 0) {
+                            obj = capture;
+                            break;
+                        }
+                        --index;
+                    }
                 }
             }
 
-            if (obj == NULL) {
-                // If we didn't find the index on the inline stack, get it from
-                // the captures of the out-of-line scope.
+            if (obj != NULL) {
+                // If we found our object in the search of the inline frame,
+                // then due to inlining this object is not captured by the scope
+                // in which this code will execute, so we cannot compute it
+                // using a MSG or MSGOF instruction. Instead, we only have two
+                // choices: either we generate code which computes a new object
+                // with an equivalent value...
+                if (CanSymEvalObject(obj)) {
+                    return SymEvalObject(opt, obj, ip->result_type, result);
+                }
+
+                // ...or we emit a ghost object, with no code to generate it at
+                // runtime, and hope that downstream optimizations are able to
+                // eliminate the ghost object completely.
+                TRY(Optimizer_EmitGhost(opt, ip->result_type, result));
+                SymbolicObject_CopyValue(obj, *result);
+                return BLIMP_OK;
+            }
+
+            // If we didn't find the object on the inline stack frame above,
+            // then it is captured by our parent scope. Our parent is either
+            // stored on the inline stack, or it is the ambient scope object
+            // which will be stored in the call stack at runtime.
+            ScopedObject *parent = NULL;
+            if (opt->stack) {
+                parent = opt->stack->scope;
+            }
+
+            if (parent == NULL) {
+                // If the parent scope is the ambient scope, get a symbolic
+                // representation of the `index`th ambient message from the
+                // optimizer state.
                 obj = Optimizer_GetMessage(opt, index);
+            } else {
+                // Otherwise, the parent is statically known, so we can look up
+                // it's `index`th captured message directly.
+                Ref *ref = DBMap_Resolve(&parent->captures, index);
+                assert(ref != NULL);
+                assert(ref->to != NULL);
+                TRY(Optimizer_SymbolizeObject(opt, ref->to, &obj));
             }
 
             // Try various strategies to evaluate `obj`.
@@ -797,51 +907,27 @@ static Status SymEvalInstruction(
                 // If we know the value of `obj`, just ignore the whole message
                 // index business altogether and generate code which produces
                 // and equivalent value.
-                return SymEvalObject(opt, obj, ip->result_type);
-            } else if (capturing_scope != NULL) {
+                return SymEvalObject(opt, obj, ip->result_type, result);
+            } else if (parent != NULL) {
                 // If we have a scope which we know captures the message we're
                 // looking for, emit a MSGOF instruction to retrieve the message
                 // from that scope.
-                assert(capturing_scope_index <= instr->index);
                 MSGOF new_instr = {
                     {INSTR_MSGOF, ip->result_type, sizeof(MSGOF)},
-                    ScopedObject_Borrow(capturing_scope),
-                    instr->index - capturing_scope_index
-                        // The index is offset by the difference between indices
-                        // in the current scope and indices in the capturing
-                        // scope.
+                    ScopedObject_Borrow(parent), index
                 };
                 TRY(Optimizer_Emit(
-                    opt, (Instruction *)&new_instr, &result));
-            } else if (opt->stack == NULL || index != 0) {
-                // If we're not inlining, or if `index` refers to a message
-                // which is not on the inline stack, then get it from the scope
-                // on the runtime call stack.
+                    opt, (Instruction *)&new_instr, result));
+            } else {
+                // Otherwise, the desired object is captured by the scope on the
+                // runtime call stack.
                 MSG new_instr = {
                     {INSTR_MSG, ip->result_type, sizeof(MSG)}, index
                 };
-                TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, &result));
-            } else {
-                // Finally, if the message we want is on the inline stack, we
-                // can't retrieve it using a MSG or MSGOF instruction. Since we
-                // also couldn't evaluate the message to produce an equivalent
-                // object, we are stuck. We cannot generate code which is
-                // equivalent to this MSG instruction.
-                //
-                // However, we can try emitting a ghost object. Since we likely
-                // know something about the value of this object, downstream
-                // optimizations may be able to optimize it away entirely, and
-                // then the fact that we can't evaluate this MSG instruction
-                // inline won't matter.
-                //
-                // If we fail to optimize away this ghost object later, the
-                // worst that will happen is we will abandon the idea of
-                // inlining this procedure and generate code for an out-of-line
-                // send instead.
-                TRY(Optimizer_EmitGhost(opt, ip->result_type, &result));
+                TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, result));
             }
 
-            SymbolicObject_CopyValue(obj, result);
+            SymbolicObject_CopyValue(obj, *result);
                 // Whatever method we used to evaluate the object, the new
                 // object has the same value as the old object.
             return BLIMP_OK;
@@ -850,8 +936,18 @@ static Status SymEvalInstruction(
         case INSTR_MSGOF: {
             MSGOF *instr = (MSGOF *)ip;
 
+            // Emit a copy of the MSGOF instruction.
             ScopedObject_Borrow(instr->scope);
-            TRY(Optimizer_Emit(opt, ip, &result));
+            TRY(Optimizer_Emit(opt, ip, result));
+
+            // We should be able to statically determine which captured object
+            // is represented by this instruction, since we have access to the
+            // capturing object. Record that information with the result.
+            Ref *ref = DBMap_Resolve(&instr->scope->captures, instr->index);
+            if (ref != NULL) {
+                (*result)->value_type = VALUE_OBJECT;
+                (*result)->value.object = ref->to;
+            }
 
             return BLIMP_OK;
         }
@@ -871,7 +967,8 @@ static Status SymEvalInstruction(
                 instr->flags,
                 scope,
                 ret,
-                ip->result_type);
+                ip->result_type,
+                result);
         }
 
         case INSTR_CALL: {
@@ -889,7 +986,8 @@ static Status SymEvalInstruction(
                 instr->flags,
                 instr->scope,
                 ret,
-                ip->result_type);
+                ip->result_type,
+                result);
         }
 
         case INSTR_SENDTO: {
@@ -904,7 +1002,8 @@ static Status SymEvalInstruction(
                 instr->flags,
                 scope,
                 ret,
-                ip->result_type);
+                ip->result_type,
+                result);
         }
 
         case INSTR_CALLTO: {
@@ -919,7 +1018,8 @@ static Status SymEvalInstruction(
                 instr->flags,
                 instr->scope,
                 ret,
-                ip->result_type);
+                ip->result_type,
+                result);
         }
 
         case INSTR_RET: {
@@ -932,20 +1032,43 @@ static Status SymEvalInstruction(
                 return BLIMP_OK;
             }
 
-            return Optimizer_Emit(opt, ip, &result);
+            return Optimizer_Emit(opt, ip, result);
         }
 
         case INSTR_NOP: {
-            return Optimizer_Emit(opt, ip, &result);
+            return Optimizer_Emit(opt, ip, result);
         }
     }
 
     assert(false);
-    return Error(Optimizer_Blimp(opt), BLIMP_ERROR);
+    return Error(blimp, BLIMP_ERROR);
+}
+
+static Status SymEvalInstruction(
+    Optimizer *opt,
+    const Instruction *ip,
+    ScopedObject *scope,
+    bool *ret,
+    SymbolicObject **result_ptr)
+{
+    SymbolicObject *result = NULL;
+    TRY(SymEvalInstructionAndPushResult(opt, ip, scope, ret, &result));
+    if (result != NULL) {
+        *result_ptr = result;
+        if (!Optimizer_UseResult(opt, ip->result_type)) {
+            // If the result object is unused, see if we can delete the
+            // instructions which generate it.
+            Optimizer_Delete(opt, result);
+        }
+    }
+    return BLIMP_OK;
 }
 
 static Status SymEvalProcedure(
-    Optimizer *opt, Bytecode *code, ScopedObject *scope)
+    Optimizer *opt,
+    Bytecode *code,
+    ScopedObject *scope,
+    SymbolicObject **result)
 {
     Blimp *blimp = Optimizer_Blimp(opt);
     OptimizerCheckpoint checkpoint = Optimizer_SaveCheckpoint(opt);
@@ -957,7 +1080,7 @@ static Status SymEvalProcedure(
          ip = Instruction_Next(ip))
     {
         bool ret;
-        if (SymEvalInstruction(opt, ip, scope, &ret) != BLIMP_OK) {
+        if (SymEvalInstruction(opt, ip, scope, &ret, result) != BLIMP_OK) {
             Optimizer_RestoreCheckpoint(opt, checkpoint);
             return Reraise(blimp);
         }
@@ -998,7 +1121,8 @@ Status OptimizeForScope(
         replace_subroutine,
         optimized_subroutine,
         specialized));
-    Status status = SymEvalProcedure(opt, code, scope);
+    SymbolicObject *result;
+    Status status = SymEvalProcedure(opt, code, scope, &result);
     Optimizer_Pop(opt);
         // Clean up the final result from the result stack.
     Optimizer_End(opt, optimized);
@@ -1018,7 +1142,8 @@ Status Optimize(
         depth,
         Bytecode_Expr(code),
         NULL, NULL, 0));
-    Status status = SymEvalProcedure(opt, code, scope);
+    SymbolicObject *result;
+    Status status = SymEvalProcedure(opt, code, scope, &result);
     Optimizer_Pop(opt);
         // Clean up the final result from the result stack.
     Optimizer_End(opt, optimized);

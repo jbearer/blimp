@@ -63,7 +63,7 @@ static inline Status Emit_SENDTO(
 {
     SENDTO instr = {
         {INSTR_SENDTO, result_type, sizeof(instr)},
-        range, flags, receiver
+        range, receiver, flags
     };
 
     return Bytecode_Append(code, (Instruction *)&instr);
@@ -150,9 +150,12 @@ static Status CompileStmt(
             TRY(CompileProcedure(
                 blimp, stmt->block.code, depth + 1, &block_code));
 
-            BlockFlags flags = BLOCK_LAMBDA;
+            BlockFlags flags = BLOCK_DEFAULT;
             if (Expr_CapturesParentsMessage(stmt) != NO) {
                 flags |= BLOCK_CLOSURE;
+            }
+            if (Block_UsesScope(stmt) == NO) {
+                flags |= BLOCK_LAMBDA;
             }
 
             TRY(Emit_BLOCKI(
@@ -172,7 +175,8 @@ static Status CompileStmt(
                         blimp, stmt->send.receiver, RESULT_IGNORE, depth, code));
                 }
             } else {
-                TRY(CompileExpr(blimp, stmt->send.receiver, RESULT_USE, depth, code));
+                TRY(CompileExpr(
+                    blimp, stmt->send.receiver, RESULT_USE, depth, code));
             }
 
             // Emit instructions which cause the message to be the top object on

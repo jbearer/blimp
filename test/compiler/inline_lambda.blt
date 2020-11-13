@@ -118,4 +118,13 @@ ref (
     } foo
 );
 
+# Applying a lambda which uses its scope. This should prevent inlining, but
+# should still work correctly.
+!expect_eq foo (
+    {^x
+        local{^} {(^x)};
+        local[]
+    } foo
+);
+
 .

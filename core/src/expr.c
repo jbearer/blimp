@@ -173,7 +173,11 @@ void PrintClosure(FILE *f, const Expr *expr, DeBruijnMap *scopes)
             case EXPR_MSG: {
                 const Symbol *msg_name = DBMap_Resolve(scopes, expr->msg.index);
                 fputc('^', f);
-                fputs(msg_name->name, f);
+                if (msg_name) {
+                    fputs(msg_name->name, f);
+                } else {
+                    fputc('?', f);
+                }
                 break;
             }
             default:

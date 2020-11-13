@@ -2005,8 +2005,12 @@ bool ScopedObject_Lookup(
         return false;
     }
 
-    *ret = ref->to;
-    *is_const = ref->is_const;
+    if (ret != NULL) {
+        *ret = ref->to;
+    }
+    if (is_const != NULL) {
+        *is_const = ref->is_const;
+    }
     return true;
 }
 
