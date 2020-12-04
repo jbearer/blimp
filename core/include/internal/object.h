@@ -86,10 +86,11 @@
 #ifndef BLIMP_OBJECT_H
 #define BLIMP_OBJECT_H
 
+#include "hash_map.h"
+
 #include "internal/bit_vector.h"
 #include "internal/common.h"
 #include "internal/debruijn.h"
-#include "internal/hash_map.h"
 #include "internal/bytecode.h"
 #include "internal/pool_alloc.h"
 #include "internal/random.h"

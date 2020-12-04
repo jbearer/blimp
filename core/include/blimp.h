@@ -661,6 +661,7 @@ BlimpStatus Blimp_GetSymbol(
     Blimp *blimp, const char *name, const BlimpSymbol **symbol);
 
 const char *BlimpSymbol_GetName(const BlimpSymbol *symbol);
+size_t BlimpSymbol_Hash(const BlimpSymbol *symbol);
 
 typedef struct BlimpExpr BlimpExpr;
 

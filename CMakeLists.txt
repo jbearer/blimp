@@ -15,6 +15,7 @@ if (USE_POSIX08)
 endif()
 
 enable_testing()
+add_subdirectory(utils)
 add_subdirectory(core)
 add_subdirectory(system)
 add_subdirectory(blimp)

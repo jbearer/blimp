@@ -16,6 +16,7 @@ endfunction()
 
 system_lib(io)
 system_lib(debug)
+system_lib(types)
 
 # Build API documentation.
 if (DOXYGEN_FOUND)

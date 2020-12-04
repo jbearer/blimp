@@ -18,10 +18,10 @@
 #ifndef BLIMP_HASH_MAP_H
 #define BLIMP_HASH_MAP_H
 
+#include <stdbool.h>
 #include <string.h>
 
-#include "internal/common.h"
-#include "internal/error.h"
+#include "blimp.h"
 
 typedef struct HashMapEntry HashMapEntry;
 
@@ -115,7 +115,7 @@ typedef struct {
  *      map. Passing NULL here is the same as passing
  *      `&HASH_MAP_DEFAULT_OPTIONS`.
  */
-PRIVATE Status HashMap_Init(
+BlimpStatus HashMap_Init(
     Blimp *blimp,
     HashMap *map,
     size_t key_size,
@@ -124,7 +124,7 @@ PRIVATE Status HashMap_Init(
     HashFunc hash_func,
     const HashMapOptions *options);
 
-PRIVATE void HashMap_Destroy(HashMap *map);
+void HashMap_Destroy(HashMap *map);
 
 static inline size_t HashMap_Size(const HashMap *map)
 {
@@ -141,7 +141,7 @@ static inline HashMapEntry *HashMap_Begin(const HashMap *map)
     return map->first;
 }
 
-PRIVATE HashMapEntry *HashMap_Next(const HashMap *map, HashMapEntry *it);
+HashMapEntry *HashMap_Next(const HashMap *map, HashMapEntry *it);
 
 static inline HashMapEntry *HashMap_End(const HashMap *map)
 {
@@ -202,10 +202,10 @@ static inline HashMapEntry *HashMap_End(const HashMap *map)
  *      HashMap_Emplace and either HashMap_CommitEmplace or
  *      HashMap_AbortEmplace.
  */
-PRIVATE Status HashMap_Emplace(
+BlimpStatus HashMap_Emplace(
     HashMap *map, const void *key, HashMapEntry **entry, bool *created);
-PRIVATE void HashMap_CommitEmplace(HashMap *map, HashMapEntry *entry);
-PRIVATE void HashMap_AbortEmplace(HashMap *map, HashMapEntry *entry);
+void HashMap_CommitEmplace(HashMap *map, HashMapEntry *entry);
+void HashMap_AbortEmplace(HashMap *map, HashMapEntry *entry);
 
 /**
  * \brief Get references to the key and value of a map entry.
@@ -220,7 +220,7 @@ PRIVATE void HashMap_AbortEmplace(HashMap *map, HashMapEntry *entry);
  * consistency constraints of the map. This is not checked. You may do whatever
  * you want with `value`.
  */
-PRIVATE void HashMap_GetEntry(
+void HashMap_GetEntry(
     const HashMap *map,
     HashMapEntry *entry,
     void **key,
@@ -247,11 +247,13 @@ static inline void *HashMap_GetValue(const HashMap *map, HashMapEntry *entry)
  * If `*key` does not already exist in the map, a new entry will be create. If
  * it does exist, the value there will be replaced by `*value`.
  */
-static inline Status HashMap_Update(
+static inline BlimpStatus HashMap_Update(
     HashMap *map, const void *key, const void *value)
 {
     HashMapEntry *entry;
-    TRY(HashMap_Emplace(map, key, &entry, NULL));
+    if (HashMap_Emplace(map, key, &entry, NULL) != BLIMP_OK) {
+        return Blimp_Reraise(map->blimp);
+    }
     memcpy(HashMap_GetValue(map, entry), value, map->value_size);
     HashMap_CommitEmplace(map, entry);
     return BLIMP_OK;
@@ -266,7 +268,7 @@ static inline Status HashMap_Update(
  *
  * If the given key does not exist in the map, the result is `NULL`.
  */
-PRIVATE HashMapEntry *HashMap_FindEntry(const HashMap *map, const void *key);
+HashMapEntry *HashMap_FindEntry(const HashMap *map, const void *key);
 
 /**
  * \brief Get a pointer to the value associated with `key`.
@@ -294,8 +296,8 @@ static inline void *HashMap_Find(const HashMap *map, const void *key)
  * entry with the given key was found. If the result is `false`, the contents of
  * `value` are undefined.
  */
-PRIVATE bool HashMap_Remove(HashMap *map, const void *key, void *value);
+bool HashMap_Remove(HashMap *map, const void *key, void *value);
 
-PRIVATE void HashMap_Clear(HashMap *map);
+void HashMap_Clear(HashMap *map);
 
 #endif

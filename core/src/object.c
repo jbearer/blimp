@@ -1,7 +1,6 @@
 #include "internal/blimp.h"
 #include "internal/compile.h"
 #include "internal/expr.h"
-#include "internal/hash_map.h"
 #include "internal/pool_alloc.h"
 #include "internal/symbol.h"
 
