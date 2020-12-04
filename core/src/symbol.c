@@ -5,8 +5,10 @@
 #include "internal/error.h"
 #include "internal/symbol.h"
 
-static size_t StringHash(const char **str)
+static size_t StringHash(const char **str, void *arg)
 {
+    (void)arg;
+
     // FNV1a hash function.
 
     static const size_t offset = 14695981039346656037ull;
@@ -19,18 +21,21 @@ static size_t StringHash(const char **str)
     return hash;
 }
 
-static bool StringEq(const char **str1, const char **str2)
+static bool StringEq(const char **str1, const char **str2, void *arg)
 {
+    (void)arg;
     return strcmp(*str1, *str2) == 0;
 }
 
-PRIVATE size_t SymbolHash(const Symbol **symbol)
+PRIVATE size_t SymbolHash(const Symbol **symbol, void *arg)
 {
+    (void)arg;
     return (*symbol)->hash;
 }
 
-bool SymbolEq(const Symbol **sym1, const Symbol **sym2)
+bool SymbolEq(const Symbol **sym1, const Symbol **sym2, void *arg)
 {
+    (void)arg;
     return *sym1 == *sym2;
 }
 

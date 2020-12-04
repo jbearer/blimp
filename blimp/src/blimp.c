@@ -462,7 +462,6 @@ static void ReplaceLastHistoryEntry(const char *line)
 // The memory pointed to by `input` must be freed by the caller, using free().
 static BlimpStatus AppendLine(Blimp *blimp, char **input, const char *line)
 {
-    size_t line_len = strlen(line);
     size_t input_len = 0;
     if (*input != NULL) {
         // Append a newline character to `*input`. This newline overwrites the
@@ -474,13 +473,13 @@ static BlimpStatus AppendLine(Blimp *blimp, char **input, const char *line)
     }
 
     // Resize the buffer to account for `line` and a trailing null character.
-    *input = realloc(*input, input_len + line_len + 1);
+    *input = realloc(*input, input_len + strlen(line) + 1);
     if (*input == NULL) {
         return Blimp_Error(blimp, BLIMP_OUT_OF_MEMORY);
     }
 
     // Append `line`.
-    strncpy(*input + input_len, line, line_len + 1);
+    strcpy(*input + input_len, line);
     return BLIMP_OK;
 }
 
