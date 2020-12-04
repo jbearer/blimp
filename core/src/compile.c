@@ -1,3 +1,4 @@
+#include "internal/compile.h"
 #include "internal/expr.h"
 #include "internal/instruction.h"
 
@@ -21,11 +22,11 @@ static inline Status Emit_BLOCKI(
     ResultType result_type,
     const Symbol *msg_name,
     Bytecode *block_code,
-    bool capture_parents_message)
+    BlockFlags flags)
 {
     BLOCKI instr = {
         {INSTR_BLOCKI, result_type, sizeof(instr)},
-        msg_name, block_code, capture_parents_message, 0
+        msg_name, block_code, flags, 0, 0
     };
 
     return Bytecode_Append(code, (Instruction *)&instr);
@@ -62,7 +63,7 @@ static inline Status Emit_SENDTO(
 {
     SENDTO instr = {
         {INSTR_SENDTO, result_type, sizeof(instr)},
-        range, flags, receiver
+        range, receiver, flags
     };
 
     return Bytecode_Append(code, (Instruction *)&instr);
@@ -71,7 +72,7 @@ static inline Status Emit_SENDTO(
 static inline Status Emit_RET(Bytecode *code)
 {
     RET instr = {
-        {INSTR_RET, RESULT_USE, sizeof(instr)}
+        {INSTR_RET, RESULT_IGNORE, sizeof(instr)}
     };
 
     return Bytecode_Append(code, (Instruction *)&instr);
@@ -82,20 +83,30 @@ static inline Status Emit_RET(Bytecode *code)
 //
 
 static Status CompileExpr(
-    Blimp *blimp,Expr *expr, ResultType result_type, Bytecode *code);
+    Blimp *blimp,
+    Expr *expr,
+    ResultType result_type,
+    size_t depth,
+    Bytecode *code);
 
 static Status CompileStmt(
     Blimp *blimp,
     Expr *expr,
     ResultType result_type,
     SendFlags flags,
+    size_t depth,
     bool *returned,
     Bytecode *code);
 
-static Status CompileProcedure(Blimp *blimp, Expr *expr, Bytecode *code);
+static Status CompileProcedure(
+    Blimp *blimp, Expr *expr, size_t depth, Bytecode **code);
 
 static Status CompileExpr(
-    Blimp *blimp, Expr *expr, ResultType result_type, Bytecode *code)
+    Blimp *blimp,
+    Expr *expr,
+    ResultType result_type,
+    size_t depth,
+    Bytecode *code)
 {
     for (Expr *stmt = expr; stmt; stmt = stmt->next) {
         ResultType stmt_result_type = stmt->next ? RESULT_IGNORE : result_type;
@@ -103,7 +114,7 @@ static Status CompileExpr(
             // sequence is ignored, so if there is another statement after this
             // one, we can ignore the result.
         TRY(CompileStmt(
-            blimp, stmt, stmt_result_type, SEND_DEFAULT, NULL, code));
+            blimp, stmt, stmt_result_type, SEND_DEFAULT, depth, NULL, code));
     }
 
     return BLIMP_OK;
@@ -114,6 +125,7 @@ static Status CompileStmt(
     Expr *stmt,
     ResultType result_type,
     SendFlags flags,
+    size_t depth,
     bool *returned,
     Bytecode *code)
 {
@@ -135,20 +147,19 @@ static Status CompileStmt(
             // Compile the body of the block into its own separate
             // procedure.
             Bytecode *block_code;
-            TRY(Bytecode_New(blimp, stmt->block.code, &block_code));
-            if (CompileProcedure(blimp, stmt->block.code, block_code)
-                    != BLIMP_OK)
-            {
-                BlimpBytecode_Free(block_code);
-                return Reraise(blimp);
+            TRY(CompileProcedure(
+                blimp, stmt->block.code, depth + 1, &block_code));
+
+            BlockFlags flags = BLOCK_DEFAULT;
+            if (Expr_CapturesParentsMessage(stmt) != NO) {
+                flags |= BLOCK_CLOSURE;
+            }
+            if (Block_UsesScope(stmt) == NO) {
+                flags |= BLOCK_LAMBDA;
             }
 
             TRY(Emit_BLOCKI(
-                code,
-                result_type,
-                stmt->block.msg_name,
-                block_code,
-                Expr_CapturesParentsMessage(stmt) != NO));
+                code, result_type, stmt->block.msg_name, block_code, flags));
             break;
         }
         case EXPR_MSG:
@@ -161,10 +172,11 @@ static Status CompileStmt(
             {
                 if (Expr_IsPure(stmt->send.receiver) != YES) {
                     TRY(CompileExpr(
-                        blimp, stmt->send.receiver, RESULT_IGNORE, code));
+                        blimp, stmt->send.receiver, RESULT_IGNORE, depth, code));
                 }
             } else {
-                TRY(CompileExpr(blimp, stmt->send.receiver, RESULT_USE, code));
+                TRY(CompileExpr(
+                    blimp, stmt->send.receiver, RESULT_USE, depth, code));
             }
 
             // Emit instructions which cause the message to be the top object on
@@ -172,7 +184,7 @@ static Status CompileStmt(
             // can determine that the receiver is a symbol literal, in which
             // case we wil optimize by setting the receiver object statically in
             // a SENDTO instruction.
-            TRY(CompileExpr(blimp, stmt->send.message, RESULT_USE, code));
+            TRY(CompileExpr(blimp, stmt->send.message, RESULT_USE, depth, code));
 
             if (sym_receiver == NULL) {
                 // The SEND instruction then operates implicitly on the top two
@@ -198,8 +210,12 @@ static Status CompileStmt(
     return BLIMP_OK;
 }
 
-static Status CompileProcedure(Blimp *blimp, Expr *expr, Bytecode *code)
+static Status CompileProcedure(
+    Blimp *blimp, Expr *expr, size_t depth, Bytecode **optimized)
 {
+    Bytecode *code;
+    TRY(Bytecode_New(blimp, expr, &code));
+
     for (Expr *stmt = expr; stmt != NULL; stmt = stmt->next) {
         SendFlags flags = SEND_DEFAULT;
         if (stmt->next == NULL && blimp->options.tail_call_elimination) {
@@ -210,135 +226,38 @@ static Status CompileProcedure(Blimp *blimp, Expr *expr, Bytecode *code)
             stmt->next == NULL ? RESULT_INHERIT : RESULT_IGNORE;
 
         bool returned;
-        TRY(CompileStmt(blimp, stmt, result_type, flags, &returned, code));
+        if (CompileStmt(blimp, stmt, result_type, flags, depth, &returned, code)
+                != BLIMP_OK)
+        {
+            BlimpBytecode_Free(code);
+            return Reraise(blimp);
+        }
 
         if (stmt->next == NULL && !returned) {
-            TRY(Emit_RET(code));
+            if (Emit_RET(code) != BLIMP_OK) {
+                BlimpBytecode_Free(code);
+                return Reraise(blimp);
+            }
         }
     }
 
+    // Send the generated code through the optimizer, and return the new,
+    // optimized procedure.
+    if (Optimize(
+            code, (ScopedObject *)blimp->global, depth, optimized)
+        != BLIMP_OK)
+    {
+        BlimpBytecode_Free(code);
+        return Reraise(blimp);
+    }
+
+    BlimpBytecode_Free(code);
+        // Now that we're returning `optimized`, we're done with `code`.
     return BLIMP_OK;
 }
 
 Status BlimpExpr_Compile(Blimp *blimp, Expr *expr, Bytecode **code)
 {
     TRY(Expr_Analyze(blimp, expr));
-    TRY(Bytecode_New(blimp, expr, code));
-
-    if (CompileProcedure(blimp, expr, *code) != BLIMP_OK) {
-        BlimpBytecode_Free(*code);
-        return Reraise(blimp);
-    }
-
-    return BLIMP_OK;
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// Bytecode optimizer
-//
-
-static Status OptimizeInstructionForScope(
-    Blimp *blimp,
-    const Instruction *ip,
-    ScopedObject *scope,
-    Bytecode *replace_subroutine,
-    Bytecode *optimized_subroutine,
-    size_t specialized,
-    Bytecode *optimized)
-{
-    switch (ip->type) {
-        case INSTR_BLOCKI: {
-            BLOCKI *instr = (BLOCKI *)ip;
-            if (instr->code == replace_subroutine) {
-                BLOCKI new_instr = *instr;
-
-                ++optimized_subroutine->refcount;
-                new_instr.code = optimized_subroutine;
-                new_instr.specialized = specialized;
-
-                if (Bytecode_Append(
-                        optimized, (Instruction *)&new_instr) != BLIMP_OK)
-                {
-                    BlimpBytecode_Free(optimized_subroutine);
-                    return Reraise(blimp);
-                }
-            } else {
-                ++instr->code->refcount;
-                if (Bytecode_Append(optimized, ip) != BLIMP_OK) {
-                    BlimpBytecode_Free(instr->code);
-                    return Reraise(blimp);
-                }
-            }
-
-            break;
-        }
-
-        case INSTR_SENDTO: {
-            SENDTO *instr = (SENDTO *)ip;
-            SENDTO new_instr = *instr;
-
-            BlimpObject_Borrow(new_instr.receiver);
-
-            bool is_const;
-            ScopedObject *owner;
-            Object *new_receiver;
-            while (
-                Object_Type(new_instr.receiver) == OBJ_SYMBOL &&
-                ScopedObject_Lookup(
-                    scope,
-                    (const Symbol *)new_instr.receiver,
-                    &new_receiver,
-                    &owner,
-                    &is_const) &&
-                is_const &&
-                owner->seq <= specialized
-            ) {
-                BlimpObject_Release(new_instr.receiver);
-                new_instr.receiver = BlimpObject_Borrow(new_receiver);
-            }
-
-            TRY(Bytecode_Append(optimized, (Instruction *)&new_instr));
-
-            break;
-        }
-
-        default:
-            TRY(Bytecode_Append(optimized, ip));
-    }
-
-    return BLIMP_OK;
-}
-
-Status OptimizeForScope(
-    Bytecode *code,
-    ScopedObject *scope,
-    Bytecode *replace_subroutine,
-    Bytecode *optimized_subroutine,
-    size_t specialized,
-    Bytecode **optimized)
-{
-    Blimp *blimp = code->blimp;
-
-    TRY(Bytecode_New(blimp, code->expr, optimized));
-
-    for (const Instruction *ip = Bytecode_Begin(code);
-         ip != Bytecode_End(code);
-         ip = Instruction_Next(ip))
-    {
-        if (OptimizeInstructionForScope(
-                blimp,
-                ip,
-                scope,
-                replace_subroutine,
-                optimized_subroutine,
-                specialized,
-                *optimized)
-            != BLIMP_OK)
-        {
-            BlimpBytecode_Free(*optimized);
-            return Reraise(blimp);
-        }
-    }
-
-    return BLIMP_OK;
+    return CompileProcedure(blimp, expr, 0, code);
 }

@@ -1,0 +1,51 @@
+!benchmark{n{^}1000000; inline_lambda_arg_receiver} {
+    {^x
+        ^x foo
+    } {^}
+};
+
+!benchmark{n{^}1000000; inline_lambda_arg_message} {
+    {^x
+        {^} ^x
+    } foo
+};
+
+!benchmark{n{^}1000000; inline_lambda_arg_return} {
+    {^x
+        ^x
+    } foo
+};
+
+!benchmark{n{^}1000000; inline_lambda_closure} {
+    {^x
+        {^y
+            {
+                (^x)
+            }
+        } y
+    } x
+};
+
+!benchmark{n{^}1000000; inline_lambda_nested} {
+    {^x
+        {^y
+            {
+                (^y)
+            }[]
+        } ^x
+    } foo
+};
+
+{
+    const_local{^} {foo};
+    !benchmark{n{^}1000000; inline_const_local} {
+        const_local[]
+    }
+}[];
+
+const_global{^} {foo};
+!benchmark{n{^}1000000; inline_const_global} {
+    const_global[]
+};
+
+.

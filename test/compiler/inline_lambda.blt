@@ -1,0 +1,130 @@
+#: -finlining
+
+ref{^ ^};
+var{ref ^};
+
+# Argument used as receiver.
+#   {^x (^x foo)} {^}
+# to
+#   foo
+!expect_eq foo (
+    {^x
+        ^x foo
+    } {^}
+);
+
+# Argument used as message.
+#   {^x ({^} ^x)} foo
+# to
+#   foo
+!expect_eq foo (
+    {^x
+        {^} ^x
+    } foo
+);
+
+# Argument used as return value.
+#   {^x (^x)} foo
+# to
+#   foo
+!expect_eq foo (
+    {^x
+        ^x
+    } foo
+);
+
+# Argument captured.
+#   {^x {(^x)}} foo
+# to
+#   {foo}
+ref (
+    {^x
+        {(^x)}
+    } foo
+);
+!expect_eq (var[]) foo;
+
+# Apply anonymous block which captures argument.
+#   {^x ({(^x)} {^})} foo
+# to
+#   foo
+!expect_eq foo (
+    {^x
+        {(^x)} {^}
+    } foo
+);
+
+# Scope used (prevents inlining).
+!expect_eq foo (
+    {^x
+        tmp{^} {(^x)};
+        tmp[]
+    } foo
+);
+
+# Inline in tail position.
+ref (
+    {
+        {^x
+            ^x
+        } foo
+    }
+);
+!expect_eq (var[]) foo;
+
+# Inline in a block where the result is ignored.
+ref ({
+    !expect_eq foo (
+        {^x
+            ^x
+        } foo
+    )
+});
+var[];
+
+# Inlining a closure.
+#   {^x ({^y {(^x)}} y)} x
+# to
+#   {x}
+ref (
+    {^x
+        {^y
+            {
+                (^x)
+            }
+        } y
+    } x
+);
+!expect_eq (var[]) x;
+ref (
+    {^x
+        {^y
+            {
+                (^y)
+            }
+        } y
+    } x
+);
+!expect_eq (var[]) y;
+
+# Multiple levels of inlining.
+!expect_eq foo (
+    {^x
+        {^y
+            {
+                (^y)
+            }[]
+        } ^x
+    } foo
+);
+
+# Applying a lambda which uses its scope. This should prevent inlining, but
+# should still work correctly.
+!expect_eq foo (
+    {^x
+        local{^} {(^x)};
+        local[]
+    } foo
+);
+
+.

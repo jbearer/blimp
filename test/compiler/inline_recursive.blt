@@ -1,0 +1,25 @@
+#: -finlining -fconstant-elision
+
+{
+    true{^} {^t{^f ^t[]}};
+    false{^} {^t{^f ^f[]}};
+
+    foo{^} {^if
+        ^if {
+            foo false
+        } {
+            bar
+        }
+    };
+
+    tests{^} {
+        !expect_eq (foo true) bar
+    };
+
+    # Run twice, once to force specialization and again to run the optimized
+    # code.
+    tests[];
+    tests[];
+
+    .
+}[]

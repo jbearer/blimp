@@ -1,8 +1,9 @@
 #ifndef BLIMP_SYMBOL_H
 #define BLIMP_SYMBOL_H
 
+#include "hash_map.h"
+
 #include "internal/common.h"
-#include "internal/hash_map.h"
 
 typedef HashMap SymbolTable;
 

@@ -235,6 +235,26 @@ typedef struct {
      * This option is disabled by default.
      */
     bool constant_elision;
+
+    /**
+     * \brief Enables inlining.
+     *
+     * When enabled, the interpreter may inline message sends at its discretion,
+     * effectively replacing a call to an object's message handler with a copy
+     * of that message handler's code. This reduces the overhead of sending
+     * messages, and it allows further optimization because the inlined copy of
+     * the code can be optimized in the context in which it is inlined, where,
+     * among other things, the interpreter knows what the message is going to
+     * be.
+     *
+     * This optimization is most effective when used in conjunction with
+     * constant elision, because message sends to an object through a symbol can
+     * only be inlined if the value of the symbol is first determined to be a
+     * constant.
+     *
+     * This option is disabled by default.
+     */
+    bool inlining;
 } BlimpOptions;
 
 extern const BlimpOptions DEFAULT_BLIMP_OPTIONS;
@@ -260,6 +280,11 @@ extern const char *BLIMP_OPTIONS_USAGE;
  *    option by "=". For example, "option-name=42" sets `option_name` to 42.
  */
 const char *Blimp_ParseOption(const char *option, BlimpOptions *options);
+
+/**
+ * \brief Update `options` to enable optional optimizations.
+ */
+void Blimp_OptimizationsOn(BlimpOptions *options);
 
 /**
  * \brief Create a new `bl:mp` interpreter.
@@ -636,6 +661,7 @@ BlimpStatus Blimp_GetSymbol(
     Blimp *blimp, const char *name, const BlimpSymbol **symbol);
 
 const char *BlimpSymbol_GetName(const BlimpSymbol *symbol);
+size_t BlimpSymbol_Hash(const BlimpSymbol *symbol);
 
 typedef struct BlimpExpr BlimpExpr;
 
@@ -1168,6 +1194,8 @@ BlimpStatus BlimpObject_Get(
  */
 BlimpStatus BlimpObject_Set(
     BlimpObject *obj, const BlimpSymbol *sym, BlimpObject *val);
+
+BlimpStatus BlimpObject_CaptureMessage(BlimpObject *obj, BlimpObject *message);
 
 /**
  * \brief Get a message which is captured by an object.

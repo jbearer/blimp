@@ -29,15 +29,19 @@ Blimp *Blimp_New(const BlimpOptions *options)
     }
 
     if (ObjectStack_Init(blimp, &blimp->result_stack,
-                blimp->options.recursion_limit * 8)
+                blimp->options.recursion_limit * 16)
                     // We assume (somewhat arbitrarily) that there will be an
-                    // average of 8 objects on the stack at a time per call
+                    // average of 16 objects on the stack at a time per call
                     // stack frame. Errors in the size of the object stack will
                     // be caught and turned into BLIMP_STACK_OVERFLOW runtime
                     // errors.
             != BLIMP_OK)
     {
         goto err_result_stack;
+    }
+
+    if (Optimizer_Init(blimp, &blimp->optimizer) != BLIMP_OK) {
+        goto err_optimizer;
     }
 
     // Create the global object.
@@ -50,6 +54,8 @@ Blimp *Blimp_New(const BlimpOptions *options)
     return blimp;
 
 err_global:
+    Optimizer_Destroy(&blimp->optimizer);
+err_optimizer:
     ObjectStack_Destroy(blimp, &blimp->result_stack);
 err_result_stack:
     Stack_Destroy(blimp, &blimp->stack);
@@ -64,6 +70,7 @@ err_malloc:
 
 void Blimp_Delete(Blimp *blimp)
 {
+    Optimizer_Destroy(&blimp->optimizer);
     ObjectStack_Destroy(blimp, &blimp->result_stack);
     Stack_Destroy(blimp, &blimp->stack);
     ObjectPool_Destroy(&blimp->objects);
@@ -116,7 +123,6 @@ Status BlimpObject_NewBlock(
         (ScopedObject *)parent,
         msg_name,
         bytecode,
-        true,
         0,
         (BlockObject **)obj);
 }
@@ -171,10 +177,15 @@ void BlimpObject_Print(FILE *f, const Object *obj)
                  cur != NULL;
                  cur = cur->parent)
             {
+                size_t i = 0;
                 if (Object_Type((Object *)cur) == OBJ_BLOCK) {
-                    DBMap_Shift(&scopes, (void *)((BlockObject *)cur)->msg_name);
-                } else {
-                    DBMap_Shift(&scopes, (void *)"");
+                    BlockObject *block = (BlockObject *)cur;
+                    DBMap_Shift(&scopes, (void *)block->msg_name);
+                    ++i;
+                }
+
+                for (; i < cur->owned_captures; ++i) {
+                    DBMap_Shift(&scopes, NULL);
                 }
             }
 
@@ -264,6 +275,16 @@ Status BlimpObject_Set(Object *obj, const Symbol *sym, Object *val)
     }
 
     return ScopedObject_Set((ScopedObject *)obj, sym, val);
+}
+
+Status BlimpObject_CaptureMessage(Object*obj, Object *message)
+{
+    if (!IsScopedObject(obj)) {
+        return ErrorMsg(Object_Blimp(obj), BLIMP_INVALID_OBJECT_TYPE,
+            "non-scoped object cannot capture a message");
+    }
+
+    return ScopedObject_CaptureMessage((ScopedObject *)obj, message);
 }
 
 Status BlimpObject_GetCapturedMessage(

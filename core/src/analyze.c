@@ -9,6 +9,7 @@ static Status NewAnalysis(Blimp *blimp, Analysis **analysis)
     // Initialize everything to safe, uncertain values.
     (*analysis)->sym_value = NULL;
     (*analysis)->pure = MAYBE;
+    (*analysis)->uses_scope = MAYBE;
 
     (*analysis)->captures_parents_message = NO;
         // This property can be decided statically, so its value should never be
@@ -30,6 +31,18 @@ static inline Tristate Tristate_And(Tristate t1, Tristate t2)
     }
 }
 
+static inline Tristate Tristate_Or(Tristate t1, Tristate t2)
+{
+    switch (t1) {
+        case YES:
+            return YES;
+        case NO:
+            return t2;
+        default:
+            return t2 == YES ? YES : MAYBE;
+    }
+}
+
 static Status AnalyzeExpr(Blimp *blimp, Expr *expr, DeBruijnMap *scopes);
 static Status AnalyzeStmt(Blimp *blimp, Expr *expr, DeBruijnMap *scopes);
 
@@ -41,6 +54,7 @@ static Status AnalyzeExpr(Blimp *blimp, Expr *expr, DeBruijnMap *scopes)
 {
     const Symbol *sym_value = NULL;
     Tristate pure = YES;
+    Tristate uses_scope = NO;
 
     for (Expr *stmt = expr; stmt != NULL; stmt = stmt->next) {
         TRY(AnalyzeStmt(blimp, stmt, scopes));
@@ -55,6 +69,8 @@ static Status AnalyzeExpr(Blimp *blimp, Expr *expr, DeBruijnMap *scopes)
 
         pure = Tristate_And(pure, Stmt_IsPure(stmt));
             // A sequence is pure if all of its statements are pure.
+        uses_scope = Tristate_Or(uses_scope, Stmt_UsesScope(stmt));
+            // A sequence uses its scope if any of its statements do.
     }
 
     // If `expr` is the head of a sequence, attach sequence analysis.
@@ -65,6 +81,7 @@ static Status AnalyzeExpr(Blimp *blimp, Expr *expr, DeBruijnMap *scopes)
 
         expr->analysis->sym_value = sym_value;
         expr->analysis->pure = pure;
+        expr->analysis->uses_scope = uses_scope;
     }
 
     return BLIMP_OK;
@@ -78,7 +95,7 @@ static Status AnalyzeStmt(Blimp *blimp, Expr *expr, DeBruijnMap *scopes)
 
         case EXPR_MSG:
             if (0 < expr->msg.index && expr->msg.index <= DBMap_Size(scopes)) {
-                // If the index of this message refers to the mesage of a block
+                // If the index of this message refers to the message of a block
                 // object which is an ancestor of the one currently being
                 // analyzed, then the current block captures the message from
                 // its ancestor block.
@@ -132,7 +149,9 @@ Tristate Expr_EvaluatesToSymbol(Expr *expr, const Symbol **sym)
         // If a sequence evaluates to a symbol, we have stored that symbol in
         // the analysis for the sequence.
         if (expr->analysis->sym_value) {
-            *sym = expr->analysis->sym_value;
+            if (sym != NULL) {
+                *sym = expr->analysis->sym_value;
+            }
             return YES;
         } else {
             return MAYBE;
@@ -140,7 +159,9 @@ Tristate Expr_EvaluatesToSymbol(Expr *expr, const Symbol **sym)
     } else if (expr->next == NULL) {
         // A single statement evaluates to a symbol if it is a symbol literal.
         if (expr->tag == EXPR_SYMBOL) {
-            *sym = expr->symbol;
+            if (sym != NULL) {
+                *sym = expr->symbol;
+            }
             return YES;
         } else {
             return MAYBE;
@@ -172,6 +193,39 @@ Tristate Stmt_IsPure(Expr *stmt)
             return YES;
         default:
             return MAYBE;
+    }
+}
+
+Tristate Expr_UsesScope(Expr *expr)
+{
+    if (expr->next && expr->analysis) {
+        // If a sequence uses its scope, we have stored that information in the
+        // sequence analysis.
+        return expr->analysis->uses_scope;
+    } else if (expr->next == NULL) {
+        return Stmt_UsesScope(expr);
+    } else {
+        return MAYBE;
+    }
+}
+
+Tristate Block_UsesScope(Expr *expr)
+{
+    assert(expr->tag == EXPR_BLOCK);
+    return Expr_UsesScope(expr->block.code);
+}
+
+Tristate Stmt_UsesScope(Expr *stmt)
+{
+    switch (stmt->tag) {
+        case EXPR_SEND:
+            if (Expr_EvaluatesToSymbol(stmt->send.receiver, NULL) == NO) {
+                return NO;
+            } else {
+                return MAYBE;
+            }
+        default:
+            return NO;
     }
 }
 

@@ -1,12 +1,13 @@
 import std;
+import `system.types`;
 
-test_fib := (function(fib) {
-    !expect ($fib(0) == 1);
-    !expect ($fib(1) == 1);
-    !expect ($fib(2) == 2);
-    !expect ($fib(3) == 3);
-    !expect ($fib(4) == 5);
-    !expect ($fib(5) == 8);
+test_fib := (function([fib, mkint]) {
+    !expect ($fib($mkint 0) == ($mkint 1));
+    !expect ($fib($mkint 1) == ($mkint 1));
+    !expect ($fib($mkint 2) == ($mkint 2));
+    !expect ($fib($mkint 3) == ($mkint 3));
+    !expect ($fib($mkint 4) == ($mkint 5));
+    !expect ($fib($mkint 5) == ($mkint 8));
     .
 });
 
@@ -18,7 +19,7 @@ fib_rec := (function(n) {
     }
 });
 
-$test_fib($fib_rec);
+$test_fib([($fib_rec),{^}]);
 
 fib_iter := (function(n) {
     prev1 := 1;
@@ -32,14 +33,32 @@ fib_iter := (function(n) {
     $prev1
 });
 
-$test_fib($fib_iter);
+$test_fib([($fib_iter),{^}]);
+
+fib_native := (function(n) {
+    prev1 := (native_int 1);
+    prev2 := (native_int 1);
+    $n times {
+        next := (($prev1) + ($prev2));
+        prev1 := ($prev2);
+        prev2 := ($next)
+    };
+
+    $prev1
+});
+
+$test_fib([($fib_native),native_int]);
 
 !benchmark{n{^ 100}; fib_rec} {
     $fib_rec(9)
 };
 
-!benchmark{n{^ 100}; fib_iter} {
+!benchmark{n{^ 1000}; fib_iter} {
     $fib_iter(9)
+};
+
+!benchmark{n{^ 1000}; fib_iter} {
+    $fib_native(9)
 };
 
 .

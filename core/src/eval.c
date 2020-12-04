@@ -181,6 +181,144 @@ static Status ExecuteSend(
     return status;
 }
 
+static Status EvalSend(
+    Blimp *blimp,
+    Object *receiver,
+    Object *message,
+    const SourceRange *range,
+    SendFlags flags,
+    ScopedObject *scope,
+    bool use_result,
+    const StackFrame **sp,
+    const Instruction **ip,
+    bool *ret,
+    Object **result)
+{
+    *ret = false;
+
+    bool tail_call = !!(flags & SEND_TAIL);
+
+    // Save what we need from the stack frame in case this is a tail call and we
+    // are about to pop the stack frame.
+    const Instruction *return_address =
+        tail_call ? (*sp)->return_address
+                  : Instruction_Next(*ip);
+    SourceRange range_copy = *range;
+
+    if (tail_call) {
+        if ((*sp)->message) BlimpObject_Release((*sp)->message);
+        if ((*sp)->scope) BlimpObject_Release((Object*)(*sp)->scope);
+        if ((*sp)->executing) BlimpBytecode_Free((*sp)->executing);
+        Stack_Pop(blimp, &blimp->stack);
+    }
+
+    if (ExecuteSend(
+            blimp,
+            scope,
+            receiver,
+            message,
+            use_result,
+            &range_copy,
+            return_address,
+            ip)
+        != BLIMP_OK)
+    {
+        BlimpObject_Release((Object *)scope);
+        return Reraise(blimp);
+    }
+    BlimpObject_Release((Object *)scope);
+
+    // Update the instruction pointer and stack pointer.
+    if (*ip == NULL) {
+        *ip = return_address;
+        if (*ip == NULL) {
+            *ret = true;
+            if (result != NULL) {
+                *result = ObjectStack_Pop(blimp, &blimp->result_stack);
+            }
+
+            return BLIMP_OK;
+        }
+    }
+    *sp = Stack_CurrentFrame(&blimp->stack);
+
+    return BLIMP_OK;
+}
+
+static Status TryConstantElision(
+    Blimp *blimp,
+    Object **receiver_ptr,
+    ScopedObject *scope,
+    Object **tmp_receiver)
+{
+    Object *receiver = BlimpObject_Borrow(*receiver_ptr);
+
+    // Dereference symbols. As long as we keep dereferencing constant symbols,
+    // we can perform constant elision (if it is enabled) by replacing the
+    // receiver in the instruction with the object referred to by that symbol,
+    // to save a hash lookup next time this instruction is executed.
+    //
+    // Even if we dereference a non-constant symbol, or if constant elision is
+    // not enabled, this is still useful work. We can return the ultimate value
+    // of the symbol (const or otherwise) in `tmp_receiver`, which will not
+    // update the instruction in the procedure, but will use the fully
+    // dereferenced receiver for the execution of this send.
+    ScopedObject *owner;
+        // Scope owning the receiver symbol.
+    bool is_const = true;
+        // Whether all the symbols we have dereferenced so far are
+        // constant.
+    bool receiver_is_const;
+        // Whether the most recently dereferenced symbol is
+        // constant.
+    while (
+        Object_Type(receiver) == OBJ_SYMBOL &&
+
+        // Check if the symbol is in scope, and, if so, whether it
+        // is constant.
+        ScopedObject_Lookup(
+            scope,
+            (const Symbol *)receiver,
+            &receiver,
+            &owner,
+            &receiver_is_const)
+    ) {
+        is_const &= receiver_is_const;
+
+        BlimpObject_Borrow(receiver);
+        if (blimp->options.constant_elision &&
+            Object_Type((Object *)scope) == OBJ_BLOCK && is_const)
+        {
+            if (BlockObject_IsSpecialized((BlockObject *)scope, owner))
+            {
+                // If the code we're executing is already specialized in the
+                // scope where the symbol is defined, then we can simply update
+                // the instruction in place.
+                BlimpObject_Borrow(receiver);
+                BlimpObject_Release(*receiver_ptr);
+                *receiver_ptr = receiver;
+            } else {
+                // Otherwise, we must first specialize the code so that the
+                // constant-elided code only runs in the scope containing the
+                // constant value (or in a descendant of that scope).
+                //
+                // The specialization process automatically performs scope-aware
+                // optimizations including constant elision, so all we have to
+                // do is request for the object to be specialized.
+                if (BlockObject_Specialize((BlockObject *)scope, owner)
+                        != BLIMP_OK)
+                {
+                    BlimpObject_Release(receiver);
+                    return Reraise(blimp);
+                }
+            }
+        }
+    }
+
+    *tmp_receiver = receiver;
+    return BLIMP_OK;
+}
+
 // Start executing bytecode at the given instruction. Execution will continue
 // until a RET instruction executes in a stack frame with a NULL return address.
 // At that point, there must be at least one object on the top of the result
@@ -247,11 +385,40 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                             sp->scope,
                             instr->msg_name,
                             instr->code,
-                            instr->capture_parents_message,
                             instr->specialized,
                             &obj) != BLIMP_OK)
                     {
                         goto error;
+                    }
+
+                    // Pop captured messages from the result stack.
+                    for (size_t i = 0; i < instr->captures; ++i) {
+                        Object *capture = ObjectStack_Pop(
+                            blimp, &blimp->result_stack);
+
+                        if (ScopedObject_CaptureMessage(
+                                (ScopedObject *)obj, capture) != BLIMP_OK)
+                        {
+                            if (capture) BlimpObject_Release(capture);
+                            BlimpObject_Release((Object *)obj);
+                            goto error;
+                        }
+
+                        if (capture) BlimpObject_Release(capture);
+                    }
+
+                    if (sp->message != NULL) {
+                        // Capture the parent's message.
+                        if (ScopedObject_CaptureMessage(
+                                (ScopedObject *)obj,
+                                (instr->flags & BLOCK_CLOSURE)
+                                    ? sp->message
+                                    : NULL)
+                            != BLIMP_OK)
+                        {
+                            BlimpObject_Release((Object *)obj);
+                            goto error;
+                        }
                     }
 
                     // Push the object onto the stack. Note that we do not
@@ -265,6 +432,74 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                         BlimpObject_Release((Object *)obj);
                         goto error;
                     }
+                }
+
+                break;
+            }
+
+            case INSTR_CLOSEI: {
+                if (use_result) {
+                    CLOSEI *instr = (CLOSEI *)ip;
+
+                    // Create a new block object.
+                    BlockObject *obj;
+                    if (BlockObject_New(
+                            blimp,
+                            instr->scope,
+                            instr->msg_name,
+                            instr->code,
+                            instr->specialized,
+                            &obj) != BLIMP_OK)
+                    {
+                        goto error;
+                    }
+
+                    // Pop captured messages from the result stack.
+                    for (size_t i = 0; i < instr->captures; ++i) {
+                        Object *capture = ObjectStack_Pop(
+                            blimp, &blimp->result_stack);
+
+                        if (ScopedObject_CaptureMessage(
+                                (ScopedObject *)obj, capture) != BLIMP_OK)
+                        {
+                            if (capture) BlimpObject_Release(capture);
+                            BlimpObject_Release((Object *)obj);
+                            goto error;
+                        }
+
+                        if (capture) BlimpObject_Release(capture);
+                    }
+
+                    // Push the object onto the stack. Note that we do not
+                    // borrow it first: we own a reference to `obj` after
+                    // BlockObject_New, and we are giving this reference away to
+                    // the stack.
+                    if (ObjectStack_Push(
+                            blimp, &blimp->result_stack, (Object *)obj)
+                        != BLIMP_OK)
+                    {
+                        BlimpObject_Release((Object *)obj);
+                        goto error;
+                    }
+                }
+
+                break;
+            }
+
+            case INSTR_OBJI: {
+                OBJI *instr = (OBJI *)ip;
+
+                if (instr->object != NULL) {
+                    BlimpObject_Borrow(instr->object);
+                }
+
+                if (ObjectStack_Push(
+                        blimp, &blimp->result_stack, instr->object) != BLIMP_OK)
+                {
+                    if (instr->object != NULL) {
+                        BlimpObject_Release(instr->object);
+                    }
+                    goto error;
                 }
 
                 break;
@@ -318,9 +553,38 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                 break;
             }
 
+            case INSTR_MSGOF: {
+                if (use_result) {
+                    MSGOF *instr = (MSGOF *)ip;
+
+                    // Get the captured message from the object indicated in the
+                    // instruction.
+                    Object *obj;
+                    if (ScopedObject_GetCapturedMessage(
+                            instr->scope, instr->index, &obj) != BLIMP_OK)
+                    {
+                        goto error;
+                    }
+
+                    // Push it onto the stack. We need to borrow it because
+                    // ScopedObject_GetCapturedMessage() returns a transient
+                    // reference.
+                    if (ObjectStack_Push(
+                            blimp,
+                            &blimp->result_stack,
+                            BlimpObject_Borrow(obj))
+                        != BLIMP_OK)
+                    {
+                        BlimpObject_Release(obj);
+                        goto error;
+                    }
+                }
+
+                break;
+            }
+
             case INSTR_SEND: {
                 SEND *instr = (SEND *)ip;
-                bool tail_call = !!(instr->flags & SEND_TAIL);
 
                 // Get the receiver and message from the result stack. The
                 // message is computed and pushed onto the stack after the
@@ -329,182 +593,144 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                 Object *message  = ObjectStack_Pop(blimp, &blimp->result_stack);
                 Object *receiver = ObjectStack_Pop(blimp, &blimp->result_stack);
 
-                // Save what we need from the stack frame in case this is a tail
-                // call and we are about to pop the stack frame.
-                ScopedObject *scope = sp->scope;
-                const Instruction *return_address =
-                    tail_call ? sp->return_address
-                              : Instruction_Next(ip);
-
-                if (tail_call) {
-                    if (sp->message) BlimpObject_Release(sp->message);
-                        // We don't need the message from the stack frame
-                        // anymore. We cannot yet release `sp->scope`, though,
-                        // because we're still using it as the scope argument to
-                        // ExecuteSend. We will release it once that function
-                        // finishes.
-                    if (sp->executing) BlimpBytecode_Free(sp->executing);
-                        // We're not going to be executing the procedure
-                        // corresponding to this stack frame anymore.
-                    Stack_Pop(blimp, &blimp->stack);
-                }
-
-                Status status = ExecuteSend(
-                    blimp,
-                    scope,
-                    receiver,
-                    message,
-                    use_result,
-                    &instr->range,
-                    return_address,
-                    &ip);
-                // Clean up scope if we're returning.
-                if (tail_call) {
-                    BlimpObject_Release((Object *)scope);
-                }
-                if (status != BLIMP_OK) {
+                bool ret;
+                if (EvalSend(
+                        blimp,
+                        receiver,
+                        message,
+                        &instr->range,
+                        instr->flags,
+                        (ScopedObject *)BlimpObject_Borrow((Object *)sp->scope),
+                        use_result,
+                        &sp,
+                        &ip,
+                        &ret,
+                        result)
+                    != BLIMP_OK)
+                {
                     goto error;
                 }
 
-                // Update the instruction pointer and stack pointer.
-                if (ip == NULL) {
-                    ip = return_address;
-                    if (ip == NULL) {
-                        if (result != NULL) {
-                            *result = ObjectStack_Pop(
-                                blimp, &blimp->result_stack);
-                        }
-
-                        return BLIMP_OK;
-                    }
+                if (ret) {
+                    return BLIMP_OK;
+                } else {
+                    continue;
                 }
-                sp = Stack_CurrentFrame(&blimp->stack);
+            }
 
-                // Start executing from the new IP.
-                continue;
+            case INSTR_CALL: {
+                CALL *instr = (CALL *)ip;
+
+                // Get the receiver and message from the result stack. The
+                // message is computed and pushed onto the stack after the
+                // receiver, which means it is the first object to pop off the
+                // stack.
+                Object *message  = ObjectStack_Pop(blimp, &blimp->result_stack);
+                Object *receiver = ObjectStack_Pop(blimp, &blimp->result_stack);
+
+                bool ret;
+                if (EvalSend(
+                        blimp,
+                        receiver,
+                        message,
+                        &instr->range,
+                        instr->flags,
+                        (ScopedObject *)BlimpObject_Borrow(
+                            (Object *)instr->scope),
+                        use_result,
+                        &sp,
+                        &ip,
+                        &ret,
+                        result)
+                    != BLIMP_OK)
+                {
+                    goto error;
+                }
+
+                if (ret) {
+                    return BLIMP_OK;
+                } else {
+                    continue;
+                }
             }
 
             case INSTR_SENDTO: {
                 SENDTO *instr = (SENDTO *)ip;
-                bool tail_call = !!(instr->flags & SEND_TAIL);
 
-                // Get the receiver from the instruction and dereference
-                // symbols. As long as we keep dereferencing constant symbols,
-                // we can perform constant elision (if it is enabled) by
-                // replacing the receiver in the instruction with the object
-                // referred to by that symbol, to save a hash lookup next time
-                // this instruction is executed.
-                Object *receiver = BlimpObject_Borrow(instr->receiver);
-                ScopedObject *owner;
-                    // Scope owning the receiver symbol.
-                bool is_const = true;
-                    // Whether all the symbols we have dereferenced so far are
-                    // constant.
-                bool receiver_is_const;
-                    // Whether the most recently dereferenced symbol is
-                    // constant.
-                while (
-                    Object_Type(receiver) == OBJ_SYMBOL &&
-
-                    // Check if the symbol is in scope, and, if so, whether it
-                    // is constant.
-                    ScopedObject_Lookup(
-                        sp->scope,
-                        (const Symbol *)receiver,
-                        &receiver,
-                        &owner,
-                        &receiver_is_const)
-                ) {
-                    is_const &= receiver_is_const;
-
-                    BlimpObject_Borrow(receiver);
-                    if (blimp->options.constant_elision && is_const) {
-                        if (BlockObject_IsSpecialized(
-                                (BlockObject *)sp->scope, owner))
-                        {
-                            // If the code we're executing is already
-                            // specialized in the scope where the symbol is
-                            // defined, then we can simply update the
-                            // instruction in place.
-                            BlimpObject_Borrow(receiver);
-                            BlimpObject_Release(instr->receiver);
-                            instr->receiver = receiver;
-                        } else {
-                            // Otherwise, we must first specialize the code so
-                            // that the constant-elided code only runs in the
-                            // scope containing the constant value (or in a
-                            // descendant of that scope).
-                            //
-                            // The specialization process automatically performs
-                            // scope-aware optimizations including constant
-                            // elision, so all we have to do is request for the
-                            // object to be specialized.
-                            if (BlockObject_Specialize(
-                                    (BlockObject *)sp->scope, owner)
-                                != BLIMP_OK)
-                            {
-                                goto error;
-                            }
-                        }
-                    }
+                Object *receiver;
+                if (TryConstantElision(
+                        blimp, &instr->receiver, sp->scope, &receiver)
+                    != BLIMP_OK)
+                {
+                    goto error;
                 }
 
                 // Get the message from the result stack.
                 Object *message = ObjectStack_Pop(blimp, &blimp->result_stack);
 
-                // Save what we need from the stack frame in case this is a tail
-                // call and we are about to pop the stack frame.
-                ScopedObject *scope = sp->scope;
-                const Instruction *return_address =
-                    tail_call ? sp->return_address
-                              : Instruction_Next(ip);
-
-                if (tail_call) {
-                    if (sp->message) BlimpObject_Release(sp->message);
-                        // We don't need the message from the stack frame
-                        // anymore. We cannot yet release `sp->scope`, though,
-                        // because we're still using it as the scope argument to
-                        // ExecuteSend. We will release it once that function
-                        // finishes.
-                    if (sp->executing) BlimpBytecode_Free(sp->executing);
-                        // We're not going to be executing the procedure
-                        // corresponding to this stack frame anymore.
-                    Stack_Pop(blimp, &blimp->stack);
-                }
-
-                Status status = ExecuteSend(
-                    blimp,
-                    scope,
-                    receiver,
-                    message,
-                    use_result,
-                    &instr->range,
-                    return_address,
-                    &ip);
-                // Clean up scope if we're returning.
-                if (tail_call) {
-                    BlimpObject_Release((Object *)scope);
-                }
-                if (status != BLIMP_OK) {
+                bool ret;
+                if (EvalSend(
+                        blimp,
+                        receiver,
+                        message,
+                        &instr->range,
+                        instr->flags,
+                        (ScopedObject *)BlimpObject_Borrow((Object *)sp->scope),
+                        use_result,
+                        &sp,
+                        &ip,
+                        &ret,
+                        result)
+                    != BLIMP_OK)
+                {
                     goto error;
                 }
 
-                // Update the instruction pointer and stack pointer.
-                if (ip == NULL) {
-                    ip = return_address;
-                    if (ip == NULL) {
-                        if (result != NULL) {
-                            *result = ObjectStack_Pop(
-                                blimp, &blimp->result_stack);
-                        }
-
-                        return BLIMP_OK;
-                    }
+                if (ret) {
+                    return BLIMP_OK;
+                } else {
+                    continue;
                 }
-                sp = Stack_CurrentFrame(&blimp->stack);
+            }
 
-                // Start executing from the new IP.
-                continue;
+            case INSTR_CALLTO: {
+                CALLTO *instr = (CALLTO *)ip;
+
+                Object *receiver;
+                if (TryConstantElision(
+                        blimp, &instr->receiver, instr->scope, &receiver)
+                    != BLIMP_OK)
+                {
+                    goto error;
+                }
+
+                // Get the message from the result stack.
+                Object *message = ObjectStack_Pop(blimp, &blimp->result_stack);
+
+                bool ret;
+                if (EvalSend(
+                        blimp,
+                        receiver,
+                        message,
+                        &instr->range,
+                        instr->flags,
+                        (ScopedObject *)BlimpObject_Borrow(
+                            (Object *)instr->scope),
+                        use_result,
+                        &sp,
+                        &ip,
+                        &ret,
+                        result)
+                    != BLIMP_OK)
+                {
+                    goto error;
+                }
+
+                if (ret) {
+                    return BLIMP_OK;
+                } else {
+                    continue;
+                }
             }
 
             case INSTR_RET: {
@@ -533,6 +759,10 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                 } else {
                     continue;
                 }
+            }
+
+            case INSTR_NOP: {
+                break;
             }
         }
 
@@ -615,6 +845,8 @@ Status EvalBytecode(
         return Reraise(blimp);
     } else {
         if (Stack_Empty(&blimp->stack)) {
+            assert(ObjectStack_Empty(&blimp->result_stack));
+
             // If we're returning from the top stack frame, execution is
             // finished, so we don't need to handle interruptions any more.
             return DisableSignals(&blimp->signals);

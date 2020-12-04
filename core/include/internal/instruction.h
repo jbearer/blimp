@@ -111,31 +111,9 @@
 #ifndef BLIMP_INSTRUCTION_H
 #define BLIMP_INSTRUCTION_H
 
+#include "internal/bytecode.h"
 #include "internal/common.h"
-
-////////////////////////////////////////////////////////////////////////////////
-// Instructions
-//
-
-typedef enum {
-    RESULT_USE,
-    RESULT_IGNORE,
-    RESULT_INHERIT,
-} ResultType;
-
-typedef struct {
-    enum {
-        INSTR_SYMI,     // Symbol immediate
-        INSTR_BLOCKI,   // Block immediate
-        INSTR_MSG,      // Get captured message
-        INSTR_SEND,
-        INSTR_SENDTO,
-        INSTR_RET,
-    } type;
-
-    ResultType result_type;
-    size_t size;
-} Instruction;
+#include "internal/object.h"
 
 // Push a symbol immediate onto the result stack.
 typedef struct {
@@ -143,14 +121,50 @@ typedef struct {
     const Symbol *sym;
 } SYMI;
 
+typedef enum {
+    BLOCK_DEFAULT = 0x0,
+    BLOCK_CLOSURE = 0x1,
+    BLOCK_LAMBDA  = 0x2,
+} BlockFlags;
+
 // Push a block immediate onto the result stack.
+//
+// The object will be a child of the scope currently on the call stack.
+//
+// The new object will capture a variable number of messages taken from the
+// result stack (determined by `captures`) as well as the message being
+// processed by the current frame on the call stack.
 typedef struct {
     Instruction header;
     const Symbol *msg_name;
     Bytecode *code;
-    bool capture_parents_message;
+    BlockFlags flags;
     size_t specialized;
+    size_t captures;
 } BLOCKI;
+
+// Push a block immediate onto the result stack.
+//
+// The object will be a child of `scope`.
+//
+// The new object will capture a variable number of messages taken from the
+// result stack (determined by `captures`), but not the message being processed
+// by the current stack frame.
+typedef struct {
+    Instruction header;
+    ScopedObject *scope;
+    const Symbol *msg_name;
+    Bytecode *code;
+    BlockFlags flags;
+    size_t specialized;
+    size_t captures;
+} CLOSEI;
+
+// Push a given object onto the result stack.
+typedef struct {
+    Instruction header;
+    Object *object;
+} OBJI;
 
 // Get a captured message at the given index in the current scope, and push it
 // onto the result stack.
@@ -158,6 +172,14 @@ typedef struct {
     Instruction header;
     size_t index;
 } MSG;
+
+// Get a captured message at the given index in the given scope, and push it
+// onto the result stack.
+typedef struct {
+    Instruction header;
+    ScopedObject *scope;
+    size_t index;
+} MSGOF;
 
 typedef enum {
     SEND_DEFAULT = 0x0,
@@ -181,10 +203,32 @@ typedef struct {
 typedef struct {
     Instruction header;
     SourceRange range;
-    SendFlags flags;
     Object *receiver;
+    SendFlags flags;
     // message: stack
 } SENDTO;
+
+// Same as SEND, except instead have having an effect in the current scope, the
+// effect if the receiver is a symbol is in the given scope.
+typedef struct {
+    Instruction header;
+    SourceRange range;
+    ScopedObject *scope;
+    SendFlags flags;
+    // message: stack
+    // receiver: stack
+} CALL;
+
+// Same as SENDTO, except instead have having an effect in the current scope,
+// the effect if the receiver is a symbol is in the given scope.
+typedef struct {
+    Instruction header;
+    SourceRange range;
+    ScopedObject *scope;
+    Object *receiver;
+    SendFlags flags;
+    // message: stack
+} CALLTO;
 
 // Pop the current frame off of the call stack, and continue executing at the
 // instruction saved in the `return_address` field. If the return address is
@@ -194,62 +238,8 @@ typedef struct {
     Instruction header;
 } RET;
 
-////////////////////////////////////////////////////////////////////////////////
-// Bytecode programs
-//
-
-struct BlimpBytecode {
-    Blimp *blimp;
-    size_t refcount;
-
-    // A procedure is essentially a vector of instructions, representing using a
-    // pointer to the beginning, a capacity, and a size.
-    void *instructions;
-        // The data array of the vector is conceptually an array of
-        // Instructions; however, we use `void *` to represent it, since
-        // instructions are variably-sized and thus we do not support random
-        // access via normal array indexing. The only way to know which offsets
-        // within this array represent the starts of instructions is to traverse
-        // the array, starting from `instructions` and offsetting by
-        // `instr->size` bytes for each subsequent instruction `instr`.
-    size_t capacity;
-        // The size in bytes of the contiguously allocated array pointed to by
-        // `instructions`.
-    size_t size;
-        // The size in bytes of the prefix of `instructions` which contains
-        // valid data.
-
-    Expr *expr;
-        // The expression that generated this bytecode (for debugging only).
-};
-
-PRIVATE Status Bytecode_New(Blimp *blimp, Expr *expr, Bytecode **code);
-PRIVATE Status Bytecode_Append(Bytecode *code, const Instruction *instr);
-
-// Get the first instruction in a procedure.
-static inline const Instruction *Bytecode_Begin(const Bytecode *code)
-{
-    return (Instruction *)code->instructions;
-}
-
-// Get a pointer to the first instruction past the last instruction in a
-// procedure. This pointer may not be dereferenced; however, it is guaranteed to
-// compare equal to Instruction_Next of the last dereferencable pointer (which
-// is usually a RET, but procedures in the process of being compiled may not
-// have a terminating RET added yet).
-static inline const Instruction *Bytecode_End(const Bytecode *code)
-{
-    return (Instruction *)((char *)code->instructions + code->size);
-}
-
-static inline const Instruction *Instruction_Next(const Instruction *instr)
-{
-    return (Instruction *)((char *)instr + instr->size);
-}
-
-static inline Expr *Bytecode_Expr(const Bytecode *code)
-{
-    return code->expr;
-}
+typedef struct {
+    Instruction header;
+} NOP;
 
 #endif

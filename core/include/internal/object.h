@@ -86,11 +86,12 @@
 #ifndef BLIMP_OBJECT_H
 #define BLIMP_OBJECT_H
 
+#include "hash_map.h"
+
 #include "internal/bit_vector.h"
 #include "internal/common.h"
 #include "internal/debruijn.h"
-#include "internal/hash_map.h"
-#include "internal/instruction.h"
+#include "internal/bytecode.h"
 #include "internal/pool_alloc.h"
 #include "internal/random.h"
 
@@ -301,10 +302,17 @@ typedef struct ScopedObject {
         // message handlers (OBJ_BLOCK and OBJ_EXTENSION). Other object types
         // have built-in message handlers which do not refer to captured
         // messages from their parent, so this field is not used.
+    size_t owned_captures;
     struct ScopedObject *next;
         // The next pointer in a stack used for depth-first traversal of the
         // object pool during reachability analysis.
 } ScopedObject;
+
+static inline ScopedObject *ScopedObject_Borrow(ScopedObject *obj)
+{
+    BlimpObject_Borrow((Object *)obj);
+    return obj;
+}
 
 PRIVATE Status ScopedObject_Set(
     ScopedObject *obj, const Symbol *sym, Object *value);
@@ -316,6 +324,7 @@ PRIVATE bool ScopedObject_Lookup(
     bool *is_const);
 PRIVATE Status ScopedObject_Get(
     ScopedObject *obj, const Symbol *sym, Object **value);
+PRIVATE Status ScopedObject_CaptureMessage(ScopedObject *obj, Object *message);
 PRIVATE Status ScopedObject_GetCapturedMessage(
     const ScopedObject *obj, size_t index, Object **message);
 PRIVATE Status ScopedObject_GetCapturedMessageByName(
@@ -429,7 +438,6 @@ PRIVATE Status BlockObject_New(
     ScopedObject *parent,
     const Symbol *msg_name,
     Bytecode *code,
-    bool capture_parents_message,
     size_t specialized,
     BlockObject **object);
 

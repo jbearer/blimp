@@ -12,6 +12,7 @@ const BlimpOptions DEFAULT_BLIMP_OPTIONS = {
     .gc_heap_check          = false,
     .tail_call_elimination  = true,
     .constant_elision       = false,
+    .inlining               = false,
 };
 
 const char *BLIMP_OPTIONS_USAGE =
@@ -208,6 +209,25 @@ const char *BLIMP_OPTIONS_USAGE =
     "        optimization, such as inlining.\n"
     "\n"
     "        This option is disabled by default.\n"
+    "\n"
+    "    [no-]inlining\n"
+    "        Enable or disable inlining.\n"
+    "\n"
+    "        When enabled, the interpreter may inline message sends at its\n"
+    "        discretion, effectively replacing a call to an object's message\n"
+    "        handler with a copy of that message handler's code. This reduces\n"
+    "        the overhead of sending messages, and it allows further\n"
+    "        optimization because the inlined copy of the code can be\n"
+    "        optimized in the context in which it is inlined, where, among\n"
+    "        other things, the interpreter knows what the message is going to\n"
+    "        be.\n"
+    "\n"
+    "        This optimization is most effective when used in conjunction\n"
+    "        with constant elision, because message sends to an object a\n"
+    "        through symbol can only be inlined if the value of the symbol\n"
+    "        is first determined to be a constant.\n"
+    "\n"
+    "        This option is disabled by default.\n"
 ;
 
 static const char *ParseUInt(const char *value, size_t *result)
@@ -333,7 +353,17 @@ const char *Blimp_ParseOption(const char *str, BlimpOptions *options)
     } else if (strncmp("constant-elision", option, option_len) == 0) {
         options->constant_elision = !negate;
         return NULL;
+    } else if (strncmp("inlining", option, option_len) == 0) {
+        options->inlining = !negate;
+        return NULL;
     } else {
         return "unknown option";
     }
+}
+
+void Blimp_OptimizationsOn(BlimpOptions *options)
+{
+    options->tail_call_elimination = true;
+    options->constant_elision = true;
+    options->inlining = true;
 }

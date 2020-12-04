@@ -1,0 +1,2 @@
+#: -finlining -fconstant-elision
+import bench_inline

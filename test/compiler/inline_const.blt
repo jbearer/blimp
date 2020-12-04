@@ -1,0 +1,97 @@
+#: -finlining -fconstant-elision
+
+{^capture
+    const_identity{^} {^};
+    const_capture{^} {(^capture)};
+    const_lambda{^} {
+        {
+            (^capture)
+        }[]
+    };
+    const_scope{^} {^var
+        ^var{^} {
+            bar
+        };
+        ^var[]
+    };
+    const_scope_sendto{
+        local{^} {foo};
+
+        ^ {
+            local[]
+        }
+    };
+    local{^} {bar};
+    const_scope_arg{^} {
+        {^scope
+            ^scope sym {foo};
+            ^scope
+        } {^sym
+            ^sym {^ref
+                ^ref
+            }
+        } sym
+    };
+
+    tests{^} {
+
+        # Simple inline function call.
+        !expect_eq (const_identity foo) foo;
+
+        # Inline function call inside of an inlined anonymous block with
+        # captures.
+        !expect_eq foo (
+            {^x
+                {^y
+                    {
+                        const_identity (^y)
+                    }[]
+                } ^x
+            } foo
+        );
+
+        # Inline function call that references a capture, inside a lambda.
+        !expect_eq capture (
+            {
+                const_capture[]
+            }[]
+        );
+
+        # Lambda that references a capture, inside an inline function call.
+        !expect_eq capture (const_lambda[]);
+
+        # Inline function call with state. We call it twice; the first time
+        # initializes the state variable `foo` and the second time uses it.
+        !expect_eq bar (const_scope foo);
+        !expect_eq bar (const_scope foo);
+
+        # We should now be able to initialize the symbol in this scope.
+        foo{^} {baz};
+        !expect_eq (foo[]) baz;
+
+        # Inline function call with state, shadowing a symbol in our own scope.
+        # Even if the call gets inlined into this scope, it should still use
+        # symbol values from its own scope.
+        bar{^} {dummy};
+        !expect_eq (bar[]) dummy;
+        !expect_eq bar (const_scope bar);
+        !expect_eq bar (const_scope bar);
+        !expect_eq (bar[]) dummy;
+
+        # Inline call with state. This is a similar test to above, but the local
+        # symbol which is set by the callee is hard-coded (rather than passed as
+        # an argument) so it stresses the SENDTO case instead of the SEND case.
+        !expect_eq foo (const_scope_sendto[]);
+
+        # If the argument to a lambda is a block literal with mutable state, the
+        # call cannot be inlined.
+        !expect_eq foo (const_scope_arg[]);
+
+        .
+    };
+    tests[];
+        # Run once to trigger specialization.
+    tests[];
+        # Run again, now testing the specialized code.
+    .
+} capture

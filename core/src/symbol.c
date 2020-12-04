@@ -110,3 +110,8 @@ const char *BlimpSymbol_GetName(const Symbol *sym)
 {
     return sym->name;
 }
+
+size_t BlimpSymbol_Hash(const Symbol *sym)
+{
+    return sym->hash;
+}

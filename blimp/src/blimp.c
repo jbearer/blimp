@@ -41,6 +41,9 @@ static void PrintUsage(FILE *f, int argc, char *const *argv)
     fprintf(f, "        Specify values for tunable interpreter properties. See\n");
     fprintf(f, "        below for a list of interpreter options.\n");
     fprintf(f, "\n");
+    fprintf(f, "    -O\n");
+    fprintf(f, "        Enable all compiler optimizations.\n");
+    fprintf(f, "\n");
     fprintf(f, "    --core\n");
     fprintf(f, "        Use core bl:mp. This disables the implicit import of\n");
     fprintf(f, "        the `std' prelude.\n");
@@ -49,6 +52,8 @@ static void PrintUsage(FILE *f, int argc, char *const *argv)
     fprintf(f, "        Set the action to perform on the input program:\n");
     fprintf(f, "            * eval: evaluate the program and print the result\n");
     fprintf(f, "            * dump: dump the parsed input expression\n");
+    fprintf(f, "            * compile: print the compiled bytecode for an input\n");
+    fprintf(f, "                  expression\n");
     fprintf(f, "        The default is `eval'.\n");
     fprintf(f, "\n");
     fprintf(f, "    --history-file FILE\n");
@@ -575,6 +580,7 @@ static int EvalMain(Blimp *blimp, const char *path, const Options *options)
 
 typedef enum {
     FLAG_BLIMP_OPTION       = 'f',
+    FLAG_OPTIMIZE           = 'O',
     FLAG_IMPORT_PATH        = 'I',
     FLAG_ACTION             = 'a',
     FLAG_HELP               = 'h',
@@ -611,7 +617,7 @@ int main(int argc, char *const *argv)
     DefaultOptions(&options);
 
     int option, i = 1;
-    while ((option = getopt_long(argc, argv, "f:I:a:hv", flags, &i)) != -1) {
+    while ((option = getopt_long(argc, argv, "f:OI:a:hv", flags, &i)) != -1) {
         switch (option) {
             case FLAG_BLIMP_OPTION: {
                 const char *error = Blimp_ParseOption(
@@ -623,6 +629,10 @@ int main(int argc, char *const *argv)
 
                 break;
             }
+
+            case FLAG_OPTIMIZE:
+                Blimp_OptimizationsOn(&options.blimp_options);
+                break;
 
             case FLAG_CORE:
                 options.implicit_prelude = false;

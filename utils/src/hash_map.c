@@ -25,9 +25,7 @@
 #include <limits.h>
 #include <string.h>
 
-#include "internal/blimp.h"
-#include "internal/error.h"
-#include "internal/hash_map.h"
+#include "hash_map.h"
 
 // The maximum load factor: once the map is more than MAX_LOAD_NUM/MAX_LOAD_DEN
 // full, we increase its capacity by a factor of two.
@@ -70,7 +68,7 @@ struct HashMapEntry {
     // Value is at offsetof(HashMapEntry, key) + RoundUpToAlignment(key_size).
 };
 
-PRIVATE const HashMapOptions HASH_MAP_DEFAULT_OPTIONS = {
+const HashMapOptions HASH_MAP_DEFAULT_OPTIONS = {
     .log2_initial_capacity = 3,
     .create_empty          = false,
     .user_data             = NULL,
@@ -177,7 +175,7 @@ static HashMapEntry *Find(const HashMap *map, size_t hash, const void *key)
 }
 
 // Make space for one more entry, resizing the map if necessary.
-static Status MakeSpace(HashMap *map)
+static BlimpStatus MakeSpace(HashMap *map)
 {
     if (map->entries && MAX_LOAD_NUM*map->capacity > MAX_LOAD_DEN*map->size) {
         // We already have sufficient capacity to accomodate more than `size`
@@ -197,16 +195,22 @@ static Status MakeSpace(HashMap *map)
         // increase the table capacity, we just have to allocate that much
         // space. We also don't have to worry about rehashing and copying over
         // old data, since there isn't any.
-        return Calloc(map->blimp, map->capacity, EntrySize(map), &map->entries);
+        map->entries = calloc(map->capacity, EntrySize(map));
             // Calloc ensures that all the entries in the new array are zero-
             // initialized, which means that their `status` field is ABSENT.
+        if (map->entries == NULL) {
+            return Blimp_Error(map->blimp, BLIMP_OUT_OF_MEMORY);
+        }
     }
 
     HashMapEntry *old_entries = map->entries;
     map->capacity *= 2;
-    TRY(Calloc(map->blimp, map->capacity, EntrySize(map), &map->entries));
+    map->entries = calloc(map->capacity, EntrySize(map));
         // Calloc ensures that all the entries in the new array are zero-
         // initialized, which means that their `status` field is ABSENT.
+    if (map->entries == NULL) {
+        return Blimp_Error(map->blimp, BLIMP_OUT_OF_MEMORY);
+    }
 
     // For each entry in the old map, compute it's position in the new map and
     // copy it there. We iterate through the entries using the linked list, both
@@ -269,12 +273,12 @@ static Status MakeSpace(HashMap *map)
     map->last = prev;
 
     // We don't need the old memory anymore.
-    Free(map->blimp, &old_entries);
+    free(old_entries);
 
     return BLIMP_OK;
 }
 
-Status HashMap_Init(
+BlimpStatus HashMap_Init(
     Blimp *blimp,
     HashMap *map,
     size_t key_size,
@@ -307,7 +311,10 @@ Status HashMap_Init(
     if (options->create_empty) {
         map->entries = NULL;
     } else {
-        TRY(Calloc(blimp, map->capacity, EntrySize(map), &map->entries));
+        map->entries = calloc(map->capacity, EntrySize(map));
+        if (map->entries == NULL) {
+            return Blimp_Error(map->blimp, BLIMP_OUT_OF_MEMORY);
+        }
     }
 
     return BLIMP_OK;
@@ -315,7 +322,7 @@ Status HashMap_Init(
 
 void HashMap_Destroy(HashMap *map)
 {
-    Free(map->blimp, &map->entries);
+    free(map->entries);
 }
 
 HashMapEntry *HashMap_Next(const HashMap *map, HashMapEntry *entry)
@@ -329,10 +336,12 @@ HashMapEntry *HashMap_Next(const HashMap *map, HashMapEntry *entry)
     return entry->next;
 }
 
-Status HashMap_Emplace(
+BlimpStatus HashMap_Emplace(
     HashMap *map, const void *key, HashMapEntry **entry, bool *created)
 {
-    TRY(MakeSpace(map));
+    if (MakeSpace(map) != BLIMP_OK) {
+        return Blimp_Reraise(map->blimp);
+    }
 
     size_t hash = map->hash(key, map->user_data);
     *entry = Find(map, hash, key);

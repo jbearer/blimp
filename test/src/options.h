@@ -26,6 +26,7 @@ typedef struct {
     const char **groups;
     size_t num_groups;
     regex_t filter;
+    bool enable_racket;
     bool use_racket;
     bool use_blimp;
     size_t racket_timeout;  // ms

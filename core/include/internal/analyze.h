@@ -34,6 +34,7 @@ typedef struct {
     // sequence.)
     const Symbol *sym_value;
     Tristate pure;
+    Tristate uses_scope;
 
     // Data about this expression itself.
     Tristate captures_parents_message;
@@ -44,6 +45,9 @@ PRIVATE Status Expr_Analyze(Blimp *blimp, Expr *expr);
 PRIVATE Tristate Expr_EvaluatesToSymbol(Expr *expr, const Symbol **sym);
 PRIVATE Tristate Expr_IsPure(Expr *expr);
 PRIVATE Tristate Stmt_IsPure(Expr *stmt);
+Tristate Expr_UsesScope(Expr *expr);
+Tristate Block_UsesScope(Expr *expr);
+Tristate Stmt_UsesScope(Expr *stmt);
 PRIVATE Tristate Expr_CapturesParentsMessage(Expr *expr);
 
 #endif

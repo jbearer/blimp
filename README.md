@@ -22,6 +22,9 @@ A complete `bl:mp` interpreter. This sub-project builds a standalone executable 
 * [test](test/README.md)
 A multi-purpose test suite. This sub-project contains a number of `bl:mp` programs which have been annotated to document their expected behavior. These programs can be used to sanity-check the [semantics](docs/semantics.rkt), or to test the [interpreter](blimp/README.md) by comparing against the semantics, the annotations, or both. This sub-project builds a standalone executable which runs the test suite and produces a report.
 
+* utils
+A library which provides some common functionality used by more than one of the other subprojects.
+
 * editors
 Support for `bl:mp` in various editors. Currently only Sublime is supported.
 
