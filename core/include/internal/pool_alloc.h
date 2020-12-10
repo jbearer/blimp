@@ -112,7 +112,7 @@
 #ifndef BLIMP_POOL_ALLOC_H
 #define BLIMP_POOL_ALLOC_H
 
-#include "internal/common.h"
+#include "common.h"
 
 struct Batch {
     size_t initialized;

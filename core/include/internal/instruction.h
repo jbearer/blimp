@@ -112,7 +112,6 @@
 #define BLIMP_INSTRUCTION_H
 
 #include "internal/bytecode.h"
-#include "internal/common.h"
 #include "internal/object.h"
 
 // Push a symbol immediate onto the result stack.

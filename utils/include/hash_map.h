@@ -22,6 +22,7 @@
 #include <string.h>
 
 #include "blimp.h"
+#include "common.h"
 
 typedef struct HashMapEntry HashMapEntry;
 
@@ -115,7 +116,7 @@ typedef struct {
  *      map. Passing NULL here is the same as passing
  *      `&HASH_MAP_DEFAULT_OPTIONS`.
  */
-BlimpStatus HashMap_Init(
+PRIVATE BlimpStatus HashMap_Init(
     Blimp *blimp,
     HashMap *map,
     size_t key_size,
@@ -124,11 +125,16 @@ BlimpStatus HashMap_Init(
     HashFunc hash_func,
     const HashMapOptions *options);
 
-void HashMap_Destroy(HashMap *map);
+PRIVATE void HashMap_Destroy(HashMap *map);
 
 static inline size_t HashMap_Size(const HashMap *map)
 {
     return map->size;
+}
+
+static inline bool HashMap_Empty(const HashMap *map)
+{
+    return map->size == 0;
 }
 
 static inline Blimp *HashMap_GetBlimp(const HashMap *map)
@@ -141,7 +147,7 @@ static inline HashMapEntry *HashMap_Begin(const HashMap *map)
     return map->first;
 }
 
-HashMapEntry *HashMap_Next(const HashMap *map, HashMapEntry *it);
+PRIVATE HashMapEntry *HashMap_Next(const HashMap *map, HashMapEntry *it);
 
 static inline HashMapEntry *HashMap_End(const HashMap *map)
 {
@@ -202,10 +208,10 @@ static inline HashMapEntry *HashMap_End(const HashMap *map)
  *      HashMap_Emplace and either HashMap_CommitEmplace or
  *      HashMap_AbortEmplace.
  */
-BlimpStatus HashMap_Emplace(
+PRIVATE BlimpStatus HashMap_Emplace(
     HashMap *map, const void *key, HashMapEntry **entry, bool *created);
-void HashMap_CommitEmplace(HashMap *map, HashMapEntry *entry);
-void HashMap_AbortEmplace(HashMap *map, HashMapEntry *entry);
+PRIVATE void HashMap_CommitEmplace(HashMap *map, HashMapEntry *entry);
+PRIVATE void HashMap_AbortEmplace(HashMap *map, HashMapEntry *entry);
 
 /**
  * \brief Get references to the key and value of a map entry.
@@ -220,7 +226,7 @@ void HashMap_AbortEmplace(HashMap *map, HashMapEntry *entry);
  * consistency constraints of the map. This is not checked. You may do whatever
  * you want with `value`.
  */
-void HashMap_GetEntry(
+PRIVATE void HashMap_GetEntry(
     const HashMap *map,
     HashMapEntry *entry,
     void **key,
@@ -260,6 +266,46 @@ static inline BlimpStatus HashMap_Update(
 }
 
 /**
+ * \brief
+ *      Get a pointer to the value associated with `key`, inserting a new value
+ *      if one does not already exist.
+ *
+ * \param[in]  key       The key to search for.
+ * \param[in]  value     A value to insert if one is not already present.
+ * \param[out] old_value
+ *      A pointer to the value which was already present in the map, if there is
+ *      one, or else `NULL`.
+ *
+ */
+static inline Status HashMap_FindOrInsert(
+    HashMap *map, const void *key, const void *value, void **old_value)
+{
+    HashMapEntry *entry;
+    bool created;
+    if (HashMap_Emplace(map, key, &entry, &created) != BLIMP_OK) {
+        return Blimp_Reraise(map->blimp);
+    }
+
+    if (created) {
+        memcpy(HashMap_GetValue(map, entry), value, map->value_size);
+        *old_value = NULL;
+    } else {
+        *old_value = HashMap_GetValue(map, entry);
+    }
+
+    HashMap_CommitEmplace(map, entry);
+    return BLIMP_OK;
+}
+
+/**
+ * \brief Add all mappings from `m2` to `m1`.
+ *
+ * This operation is a right-biased union. Mappings from `m2` with a key that
+ * already exists in `m1` will replace the existing mapping in `m1`.
+ */
+PRIVATE Status HashMap_Union(HashMap *m1, const HashMap *m2);
+
+/**
  * \brief Get a reference to the entry with the given key.
  *
  * This can be an efficient way to update the value corresponding to a key only
@@ -268,7 +314,7 @@ static inline BlimpStatus HashMap_Update(
  *
  * If the given key does not exist in the map, the result is `NULL`.
  */
-HashMapEntry *HashMap_FindEntry(const HashMap *map, const void *key);
+PRIVATE HashMapEntry *HashMap_FindEntry(const HashMap *map, const void *key);
 
 /**
  * \brief Get a pointer to the value associated with `key`.
@@ -296,8 +342,82 @@ static inline void *HashMap_Find(const HashMap *map, const void *key)
  * entry with the given key was found. If the result is `false`, the contents of
  * `value` are undefined.
  */
-bool HashMap_Remove(HashMap *map, const void *key, void *value);
+PRIVATE bool HashMap_Remove(HashMap *map, const void *key, void *value);
 
-void HashMap_Clear(HashMap *map);
+PRIVATE void HashMap_Clear(HashMap *map);
+
+////////////////////////////////////////////////////////////////////////////////
+// Incremental hash functions for common types
+//
+// All types are interpreted as binary data and hashed using the FNV1a hash
+// function.
+//
+
+#define HASH_SEED 14695981039346656037ull
+
+static inline void Hash_AddByte(size_t *hash, char byte)
+{
+    *hash = (*hash ^ byte) * 1099511628211ull;
+}
+
+static inline void Hash_AddBytes(size_t *hash, const void *data, size_t size)
+{
+    for (size_t i = 0; i < size; ++i) {
+        Hash_AddByte(hash, ((char *)data)[i]);
+    }
+}
+
+static inline void Hash_AddString(size_t *hash, const char *str)
+{
+    for (const char *c = str; *c; ++c) {
+        Hash_AddByte(hash, *c);
+    }
+}
+
+static inline void Hash_AddPointer(size_t *hash, const void *p)
+{
+    Hash_AddBytes(hash, &p, sizeof(void *));
+}
+
+static inline void Hash_AddInteger(size_t *hash, size_t n)
+{
+    Hash_AddBytes(hash, &n, sizeof(size_t));
+}
+
+static inline void Hash_AddBoolean(size_t *hash, bool b)
+{
+    Hash_AddBytes(hash, &b, sizeof(bool));
+}
+
+static inline void Hash_AddHash(size_t *hash1, size_t hash2)
+{
+    *hash1 = 3*(*hash1) + hash2;
+        // To combine two hashes, we use the formula
+        //      3*hash1 + hash2.
+        // This is similar to combining hashes using XOR, in that using `+` to
+        // combine hashes produces a roughly uniform distribution as long as the
+        // input hashes come from roughly uniform distributions, which is the
+        // property we want in a good hash function.
+        //
+        // Using `+` is slightly better than XOR; the two functions have very
+        // similar truth tables, but the carry bits in the `+` function preserve
+        // information that is lost with XOR. For example, if the XOR of two
+        // bits is a 1, we've lost whether the two input bits were both 1 or
+        // both 0. With `+`, this information is carried and fed into the
+        // computation of the next bit in the form of a 1 carry bit if the
+        // inputs were 1, and a 0 carry bit if the inputs were 0. A concrete,
+        // practical example of why this is important for our use case is that
+        // XOR maps two equal inputs to 0, but `+` does not. It is generally not
+        // good if a hash combiner maps many different pairs of inputs to 0.
+        //
+        // We multiply the left-hand side by 3 to break the symmetry of the `+`
+        // operator. The ordered pairs (a, b) and (b, a) are generally not
+        // equivalent, so we want them to have different hashes. The choice of
+        // 3, and the choice to mulitply on the left-hand side instead of the
+        // right-hand side, are arbitrary. Any odd constant multiplied with
+        // either operand will do. 3 is a reasonable choice because it is one
+        // greater than a power of two, so 3x can be computed with a shift and
+        // an add ((x<<1) + x) if the compiler so chooses
+}
 
 #endif

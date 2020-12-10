@@ -22,7 +22,6 @@
 #define BLIMP_OPTIMIZER_H
 
 #include "internal/checkpoint_alloc.h"
-#include "internal/common.h"
 #include "internal/instruction.h"
 #include "internal/result_stack.h"
 

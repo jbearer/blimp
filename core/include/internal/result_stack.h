@@ -8,8 +8,7 @@
 #ifndef BLIMP_RESULT_STACK_H
 #define BLIMP_RESULT_STACK_H
 
-#include "../blimp.h"
-#include "internal/common.h"
+#include "common.h"
 
 typedef struct {
     size_t capacity;

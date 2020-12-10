@@ -1,11 +1,13 @@
 #ifndef BLIMP_BLIMP_H
 #define BLIMP_BLIMP_H
 
+#include "common.h"
+
 #include "../blimp.h"
-#include "internal/common.h"
 #include "internal/object.h"
 #include "internal/object_stack.h"
 #include "internal/optimizer.h"
+#include "internal/parse.h"
 #include "internal/signal.h"
 #include "internal/stack.h"
 #include "internal/symbol.h"
@@ -21,6 +23,8 @@ struct Blimp {
     GlobalObject *global;
     Signals signals;
     Optimizer optimizer;
+    Grammar grammar;
+    size_t counter;
 
     struct BlimpErrorInfo {
         BlimpErrorCode code;

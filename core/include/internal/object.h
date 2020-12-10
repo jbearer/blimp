@@ -89,7 +89,6 @@
 #include "hash_map.h"
 
 #include "internal/bit_vector.h"
-#include "internal/common.h"
 #include "internal/debruijn.h"
 #include "internal/bytecode.h"
 #include "internal/pool_alloc.h"

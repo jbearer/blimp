@@ -8,7 +8,7 @@
 
 #include <stdint.h>
 
-#include "internal/common.h"
+#include "common.h"
 
 typedef struct {
     uint64_t seed;

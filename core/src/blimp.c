@@ -3,6 +3,8 @@
 #include "internal/expr.h"
 #include "internal/symbol.h"
 
+static Status DefaultGrammar(Blimp *blimp, Grammar *grammar);
+
 Blimp *Blimp_New(const BlimpOptions *options)
 {
     if (options == NULL) {
@@ -14,7 +16,12 @@ Blimp *Blimp_New(const BlimpOptions *options)
         goto err_malloc;
     }
     blimp->options = *options;
+    blimp->counter = 0;
     memset(&blimp->last_error, 0, sizeof(blimp->last_error));
+
+    if (DefaultGrammar(blimp, &blimp->grammar) != BLIMP_OK) {
+        goto err_grammar;
+    }
 
     if (SymbolTable_Init(blimp, &blimp->symbols) != BLIMP_OK) {
         goto err_symbols;
@@ -63,6 +70,8 @@ err_stack:
     ObjectPool_Destroy(&blimp->objects);
 err_objects:
 err_symbols:
+    Grammar_Destroy(&blimp->grammar);
+err_grammar:
     free(blimp);
 err_malloc:
     return NULL;
@@ -74,6 +83,7 @@ void Blimp_Delete(Blimp *blimp)
     ObjectStack_Destroy(blimp, &blimp->result_stack);
     Stack_Destroy(blimp, &blimp->stack);
     ObjectPool_Destroy(&blimp->objects);
+    Grammar_Destroy(&blimp->grammar);
     SymbolTable_Destroy(&blimp->symbols);
     free(blimp);
 }
@@ -96,6 +106,261 @@ Bytecode *Blimp_GlobalBytecode(Blimp *blimp)
     } else {
         return frame->executing;
     }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Parser API
+//
+
+#define UNPAREN(...)__VA_ARGS__
+#define APPLY(x) x
+#define ARRAY(ELEMS) {APPLY(UNPAREN ELEMS)}
+
+#define ADD_GRAMMAR_RULE(GRAMMAR, NT, SYMBOLS, HANDLER, ARG) \
+    Grammar_AddRule( \
+        GRAMMAR, \
+        NT, \
+        sizeof((GrammarSymbol[])ARRAY(SYMBOLS))/sizeof(GrammarSymbol), \
+        (GrammarSymbol[])ARRAY(SYMBOLS), HANDLER, ARG)
+
+#define CONCAT(x, y) x ## y
+#define T(TERMINAL) {.is_terminal = true, .terminal = CONCAT(TOK_,TERMINAL)}
+#define NT(NON_TERMINAL) {.is_terminal = false, .non_terminal = NON_TERMINAL}
+
+// Use an existing sub-tree as the result of a reduction to a lower-precedence
+// non-terminal. The index of the sub-tree to use, relative to the symbols
+// matched by the production which triggered this reduction, is `ctx->arg`.
+static Status IdentityHandler(
+    ParserContext *ctx, Expr **sub_exprs, Expr **result)
+{
+    *result = BlimpExpr_Borrow(sub_exprs[(size_t)ctx->arg]);
+    return BLIMP_OK;
+}
+
+// Handler for `Expr -> Stmt ; Expr`
+static Status SequenceHandler(
+    ParserContext *ctx, Expr **sub_exprs, Expr **result)
+{
+    (void)ctx;
+
+    // The sub-statement may already be a sequence, so combining it with the
+    // sub-expression amounts to appending two linked lists.
+    sub_exprs[0]->last->next = BlimpExpr_Borrow(sub_exprs[2]);
+    sub_exprs[0]->last = sub_exprs[2]->last;
+    *result = BlimpExpr_Borrow(sub_exprs[0]);
+    return BLIMP_OK;
+}
+
+// Handler for `Stmt -> Stmt -> Expr`
+static Status SendHandler(
+    ParserContext *ctx, Expr **sub_exprs, Expr **result)
+{
+    return BlimpExpr_NewSend(ctx->blimp, sub_exprs[0], sub_exprs[1], result);
+}
+
+// Handler for `Term -> {^msg Expr}` and `Term -> {Expr}`. `ctx->arg` should be
+// non-zero if an explicit message name for the block is provided (first case)
+// and zero otherwise (second case).
+static Status BlockHandler(
+    ParserContext *ctx, Expr **sub_exprs, Expr **result)
+{
+    bool has_msg_name = (bool)ctx->arg;
+
+    Expr *body = sub_exprs[1];
+
+    const Symbol *msg_name = NULL;
+    if (has_msg_name) {
+        assert(sub_exprs[1]->tag == EXPR_TOKEN);
+        assert(sub_exprs[1]->tok.type == TOK_MSG_NAME);
+        msg_name = sub_exprs[1]->tok.symbol;
+        body = sub_exprs[2];
+            // The message name symbol offsets the index of the body symbol by
+            // 1.
+    }
+
+    return BlimpExpr_NewBlock(ctx->blimp, msg_name, body, result);
+}
+
+// Handler for `Term -> symbol`
+static Status SymbolHandler(
+    ParserContext *ctx, Expr **sub_exprs, Expr **result)
+{
+    assert(sub_exprs[0]->tag == EXPR_TOKEN);
+    assert(sub_exprs[0]->tok.type == TOK_SYMBOL);
+    return BlimpExpr_NewSymbol(ctx->blimp, sub_exprs[0]->tok.symbol, result);
+}
+
+// Handler for `Term -> ^msg`
+static Status MsgHandler(
+    ParserContext *ctx, Expr **sub_exprs, Expr **result)
+{
+    assert(sub_exprs[0]->tag == EXPR_TOKEN);
+    assert(sub_exprs[0]->tok.type == TOK_MSG_NAME);
+    return BlimpExpr_NewMsgName(ctx->blimp, sub_exprs[0]->tok.symbol, result);
+}
+
+// Handler for `Term -> ^`
+static Status MsgThisHandler(
+    ParserContext *ctx, Expr **sub_exprs, Expr **result)
+{
+    (void)sub_exprs;
+
+    return BlimpExpr_NewMsgIndex(ctx->blimp, 0, result);
+}
+
+static Status DefaultGrammar(Blimp *blimp, Grammar *grammar)
+{
+    TRY(Grammar_Init(blimp, grammar, TOK_EOF));
+
+    // The bl:mp grammar is fundamentally simple. We have five kinds of
+    // expressions:
+    //  1. Sequences        A; B
+    //  2. Sends            A B
+    //  3. Blocks           {^msg A}
+    //  4. Symbols          sym
+    //  5. Message names    ^msg
+    //
+    // These are conceptually divided into expressions, statements, and terms to
+    // indicate increasing precedence:
+    //
+    //  Expr -> Stmt ; Expr | Stmt
+    //  Stmt -> Stmt Expr | Term
+    //  Term -> {^msg Expr}
+    //        | sym
+    //        | ^msg
+    //        | ( Expr )
+    //
+    // Unfortunately, the ^msg part of the block syntax is optional, and this
+    // complicates everything. Consider {^msg foo}. This could be parsed as a
+    // block with a message name specified, whose body expression is a single
+    // symbol `foo`. Or it could be parsed as a block with no message name whose
+    // body expression is a send `^msg foo` (where `^msg` is acting not as the
+    // message name for the block but as a term on its own). The rule is that
+    // the former takes precedence. In order to encode this rule, we need to
+    // factorize the grammar so we can express that a block either begins with a
+    // message name follwed by an expression, or without a message name and an
+    // expression _that does not start with a message name_:
+    //
+    //  Expr      -> Stmt ; Expr
+    //             | Stmt
+    //  ExprNoMsg -> StmtNoMsg ; Expr
+    //             | StmtNoMsg
+    //  Stmt      -> Stmt Expr
+    //             | Term
+    //  StmtNoMsg -> StmtNoMsg Expr
+    //             | TermNoMsg
+    //  Term      -> TermNoMsg | ^msg
+    //  TermNoMsg -> {^msg Expr}
+    //             | {ExprNoMsg}
+    //             | sym
+    //             | ( Expr )
+    //
+    // Here, the "NoMsg" non-terminals represent everything from the language of
+    // the corresponding non-terminal except sentences that start with a ^msg
+    // token.
+    //
+    // Here are our non-terminals in order of ascending precedence:
+    enum {
+        Start,
+        Expr,
+        ExprNoMsg,
+        Stmt,
+        StmtNoMsg,
+        Term,
+        TermNoMsg,
+    };
+
+    // And here are the productions:
+
+    // Start = Expr
+    TRY(ADD_GRAMMAR_RULE(grammar, Start, (NT(Expr)),
+        IdentityHandler, NULL));
+
+    // Expr[NoMsg] = Stmt[NoMsg] ";" Expr
+    TRY(ADD_GRAMMAR_RULE(grammar, Expr, (NT(Stmt), T(SEMI), NT(Expr)),
+        SequenceHandler, NULL));
+    TRY(ADD_GRAMMAR_RULE(grammar, ExprNoMsg, (NT(StmtNoMsg), T(SEMI), NT(Expr)),
+        SequenceHandler, NULL));
+    //      \ Stmt[NoMsg]
+    TRY(ADD_GRAMMAR_RULE(grammar, Expr, (NT(Stmt)),
+        IdentityHandler, NULL));
+    TRY(ADD_GRAMMAR_RULE(grammar, ExprNoMsg, (NT(StmtNoMsg)),
+        IdentityHandler, NULL));
+
+    // Stmt[NoMsg] = Stmt[NoMsg] Term
+    TRY(ADD_GRAMMAR_RULE(grammar, Stmt, (NT(Stmt), NT(Term)),
+        SendHandler, NULL));
+    TRY(ADD_GRAMMAR_RULE(grammar, StmtNoMsg, (NT(StmtNoMsg), NT(Term)),
+        SendHandler, NULL));
+    //      \ term
+    TRY(ADD_GRAMMAR_RULE(grammar, Stmt, (NT(Term)),
+        IdentityHandler, NULL));
+    TRY(ADD_GRAMMAR_RULE(grammar, StmtNoMsg, (NT(TermNoMsg)),
+        IdentityHandler, NULL));
+
+    // Term = TermNoMsg \ Msg
+    TRY(ADD_GRAMMAR_RULE(grammar, Term, (NT(TermNoMsg)),
+        IdentityHandler, NULL));
+    TRY(ADD_GRAMMAR_RULE(grammar, Term, (T(MSG_NAME)),
+        MsgHandler, NULL));
+
+    // TermNoMsg = "(" expr ")"
+    TRY(ADD_GRAMMAR_RULE(grammar, TermNoMsg, (T(LPAREN), NT(Expr), T(RPAREN)),
+        IdentityHandler, (void *)1));
+    //      \ "{" [msg] expr "}"
+    TRY(ADD_GRAMMAR_RULE(grammar, TermNoMsg, (T(LBRACE), T(MSG_NAME), NT(Expr), T(RBRACE)),
+        BlockHandler, (void *)1));
+    TRY(ADD_GRAMMAR_RULE(grammar, TermNoMsg, (T(LBRACE), NT(ExprNoMsg), T(RBRACE)),
+        BlockHandler, (void *)0));
+    //      \ symbol
+    TRY(ADD_GRAMMAR_RULE(grammar, TermNoMsg, (T(SYMBOL)),
+        SymbolHandler, NULL));
+    //      \ "^"
+    TRY(ADD_GRAMMAR_RULE(grammar, TermNoMsg, (T(MSG_THIS)),
+        MsgThisHandler, NULL));
+
+    // Give the parser readable names for all of the terminals.
+    for (TokenType t = 0; t < NUM_TOKEN_TYPES; ++t) {
+        Grammar_SetTerminalString(grammar, t, StringOfTokenType(t));
+    }
+
+    // Give the parser readable names for all of the non-terminals.
+    Grammar_SetNonTerminalString(grammar, Start, "Start");
+    Grammar_SetNonTerminalString(grammar, Expr, "E");
+    Grammar_SetNonTerminalString(grammar, ExprNoMsg, "E'");
+    Grammar_SetNonTerminalString(grammar, Stmt, "S");
+    Grammar_SetNonTerminalString(grammar, StmtNoMsg, "S'");
+    Grammar_SetNonTerminalString(grammar, Term, "T");
+    Grammar_SetNonTerminalString(grammar, TermNoMsg, "T'");
+
+    return BLIMP_OK;
+}
+
+Status Blimp_Parse(Blimp *blimp, Stream *input, Expr **output)
+{
+    Lexer lex;
+    Lexer_Init(&lex, blimp, input);
+
+    Status ret = Parse(&lex, &blimp->grammar, NULL, output);
+    Lexer_Destroy(&lex);
+    Stream_Delete(input);
+    TRY(ret);
+
+    return BlimpExpr_Resolve(blimp, *output);
+}
+
+Status Blimp_ParseFile(Blimp *blimp, const char *path, Expr **output)
+{
+    Stream *stream;
+    TRY(Blimp_FileStream(blimp, path, &stream));
+    return Blimp_Parse(blimp, stream, output);
+}
+
+Status Blimp_ParseString(Blimp *blimp, const char *str, Expr **output)
+{
+    Stream *stream;
+    TRY(Blimp_StringStream(blimp, str, &stream));
+    return Blimp_Parse(blimp, stream, output);
 }
 
 ////////////////////////////////////////////////////////////////////////////////

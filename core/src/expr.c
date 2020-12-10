@@ -2,20 +2,151 @@
 
 #include "internal/expr.h"
 
+static Status Expr_New(Blimp *blimp, ExprType type, Expr **expr)
+{
+    TRY(Calloc(blimp, 1, sizeof(Expr), expr));
+
+    (*expr)->tag = type;
+    (*expr)->refcount = 1;
+    (*expr)->next = NULL;
+    (*expr)->last = *expr;
+    return BLIMP_OK;
+}
+
 Status BlimpExpr_NewSymbol(Blimp *blimp, const Symbol *sym, Expr **expr)
 {
-    *expr = calloc(1, sizeof(Expr));
-    if (*expr == NULL) {
-        return Blimp_Error(blimp, BLIMP_OUT_OF_MEMORY);
+    TRY(Expr_New(blimp, EXPR_SYMBOL, expr));
+    (*expr)->symbol = sym;
+    return BLIMP_OK;
+}
+
+Status BlimpExpr_NewBlock(
+    Blimp *blimp, const Symbol *msg_name, Expr *code, Expr **expr)
+{
+    TRY(Expr_New(blimp, EXPR_BLOCK, expr));
+    (*expr)->block.msg_name = msg_name;
+    (*expr)->block.code = BlimpExpr_Borrow(code);
+
+    if (msg_name == NULL) {
+        // If no message name was given explicitly, generate a unique one.
+        char buffer[32];
+        snprintf(buffer, sizeof(buffer), "^%zu^", blimp->counter++);
+        TRY(Blimp_GetSymbol(blimp, buffer, &(*expr)->block.msg_name));
     }
 
-    (*expr)->tag      = EXPR_SYMBOL;
-    (*expr)->refcount = 1;
-    (*expr)->analysis = NULL;
-    (*expr)->next     = NULL;
-    (*expr)->symbol   = sym;
+    return BLIMP_OK;
+}
+
+Status BlimpExpr_NewSend(
+    Blimp *blimp, Expr *receiver, Expr *message, Expr **expr)
+{
+    TRY(Expr_New(blimp, EXPR_SEND, expr));
+    (*expr)->send.receiver = BlimpExpr_Borrow(receiver);
+    (*expr)->send.message  = BlimpExpr_Borrow(message);
+    return BLIMP_OK;
+}
+
+Status BlimpExpr_NewToken(Blimp *blimp, const Token *tok, Expr **expr)
+{
+    TRY(Expr_New(blimp, EXPR_TOKEN, expr));
+    (*expr)->tok = *tok;
+    return BLIMP_OK;
+}
+
+Status BlimpExpr_NewMsgName(Blimp *blimp, const Symbol *name, Expr **expr)
+{
+    TRY(Expr_New(blimp, EXPR_MSG_NAME, expr));
+    (*expr)->symbol = name;
+    return BLIMP_OK;
+}
+
+Status BlimpExpr_NewMsgIndex(Blimp *blimp, size_t index, Expr **expr)
+{
+    TRY(Expr_New(blimp, EXPR_MSG, expr));
+    (*expr)->msg.index = index;
+    return BLIMP_OK;
+}
+
+static Status ResolveExpr(Blimp *blimp, Expr *expr, DeBruijnMap *scopes);
+
+static Status ResolveStmt(Blimp *blimp, Expr *stmt, DeBruijnMap *scopes)
+{
+    switch (stmt->tag) {
+        case EXPR_SYMBOL:
+        case EXPR_MSG:
+            return BLIMP_OK;
+        case EXPR_SEND:
+            // Recurse into sub-expressions.
+            TRY(ResolveExpr(blimp, stmt->send.receiver, scopes));
+            TRY(ResolveExpr(blimp, stmt->send.message, scopes));
+            return BLIMP_OK;
+        case EXPR_BLOCK:
+            DBMap_Push(scopes, (void *)stmt->block.msg_name);
+                // Register the message name associated with this block so we
+                // can look it up if we encounter any EXPR_MSG_NAME in the body.
+            TRY(ResolveExpr(blimp, stmt->block.code, scopes));
+                // Recurse into the subexpression.
+            DBMap_Pop(scopes);
+            return BLIMP_OK;
+        case EXPR_MSG_NAME: {
+            const Symbol *sym = stmt->symbol;
+            stmt->tag = EXPR_MSG;
+            if (DBMap_Index(
+                    scopes,
+                    (void *)sym,
+                    (void *)BlimpSymbol_Eq,
+                    &stmt->msg.index)
+                != BLIMP_OK)
+            {
+                return ErrorFrom(blimp, stmt->range, BLIMP_INVALID_MESSAGE_NAME,
+                    "no message named ^%s in scope", sym->name);
+            }
+            return BLIMP_OK;
+        }
+        case EXPR_TOKEN:
+            // Raw tokens should have been reduced away by the parser.
+            return ErrorFrom(blimp, stmt->range,
+                UnexpectedTokenError(stmt->tok.type),
+                "unexpected %s", StringOfTokenType(stmt->tok.type));
+        default:
+            assert(false);
+            return Error(blimp, BLIMP_INVALID_EXPR);
+    }
+}
+
+static Status ResolveExpr(Blimp *blimp, Expr *expr, DeBruijnMap *scopes)
+{
+    for (Expr *stmt = expr; stmt != NULL; stmt = stmt->next) {
+        TRY(ResolveStmt(blimp, stmt, scopes));
+    }
 
     return BLIMP_OK;
+}
+
+Status BlimpExpr_Resolve(Blimp *blimp, Expr *expr)
+{
+    DeBruijnMap scopes;
+    DBMap_Init(blimp, &scopes);
+
+    if (ResolveExpr(blimp, expr, &scopes) != BLIMP_OK) {
+        DBMap_Destroy(&scopes);
+        return Reraise(blimp);
+    }
+
+    DBMap_Destroy(&scopes);
+    return BLIMP_OK;
+}
+
+void BlimpExpr_SetSourceRange(Expr *expr, const SourceRange *range)
+{
+    expr->range = *range;
+}
+
+Expr *BlimpExpr_Borrow(Expr *expr)
+{
+    assert(expr->refcount > 0);
+    ++expr->refcount;
+    return expr;
 }
 
 void Blimp_FreeExpr(Expr *expr)
@@ -47,6 +178,10 @@ void Blimp_FreeExpr(Expr *expr)
                 Blimp_FreeExpr(expr->send.message);
                 break;
             case EXPR_MSG:
+                break;
+            case EXPR_MSG_NAME:
+                break;
+            case EXPR_TOKEN:
                 break;
         }
 

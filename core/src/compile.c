@@ -204,6 +204,9 @@ static Status CompileStmt(
                 *returned = !!(flags & SEND_TAIL);
             }
             break;
+        default:
+            assert(false);
+            return Blimp_Error(blimp, BLIMP_INVALID_EXPR);
         }
     }
 

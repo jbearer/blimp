@@ -4,7 +4,7 @@
 #include <signal.h>
 #include <stdint.h>
 
-#include "internal/common.h"
+#include "common.h"
 
 typedef struct {
     BlimpSignalCallback callback;

@@ -1,7 +1,7 @@
 #ifndef BLIMP_BYTECODE_H
 #define BLIMP_BYTECODE_H
 
-#include "internal/common.h"
+#include "common.h"
 
 ////////////////////////////////////////////////////////////////////////////////
 // Instructions

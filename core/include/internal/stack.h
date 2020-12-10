@@ -3,7 +3,6 @@
 
 #include <stdint.h>
 
-#include "internal/common.h"
 #include "internal/instruction.h"
 #include "internal/object.h"
 

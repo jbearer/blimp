@@ -3,8 +3,6 @@
 
 #include "hash_map.h"
 
-#include "internal/common.h"
-
 typedef HashMap SymbolTable;
 
 PRIVATE Status SymbolTable_Init(Blimp *blimp, SymbolTable *symbols);

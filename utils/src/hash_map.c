@@ -395,6 +395,26 @@ void HashMap_AbortEmplace(HashMap *map, HashMapEntry *entry)
     }
 }
 
+Status HashMap_Union(HashMap *m1, const HashMap *m2)
+{
+    if (m1 == m2) {
+        return BLIMP_OK;
+    }
+
+    for (HashMapEntry *it = HashMap_Begin(m2);
+         it != HashMap_End(m2);
+         it = HashMap_Next(m2, it))
+    {
+        void *key;
+        void *value;
+        HashMap_GetEntry(m2, it, &key, &value, NULL);
+
+        TRY(HashMap_Update(m1, key, value));
+    }
+
+    return BLIMP_OK;
+}
+
 HashMapEntry *HashMap_FindEntry(const HashMap *map, const void *key)
 {
     HashMapEntry *entry = Find(map, map->hash(key, map->user_data), key);

@@ -21,7 +21,7 @@
 #ifndef BLIMP_ANALYZE_H
 #define BLIMP_ANALYZE_H
 
-#include "internal/common.h"
+#include "common.h"
 
 typedef enum {
     NO,

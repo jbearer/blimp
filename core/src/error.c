@@ -168,6 +168,7 @@ static const char *GenericErrorCodeMessage(BlimpErrorCode code)
         case BLIMP_UNEXPECTED_TOKEN:  return "unexpected token";
         case BLIMP_UNEXPECTED_EOF:    return "unexpected end of input";
         case BLIMP_INVALID_MESSAGE_NAME: return "invalid message name or index";
+        case BLIMP_AMBIGUOUS_PARSE:   return "ambiguous grammar rule";
         case BLIMP_NO_SUCH_SYMBOL:    return "no such symbol";
         case BLIMP_NO_SUCH_METHOD:    return "no such method";
         case BLIMP_MUST_BE_BLOCK:     return "expected block";
@@ -219,6 +220,20 @@ static Status VError(
     }
 
     return &blimp->last_error;
+}
+
+void AppendErrorMsg(Blimp *blimp, const char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+
+    size_t curr_len = strlen(blimp->last_error.message);
+    if (curr_len < ERR_MSG_LEN) {
+        vsnprintf(
+            blimp->last_error.message + curr_len, ERR_MSG_LEN - curr_len, fmt, args);
+    }
+
+    va_end(args);
 }
 
 Status Blimp_Error(Blimp *blimp, BlimpErrorCode code)

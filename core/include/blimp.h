@@ -343,6 +343,7 @@ typedef enum BlimpErrorCode {
     BLIMP_UNEXPECTED_TOKEN,
     BLIMP_UNEXPECTED_EOF,
     BLIMP_INVALID_MESSAGE_NAME,
+    BLIMP_AMBIGUOUS_PARSE,
 
     // Runtime errors
     BLIMP_NO_SUCH_SYMBOL,
@@ -663,10 +664,27 @@ BlimpStatus Blimp_GetSymbol(
 const char *BlimpSymbol_GetName(const BlimpSymbol *symbol);
 size_t BlimpSymbol_Hash(const BlimpSymbol *symbol);
 
+static inline bool BlimpSymbol_Eq(
+    const BlimpSymbol *sym1, const BlimpSymbol *sym2)
+{
+    return sym1 == sym2;
+}
+
 typedef struct BlimpExpr BlimpExpr;
+
+BlimpExpr *BlimpExpr_Borrow(BlimpExpr *expr);
 
 BlimpStatus BlimpExpr_NewSymbol(
     Blimp *blimp, const BlimpSymbol *sym, BlimpExpr **expr);
+BlimpStatus BlimpExpr_NewBlock(
+    Blimp *blimp,
+    const BlimpSymbol *msg_name,
+    BlimpExpr *code,
+    BlimpExpr **expr);
+BlimpStatus BlimpExpr_NewSend(
+    Blimp *blimp, BlimpExpr *receiver, BlimpExpr *message, BlimpExpr **expr);
+
+void BlimpExpr_SetSourceRange(BlimpExpr *expr, const BlimpSourceRange *range);
 
 /**
  * \brief Free memory associated with an expression.

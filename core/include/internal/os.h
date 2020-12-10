@@ -22,7 +22,7 @@
 
 #include <stdint.h>
 
-#include "internal/common.h"
+#include "common.h"
 
 // Get the lowest and highest addresses in the calling thread's stack, and the
 // direction of stack growth.

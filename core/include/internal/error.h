@@ -3,7 +3,7 @@
 
 #include <string.h>
 
-#include "internal/common.h"
+#include "common.h"
 
 // Abbreviations for the Blimp_Error* functions.
 #define Error(...) Blimp_Error(__VA_ARGS__)
@@ -18,16 +18,6 @@
 #define RuntimeReraise(...) Blimp_RuntimeReraise(__VA_ARGS__)
 #define ReraiseFrom(...) Blimp_ReraiseFrom(__VA_ARGS__)
 
-// If `e` evalutes to an error, return that error from the function invoking
-// this macro.
-#define TRY(e) \
-    do { \
-        Status s = (e);\
-        if (s != BLIMP_OK) { \
-            return s; \
-        } \
-    } while (0)
-
 #define TRY_FROM(range, e) \
     do { \
         Status s = (e); \
@@ -37,50 +27,7 @@
         } \
     } while (0)
 
-// Wrapper around malloc which returns a Status. The allocated pointer `ret` is
-// an out-param of type `T **`.
-#define Malloc(blimp, size, ret) ( \
-    (*(void **)(ret) = malloc(size)) == NULL \
-        ? Error(blimp, BLIMP_OUT_OF_MEMORY) \
-        : BLIMP_OK \
-    )
-
-#define Calloc(blimp, n, size, ret) (\
-    (*(void **)(ret) = calloc(n, size)) == NULL \
-        ? Error(blimp, BLIMP_OUT_OF_MEMORY) \
-        : BLIMP_OK \
-    )
-
-// Wrapper around realloc which returns a Status. The pointer `p` to be resized
-// an in-out-param of type `T **`.
-#define Realloc(blimp, size, p) ( \
-    (*(void **)(p) = realloc(*p, size)) == NULL \
-        ? Error(blimp, BLIMP_OUT_OF_MEMORY) \
-        : BLIMP_OK \
-    )
-
-// Wrapper around strdup which returns a Status.
-static inline Status Strndup(
-    Blimp *blimp, const char *str, size_t length, char **ret)
-{
-    TRY(Malloc(blimp, length, ret));
-    strncpy(*ret, str, length);
-    (*ret)[length-1] = '\0';
-    return BLIMP_OK;
-}
-
-static inline Status Strdup(Blimp *blimp, const char *str, char **ret)
-{
-    return Strndup(blimp, str, strlen(str) + 1, ret);
-}
-
-// Wrapper around free which stores NULL into the freed pointer.
-#define Free(blimp, p) do { \
-    (void)blimp; \
-    free(*p); \
-    *p = NULL; \
-} while (0)
-
+PRIVATE void AppendErrorMsg(Blimp *blimp, const char *fmt, ...);
 PRIVATE void PrintSourceRange(FILE *f, const SourceRange *range);
 
 #endif

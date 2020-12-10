@@ -3,15 +3,23 @@
 
 #include "internal/analyze.h"
 #include "internal/blimp.h"
+#include "internal/parse.h"
 #include "internal/symbol.h"
 
+typedef enum {
+    EXPR_SYMBOL,
+    EXPR_BLOCK,
+    EXPR_SEND,
+    EXPR_MSG,
+
+    // Unresolved expressions. These should be eliminated from the AST after the
+    // parse/resolve phase.
+    EXPR_TOKEN,
+    EXPR_MSG_NAME,
+} ExprType;
+
 struct BlimpExpr {
-    enum {
-        EXPR_SYMBOL,
-        EXPR_BLOCK,
-        EXPR_SEND,
-        EXPR_MSG,
-    } tag;
+    ExprType tag;
 
     size_t refcount;
     SourceRange range;
@@ -29,6 +37,7 @@ struct BlimpExpr {
         // depth proportional to the length of the input program. For other
         // kinds of expressions, the depth of the AST is small and bounded in
         // reasonable input programs.
+    Expr *last;
 
     union {
         const Symbol *symbol;
@@ -83,8 +92,19 @@ struct BlimpExpr {
                 // index; that is, if `index` is `n`, then the expression is a
                 // lexical child of at least `n + 1` nested scopes.
         } msg;
+
+        Token tok;
     };
 };
+
+PRIVATE Status BlimpExpr_NewToken(Blimp *blimp, const Token *tok, Expr **expr);
+PRIVATE Status BlimpExpr_NewMsgName(Blimp *blimp, const Symbol *name, Expr **expr);
+PRIVATE Status BlimpExpr_NewMsgIndex(Blimp *blimp, size_t index, Expr **expr);
+
+// Replace any EXPR_MSG_NAME sub-expressions of `expr` with an EXPR_MSG where
+// the `index` indicates the depth relative to the scope whose message name
+// corresponds to the `msg_name`.
+PRIVATE Status BlimpExpr_Resolve(Blimp *blimp, Expr *expr);
 
 PRIVATE void PrintClosure(FILE *f, const Expr *expr, DeBruijnMap *scopes);
 

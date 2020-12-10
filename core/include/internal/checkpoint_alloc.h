@@ -48,7 +48,7 @@
 #ifndef BLIMP_CHECKPOINT_ALLOC_H
 #define BLIMP_CHECKPOINT_ALLOC_H
 
-#include "internal/common.h"
+#include "common.h"
 
 struct CheckpointBlock {
     size_t allocated;

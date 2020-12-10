@@ -21,7 +21,8 @@
 #ifndef BLIMP_DEBRUIJN_H
 #define BLIMP_DEBRUIJN_H
 
-#include "internal/common.h"
+#include "common.h"
+
 #include "internal/error.h"
 
 typedef struct {

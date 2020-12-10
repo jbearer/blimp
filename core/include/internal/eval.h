@@ -1,7 +1,6 @@
 #ifndef BLIMP_EVAL_H
 #define BLIMP_EVAL_H
 
-#include "internal/common.h"
 #include "internal/object.h"
 
 PRIVATE Status EvalBytecode(

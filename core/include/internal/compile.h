@@ -1,7 +1,6 @@
 #ifndef BLIMP_COMPILE_H
 #define BLIMP_COMPILE_H
 
-#include "internal/common.h"
 #include "internal/object.h"
 
 /**
