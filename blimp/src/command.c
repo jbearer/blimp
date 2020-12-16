@@ -463,6 +463,16 @@ static BlimpStatus InspectSymbol(
     return VoidReturn(blimp, result);
 }
 
+static BlimpStatus InspectGrammar(
+    Blimp *blimp, BlimpObject *scope, BlimpObject **args, BlimpObject **result)
+{
+    (void)scope;
+    (void)args;
+
+    Blimp_DumpGrammarVitals(stdout, blimp);
+    return VoidReturn(blimp, result);
+}
+
 static const Command inspect_commands[] = {
     {"unreachable", "print information about unreachable heap objects",
         InspectUnreachable, 0},
@@ -482,6 +492,8 @@ static const Command inspect_commands[] = {
         InspectCode, 1},
     {"symbol", "print information about the value of a symbol",
         InspectSymbol, 1},
+    {"grammar", "print information about the current grammar",
+        InspectGrammar, 0},
     {0}
 };
 

@@ -17,6 +17,7 @@ typedef struct OrderedMapNode {
         RED,
         BLACK,
     } color;
+    bool pending;
 
     char key[] __attribute__((aligned (ALIGNMENT)));
     // Value is at offsetof(Node, key) + RoundUpToAlignment(key_size).
@@ -208,6 +209,27 @@ Status OrderedMap_Iterator(const OrderedMap *map, OrderedMapIterator *it)
     return BLIMP_OK;
 }
 
+Status OrderedMap_RIterator(const OrderedMap *map, OrderedMapIterator *it)
+{
+    Vector_Init(map->blimp, it, sizeof(Node *), NULL);
+    if (map->size > 0) {
+        // The iterator will use a stack (implemented as a Vector) to keep track
+        // of nodes that it still needs to visit. The stack always represents a
+        // path from the root to a leaf. Since the theoretical maximum height of
+        // a red-black tree is 2log(n), we can reserve enough memory now that we
+        // will never fail to add a node to the stack during the traversal.
+        TRY(Vector_Reserve(it, (size_t)ceil(2*log2(map->size))));
+
+        // The first node we visit is the rightmost in the tree. Traverse to it,
+        // and add everything we encounter along the way to the stack so we can
+        // visit them when we have popped the first node off of the stack.
+        for (Node *curr = map->root; curr != NULL; curr = curr->right) {
+            CHECK(Vector_PushBack(it, &curr));
+        }
+    }
+    return BLIMP_OK;
+}
+
 bool OrderedMap_Next(
     const OrderedMap *map,
     OrderedMapIterator *it,
@@ -241,7 +263,41 @@ bool OrderedMap_Next(
     return true;
 }
 
-Status OrderedMap_Update(OrderedMap *map, const void *key, const void *value)
+bool OrderedMap_RNext(
+    const OrderedMap *map,
+    OrderedMapIterator *it,
+    const void **key,
+    void **value)
+{
+    if (Vector_Empty(it)) {
+        // If the stack of nodes to visit is empty, we are done.
+        Vector_Destroy(it);
+        return false;
+    }
+
+    // Get the next node in the traversal from the stack.
+    Node *curr;
+    Vector_PopBack(it, &curr);
+
+    if (key != NULL) {
+        *key = NodeKey(map, curr);
+    }
+    if (value != NULL) {
+        *value = NodeValue(map, curr);
+    }
+
+    // The next node we should visit is the right node in the subtree rooted
+    // at `curr->left`. Traverse to that node and add everything in between to
+    // the stack.
+    for (curr = curr->left; curr != NULL; curr = curr->right) {
+        CHECK(Vector_PushBack(it, &curr));
+    }
+
+    return true;
+}
+
+Status OrderedMap_Emplace(
+    OrderedMap *map, const void *key, OrderedMapEntry **entry, bool *created)
 {
     // First insert the node at a leaf without rebalancing. If this breaks any
     // red-black invariants, we will fix them as we walk back up the tree in a
@@ -266,8 +322,11 @@ Status OrderedMap_Update(OrderedMap *map, const void *key, const void *value)
         cmp = map->cmp(key, (*parents_child)->key);
         if (cmp == 0) {
             // If we find an existing node with a key exactly equal to `key`,
-            // just update its value and return without inserting a new node.
-            memcpy(NodeValue(map, *parents_child), value, map->value_size);
+            // return without inserting a new node.
+            *entry = *parents_child;
+            if (created != NULL) {
+                *created = false;
+            }
             return BLIMP_OK;
         } else if (cmp < 0) {
             parents_child = &(*parents_child)->left;
@@ -283,8 +342,25 @@ Status OrderedMap_Update(OrderedMap *map, const void *key, const void *value)
     curr->left = NULL;
     curr->right = NULL;
     curr->color = RED;
+    curr->pending = true;
     memcpy(NodeKey(map, curr), key, map->key_size);
-    memcpy(NodeValue(map, curr), value, map->value_size);
+
+    *entry = curr;
+    if (created != NULL) {
+        *created = true;
+    }
+
+    return BLIMP_OK;
+}
+
+void OrderedMap_CommitEmplace(OrderedMap *map, OrderedMapEntry *curr)
+{
+    if (!curr->pending) {
+        return;
+    }
+    curr->pending = false;
+    assert(curr->left == NULL);
+    assert(curr->right == NULL);
 
     // Inserting the new node may have broken some of the red-black tree
     // invariants. For example, if `parent` is red, we now have two red nodes in
@@ -371,7 +447,7 @@ Status OrderedMap_Update(OrderedMap *map, const void *key, const void *value)
                     //
                     RotateLeft(map, parent);
                     curr = parent;
-                    parent = curr;
+                    parent = curr->parent;
                 }
 
                 // Case 1c:
@@ -434,7 +510,7 @@ Status OrderedMap_Update(OrderedMap *map, const void *key, const void *value)
                     //
                     RotateRight(map, parent);
                     curr = parent;
-                    parent = curr;
+                    parent = curr->parent;
                 }
 
                 // Case 2c:
@@ -457,5 +533,41 @@ Status OrderedMap_Update(OrderedMap *map, const void *key, const void *value)
     map->root->color = BLACK;
 
     ++map->size;
-    return BLIMP_OK;
+}
+
+void OrderedMap_AbortEmplace(OrderedMap *map, OrderedMapEntry *entry)
+{
+    if (!entry->pending) {
+        return;
+    }
+
+    assert(entry->left == NULL);
+    assert(entry->right == NULL);
+
+    if (entry->parent == NULL) {
+        assert(entry == map->root);
+        assert(map->size == 0);
+        map->root = NULL;
+    } else if (entry == entry->parent->left) {
+        entry->parent->left = NULL;
+    } else {
+        assert(entry == entry->parent->right);
+        entry->parent->right = NULL;
+    }
+
+    free(entry);
+}
+
+void OrderedMap_GetEntry(
+    const OrderedMap *map,
+    OrderedMapEntry *entry,
+    void **key,
+    void **value)
+{
+    if (key != NULL) {
+        *key = NodeKey(map, entry);
+    }
+    if (value != NULL) {
+        *value = NodeValue(map, entry);
+    }
 }

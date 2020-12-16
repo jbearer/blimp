@@ -363,6 +363,11 @@ Status Blimp_ParseString(Blimp *blimp, const char *str, Expr **output)
     return Blimp_Parse(blimp, stream, output);
 }
 
+void Blimp_DumpGrammarVitals(FILE *file, Blimp *blimp)
+{
+    Grammar_DumpVitals(file, &blimp->grammar);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Object API
 //

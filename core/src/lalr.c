@@ -315,9 +315,66 @@
 ////////////////////////////////////////////////////////////////////////////////
 // Dynamic Grammars
 //
-// Coming soon.
+// There are two challenges when attempting to update an LALR(1) parser during
+// parsing. They are:
+//  1. How to efficiently update the various intermediate data structures (the
+//     state machine, extended grammar, etc.) to arrive at the new parse table.
+//  2. How to decide when it is safe for the parser to switch over to the new
+//     parse table.
 //
-
+// This implementation does not currently do anything clever about problem 1. We
+// simply rebuild the new parse table from scratch, using the updated grammar,
+// when it is time to switch to the new table. It is performant enough for the
+// time being, but if performance does become an issue, there is some existing
+// work on the problem of incrementally updating LALR data structures (Horspool
+// 1989, https://link.springer.com/content/pdf/10.1007/3-540-51364-7_10.pdf).
+//
+// Problem 2 can be summarized thus: at any time during parsing, the parser has
+// a stack of states from the state machine which represent sets of reductions
+// it might apply depending on subsequent input. If we change the grammar (and
+// thus change the state machine) how can we be sure we aren't changing the
+// meaning of the states on the stack?
+//
+// We do this using precedence. First, the states in the state machine are
+// ordered based on the precedences of the symbols that must be encountered to
+// reach the items in their kernel. The starting state (whose kernel is always
+// {S -> ⋅N} for some non-terminal N) comes first. Then comes the state we
+// transition to from the start state given the lowest-precedence non-terminal.
+// Then come all the states we can reach from that state, followed by the state
+// reached from the start state given the second lowest precedence non-terminal.
+// In other words, the order of states is a depth-first, weighted topological
+// sorting starting from the start state.
+//
+// We can now define the precedence of a state by the highest-precedence symbol
+// in the lowest-precedence path from the start state to that state (that is,
+// the path taken by the weighted depth-first traversal described above). This
+// gives us the crucial result: the addition of a production whose first symbol
+// has precedence `p` cannot change the index or interpretation of a state `i`
+// with `Prec(i) < p`, because any state whose kernel contains an item derived
+// from the new production can only be reached from another state by a
+// transition of precedence `p`, and therefore such a state comes after state
+// `i` in the depth-first traversal.
+//
+// Let S be the multiset of the precedences of each state on the state stack at
+// some point during parsing. It is clear from the above that if `max(S) < p`,
+// then it is safe to add a new production that begins with `p`. There must be
+// some symbol α in the partial output such that `Prec(α) = max(S)`, since we
+// must have transitioned on such a symbol to reach a state whose precedence is
+// `max(S)`. Therefore, if all symbols in the output of precedence less than
+// `p`, then `max(S) < p`. This leads to an algorithm which does not require
+// computing state precedences at all. Instead, we can just look at the
+// precedences of symbols in the output.
+//
+// We maintain two auxiliary pieces of state (in addition to the usual state:
+// input, stack of automaton states, and partial output). These are
+//  1. O: The multiset of the precedences of each symbol in the output.
+//  2. P: The multiset of the precedences of the first symbol of each production
+//        which has been added to the grammar since we last updated the parse
+//        table.
+// Whenever O or P changes, we check if `max(O) < min(P)`. If it is, we
+// regenerate the parse table from the new grammar and switch to the new parse
+// table.
+//
 
 #include "hash_map.h"
 #include "hash_set.h"
@@ -362,16 +419,23 @@ static size_t NonTerminal_Hash(const NonTerminal *nt, void *arg)
     return hash;
 }
 
+static int GrammarSymbol_Cmp(
+    const GrammarSymbol *sym1, const GrammarSymbol *sym2)
+{
+    if (sym1->is_terminal != sym2->is_terminal) {
+        return (int)sym1->is_terminal - (int)sym2->is_terminal;
+    } else if (sym1->is_terminal) {
+        return (int)sym1->terminal - (int)sym2->terminal;
+    } else {
+        return (int)sym1->non_terminal - (int)sym2->non_terminal;
+    }
+}
+
 static bool GrammarSymbol_Eq(
     const GrammarSymbol *sym1, const GrammarSymbol *sym2, void *arg)
 {
     (void)arg;
-
-    if (sym1->is_terminal) {
-        return sym2->is_terminal && sym1->terminal == sym2->terminal;
-    } else {
-        return !sym2->is_terminal && sym1->non_terminal == sym2->non_terminal;
-    }
+    return GrammarSymbol_Cmp(sym1, sym2) == 0;
 }
 
 static size_t GrammarSymbol_Hash(const GrammarSymbol *sym, void *arg)
@@ -403,6 +467,7 @@ static size_t GrammarSymbol_Hash(const GrammarSymbol *sym, void *arg)
 typedef struct {
     ProductionHandler handler;
     void *handler_arg;
+    size_t index;
 
     NonTerminal non_terminal;
 
@@ -499,7 +564,7 @@ static Status Grammar_AddProduction(Grammar *grammar, Production *production)
 {
     Blimp *blimp = Grammar_GetBlimp(grammar);
 
-    size_t index = Vector_Length(&grammar->productions);
+    production->index = Vector_Length(&grammar->productions);
         // Save the index of the new production for future use.
     if (Vector_PushBack(&grammar->productions, &production) != BLIMP_OK) {
         // Append the pointer to the new production (which the caller must have
@@ -560,7 +625,9 @@ static Status Grammar_AddProduction(Grammar *grammar, Production *production)
     // it is empty). Add the new production.
     Vector *productions_for_non_terminal = Vector_Index(
         &grammar->productions_for_non_terminals, production->non_terminal);
-    if (Vector_PushBack(productions_for_non_terminal, &index) != BLIMP_OK) {
+    if (Vector_PushBack(
+            productions_for_non_terminal, &production->index) != BLIMP_OK)
+    {
         goto error;
     }
 
@@ -1139,7 +1206,10 @@ static Status State_Init(
 {
     Blimp *blimp = Grammar_GetBlimp(grammar);
 
-    state->kernel = kernel;
+    // The kernel needs to be allocated on the heap, so allocate space and move
+    // the contents out of `kernel` and into `state->kernel`.
+    TRY(Malloc(blimp, sizeof(OrderedSet), &state->kernel));
+    OrderedSet_Move(kernel, state->kernel);
 
     if (InitActions(blimp, &state->actions, grammar) != BLIMP_OK) {
         goto err_actions;
@@ -1202,6 +1272,111 @@ err_closure:
 err_gotos:
     free(state->actions);
 err_actions:
+    return Reraise(blimp);
+}
+
+typedef struct {
+    size_t from_state;
+    GrammarSymbol sym;
+    OrderedSet kernel;
+} Transition;
+
+static Status State_VisitTransitions(
+    State *state, size_t index, Vector/*<Transition>*/ *dfs_stack)
+{
+    Blimp *blimp = Vector_GetBlimp(&state->closure);
+
+    OrderedMap/*<GrammarSymbol, OrderedSet>*/ transitions;
+        // Map from symbols to the kernel of the state we transition to on that
+        // symbol. We will add to the kernels in this mapping as we process
+        // items from this state, since potentially more than one item
+        // transitions on the same symbol.
+    OrderedMap_Init(
+        blimp,
+        &transitions,
+        sizeof(GrammarSymbol),
+        sizeof(OrderedSet),
+        (CmpFunc)GrammarSymbol_Cmp
+    );
+
+    // For each item in the state, create a new item by feeding it the next
+    // symbol it is expecting from the input, and add the new item to
+    // `transitions[symbol]`. At the end of this process, for each symbol in
+    // `transitions`, `transitions[symbol]` will be the kernel of the state
+    // we would transition to from this state when given that symbol.
+    Item *item;
+    for (StateIterator it = State_Iterator(state);
+         State_Next(state, &it, &item); )
+    {
+        if (item->cursor >= item->production->num_symbols) {
+            // If the cursor is already at the end of the item, then there
+            // are no transitions out of this state that involve this item.
+            continue;
+        }
+
+        const GrammarSymbol *expected_sym =
+            &item->production->symbols[item->cursor];
+
+        // Get a reference to `transitions[expected_sym]`, creating a new
+        // empty kernel for `expected_sym` if one does not already exist.
+        OrderedMapEntry *transition;
+        bool new_transition;
+        if (OrderedMap_Emplace(
+                &transitions, expected_sym, &transition, &new_transition)
+            != BLIMP_OK)
+        {
+            goto error;
+        }
+        OrderedSet *transition_kernel = OrderedMap_GetValue(
+            &transitions, transition);
+
+        if (new_transition) {
+            // If we just inserted a new kernel into `transitions`, we need
+            // to initialize it.
+            OrderedSet_Init(
+                blimp,
+                transition_kernel,
+                sizeof(Item),
+                (CmpFunc)Item_Cmp);
+        }
+
+        // Advance the cursor in `item` one position forward and add the
+        // resulting item to the new kernel.
+        if (OrderedSet_Insert(
+                transition_kernel,
+                &(Item) {item->production, item->cursor + 1})
+            != BLIMP_OK)
+        {
+            goto error;
+        }
+        OrderedMap_CommitEmplace(&transitions, transition);
+    }
+
+    // For each (symbol, kernel) pair that we just aded to `transitions`
+    // create a transition on `symbol` from this state to the state with
+    // `kernel` and push it onto the depth-first traversal stack.
+    const GrammarSymbol *sym;
+    OrderedSet *kernel;
+    OrderedMapIterator it;
+    CHECK(OrderedMap_RIterator(&transitions, &it));
+    while (OrderedMap_RNext(
+            &transitions, &it, (const void **)&sym, (void **)&kernel))
+    {
+        if (Vector_PushBack(dfs_stack, &(Transition) {
+                .from_state = index,
+                .kernel = *kernel,
+                .sym = *sym,
+            }) != BLIMP_OK)
+        {
+            goto error;
+        }
+    }
+
+    OrderedMap_Destroy(&transitions);
+    return BLIMP_OK;
+
+error:
+    OrderedMap_Destroy(&transitions);
     return Reraise(blimp);
 }
 
@@ -1292,57 +1467,6 @@ static void StateMachine_Destroy(StateMachine *m)
     HashMap_Destroy(&m->index);
 }
 
-static Status StateMachine_StateWithKernel(
-    StateMachine *m, OrderedSet *kernel, size_t *state_index)
-{
-    Blimp *blimp = HashMap_GetBlimp(&m->index);
-
-    // For the caller's convenience, `state_index` is optional. For our
-    // convenience, we will point it at a local variable if it is NULL so we
-    // don't have to do any more NULL checks.
-    size_t local_state_index;
-    if (state_index == NULL) {
-        state_index = &local_state_index;
-    }
-
-    // If there is already a state with this kernel, return its index.
-    size_t *existing_state_index = HashMap_Find(&m->index, &kernel);
-    if (existing_state_index != NULL) {
-        *state_index = *existing_state_index;
-        return BLIMP_OK;
-    }
-
-    // We're going to create a new state. The kernel needs to be allocated on a
-    // heap, so allocate space and move the contents out of `kernel` and into
-    // `moved_kernel`.
-    OrderedSet *moved_kernel;
-    TRY(Malloc(blimp, sizeof(OrderedSet), &moved_kernel));
-    OrderedSet_Move(kernel, moved_kernel);
-
-    *state_index = Vector_Length(&m->states);
-        // Save the index of the next state to be appended to `states`.
-
-    // Append and initialize the new state.
-    State *state;
-    if (Vector_EmplaceBack(&m->states, (void **)&state) != BLIMP_OK) {
-        OrderedSet_Destroy(moved_kernel);
-        free(moved_kernel);
-    }
-    if (State_Init(state, m->grammar, moved_kernel) != BLIMP_OK) {
-        Vector_Contract(&m->states, 1);
-        return Reraise(blimp);
-    }
-
-    // Update the kernel-to-state lookup table.
-    if (HashMap_Update(&m->index, &state->kernel, state_index) != BLIMP_OK) {
-        State_Destroy(state);
-        Vector_Contract(&m->states, 1);
-        return Reraise(blimp);
-    }
-
-    return BLIMP_OK;
-}
-
 static inline size_t StateMachine_NumStates(const StateMachine *m)
 {
     return Vector_Length(&m->states);
@@ -1353,12 +1477,41 @@ static inline State *StateMachine_GetState(const StateMachine *m, size_t i)
     return Vector_Index(&m->states, i);
 }
 
+static Status StateMachine_NewState(
+    StateMachine *m,
+    OrderedSet *kernel,
+    Vector/*<Transition>*/ *dfs_stack,
+    size_t *index)
+{
+    // For the caller's convenience, `index` is optional. For our
+    // convenience, we will point it at a local variable if it is NULL so we
+    // don't have to do any more NULL checks.
+    size_t local_index;
+    if (index == NULL) {
+        index = &local_index;
+    }
+    *index = Vector_Length(&m->states);
+
+    // Append and initialize the new state.
+    State *state;
+    TRY(Vector_EmplaceBack(&m->states, (void **)&state));
+    TRY(State_Init(state, m->grammar, kernel));
+
+    // Update the kernel-to-state lookup table.
+    assert(HashMap_Find(&m->index, &state->kernel) == NULL);
+    TRY(HashMap_Update(&m->index, &state->kernel, index));
+
+    // Push transitions from this state onto the depth-first traversal stack so
+    // we visit them next.
+    TRY(State_VisitTransitions(state, *index, dfs_stack));
+
+    return BLIMP_OK;
+}
+
 static Status MakeStateMachine(const Grammar *grammar, StateMachine *m)
 {
     Blimp *blimp = Grammar_GetBlimp(grammar);
 
-    Vector_Init(
-        blimp, &m->states, sizeof(State), (Destructor)State_Destroy);
     TRY(HashMap_Init(
         blimp,
         &m->index,
@@ -1368,148 +1521,94 @@ static Status MakeStateMachine(const Grammar *grammar, StateMachine *m)
         (HashFunc)Kernel_Hash,
         NULL
     ));
+    Vector_Init(
+        blimp, &m->states, sizeof(State), (Destructor)State_Destroy);
     m->grammar = grammar;
 
-    // For each state we process, we will use `transitions` to map symbols to
-    // the kernel of the state we transition to on that symbol, as we build up
-    // the kernel processing one item from the current state at a time.
+    // In order to ensure that states are added in the correct precedence order
+    // for the dynamic parsing algorithm to work, we must traverse the graph
+    // depth-first from the start state as we build the graph.
     //
-    // We will clear this before processing each new state, but we allocate it
-    // here so we don't have to constantly destroy and reinitialize a hash map
-    // in the loop below.
-    //
-    // This is purely intermediate state which will be destroyed when we return
-    // from this function.
-    HashMap transitions;
-    TRY(HashMap_Init(
-        blimp,
-        &transitions,
-        sizeof(GrammarSymbol),
-        sizeof(OrderedSet),
-        (EqFunc)GrammarSymbol_Eq,
-        (HashFunc)GrammarSymbol_Hash,
-        NULL
-    ));
+    // We will use `stack` to keep track of states whose neighbors we have yet
+    // to visit. At each state, we will push all of its unvisited neighbors onto
+    // `stack`, in order of decreasing precedence, so that the lowest-precedence
+    // neighbor of the current state becomes the new top of the stack. This way,
+    // the next state we visit will be the neighbor of the current state with
+    // the lowest precedence, giving us the weighted depth-first traversal we
+    // want.
+    Vector/*<Transition>*/ stack;
+    Vector_Init(blimp, &stack, sizeof(Transition), NULL);
 
     // Create the starting state from the grammar's initial production.
     OrderedSet initial_kernel;
     OrderedSet_Init(
         blimp, &initial_kernel, sizeof(Item), (CmpFunc)Item_Cmp);
-    TRY(OrderedSet_Insert(
-        &initial_kernel, &(Item){Grammar_GetProduction(grammar, 0), 0}));
-    TRY(StateMachine_StateWithKernel(m, &initial_kernel, NULL));
-
-    // Create the transitions (and lazily generate more states as necessary) by
-    // feeding one symbol at a time of input to each not-yet-completed state
-    // (starting with the one initial state we just added). New states are added
-    // to the end of `states`, so the length of `states` will continue to grow
-    // and we will continue to iterate over the newly added states until we
-    // reach a fixpoint where no new states are added.
-    for (size_t completed_states = 0;
-         completed_states < Vector_Length(&m->states);
-         ++completed_states)
+    if (OrderedSet_Insert(
+            &initial_kernel, &(Item){Grammar_GetProduction(grammar, 0), 0})
+        != BLIMP_OK)
     {
-        State *state = StateMachine_GetState(m, completed_states);
+        goto error;
+    }
+    if (StateMachine_NewState(m, &initial_kernel, &stack, NULL) != BLIMP_OK) {
+        goto error;
+    }
 
-        HashMap_Clear(&transitions);
+    // Begin the depth-first traversal.
+    while (!Vector_Empty(&stack)) {
+        Transition transition;
+        Vector_PopBack(&stack, &transition);
 
-        // For each item in the state, create a new item by feeding it the next
-        // symbol it is expecting from the input, and add the new item to
-        // `transitions[symbol]`. At the end of this process, for each symbol in
-        // `transitions`, `transitions[symbol]` will be the kernel of the state
-        // we would transition to from this state when given that symbol.
-        Item *item;
-        for (StateIterator it = State_Iterator(state);
-             State_Next(state, &it, &item); )
-        {
-            if (item->cursor >= item->production->num_symbols) {
-                // If the cursor is already at the end of the item, then there
-                // are no transitions out of this state that involve this item.
-                continue;
+        const GrammarSymbol *sym = &transition.sym;
+        OrderedSet *kernel = &transition.kernel;
+        size_t to_index;
+
+        // Check if there is already a state with the kernel we are trying to
+        // transition to.
+        size_t *to_ptr = HashMap_Find(&m->index, &kernel);
+        if (to_ptr != NULL) {
+            // If there is, all we have to do is note the new transition to the
+            // existing state.
+            to_index = *to_ptr;
+            OrderedSet_Destroy(kernel);
+        } else {
+            // Otherwise, we create the state we're transitioning to (which will
+            // cause the new state's neighbors to be pushed onto the top of
+            // `stack`, preparing us to continue the depth-first traversal in
+            // the next iteration of this loop).
+            if (StateMachine_NewState(
+                    m, kernel, &stack, &to_index) != BLIMP_OK)
+            {
+                goto error;
             }
+        }
 
-            const GrammarSymbol *expected_sym =
-                &item->production->symbols[item->cursor];
-
-            // Get a reference to `transitions[expected_sym]`, creating a new
-            // empty kernel for `expected_sym` if one does not already exist.
-            HashMapEntry *transition;
-            bool new_transition;
-            TRY(HashMap_Emplace(
-                &transitions, expected_sym, &transition, &new_transition));
-            OrderedSet *transition_kernel = HashMap_GetValue(
-                &transitions, transition);
-
-            if (new_transition) {
-                // If we just inserted a new kernel into `transitions`, we need
-                // to initialize it.
-                OrderedSet_Init(
-                    blimp,
-                    transition_kernel,
-                    sizeof(Item),
-                    (CmpFunc)Item_Cmp);
-            }
-
-            // Advance the cursor in `item` one position forward and add the
-            // resulting item to the new kernel.
-            if (OrderedSet_Insert(
-                    transition_kernel,
-                    &(Item) {item->production, item->cursor + 1})
+        // Note the transition in the parse table row for the source state.
+        State *from = StateMachine_GetState(m, transition.from_state);
+        if (sym->is_terminal) {
+            // Transitions on terminals are represented as shift actions.
+            if (SetAction(
+                    grammar, from->actions, sym->terminal, SHIFT, to_index)
                 != BLIMP_OK)
             {
                 goto error;
             }
-            HashMap_CommitEmplace(&transitions, transition);
-        }
-
-        // For each (symbol, kernel) pair that we just aded to `transitions`
-        // create a transition on `symbol` from this state to the state with
-        // `kernel`, creating a new state with `kernel` if one does not already
-        // exist.
-        for (HashMapEntry *transition = HashMap_Begin(&transitions);
-             transition != HashMap_End(&transitions);
-             transition = HashMap_Next(&transitions, transition))
-        {
-            const GrammarSymbol *sym;
-            OrderedSet *kernel;
-            HashMap_GetEntry(
-                &transitions,
-                transition,
-                (void **)&sym,
-                (void **)&kernel,
-                NULL
-            );
-
-            size_t to_state;
-            TRY(StateMachine_StateWithKernel(m, kernel, &to_state));
-            state = StateMachine_GetState(m, completed_states);
-                // StateMachine_StateWithKernel() may have added a new state to
-                // `m->states`, which in turn may have caused `m->states` to
-                // resize, which may have invalidated pointers into `m->states`.
-                // So, we need to update our pointer to `state` based on the
-                // index of the state, which is stable when a new state is
-                // appended.
-
-            // Note the transition in the parse table row for this state.
-            if (sym->is_terminal) {
-                // Transitions on terminals are represented as shift actions.
-                TRY(SetAction(
-                    grammar, state->actions, sym->terminal, SHIFT, to_state));
-            } else {
-                // Transitions on non-terminals are represented as gotos.
-                TRY(SetGoto(
-                    grammar, state->gotos, sym->non_terminal, to_state));
+        } else {
+            // Transitions on non-terminals are represented as gotos.
+            if (SetGoto(
+                    grammar, from->gotos, sym->non_terminal, to_index)
+                != BLIMP_OK)
+            {
+                goto error;
             }
         }
     }
 
-    HashMap_Destroy(&transitions);
+    Vector_Destroy(&stack);
     return BLIMP_OK;
 
 error:
-    HashMap_Destroy(&transitions);
-    HashMap_Destroy(&m->index);
-    Vector_Destroy(&m->states);
+    Vector_Destroy(&stack);
+    StateMachine_Destroy(m);
     return Reraise(blimp);
 }
 
@@ -2020,13 +2119,13 @@ static void DumpParseTable(
     for (Terminal i = 0; i < num_terminals; ++i) {
         const char *string = *(const char **)Vector_Index(
             &grammar->terminal_strings, i);
-        fprintf(file, " %-7s |", string);
+        fprintf(file, " %-7.7s |", string);
     }
     fprintf(file, "|");
     for (NonTerminal i = 0; i < num_non_terminals; ++i) {
         const char *string = *(const char **)Vector_Index(
             &grammar->non_terminal_strings, i);
-        fprintf(file, " %-7s |", string);
+        fprintf(file, " %-7.7s |", string);
     }
     fprintf(file, "\n");
 
@@ -2040,7 +2139,8 @@ static void DumpParseTable(
                     fprintf(file, "   s%.2zu   |", Action_Data(action));
                     break;
                 case REDUCE:
-                    fprintf(file, "   r%.2zu   |", Action_Data(action));
+                    fprintf(file, "   r%.2zu   |",
+                        ((Production *)Action_Data(action))->index);
                     break;
                 case ACCEPT:
                     fprintf(file, "   acc   |");

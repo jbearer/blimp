@@ -26,6 +26,8 @@ typedef struct {
     struct OrderedMapNode *root;
 } OrderedMap;
 
+typedef struct OrderedMapNode OrderedMapEntry;
+
 typedef Vector/*<OrderedMapNode *>*/ OrderedMapIterator;
 
 PRIVATE void OrderedMap_Init(
@@ -37,10 +39,50 @@ PRIVATE void OrderedMap_Init(
 PRIVATE void OrderedMap_Destroy(OrderedMap *map);
 PRIVATE void OrderedMap_Move(OrderedMap *from, OrderedMap *to);
 
-PRIVATE Status OrderedMap_Update(
-    OrderedMap *map, const void *key, const void *value);
+PRIVATE Status OrderedMap_Emplace(
+    OrderedMap *map, const void *key, OrderedMapEntry **entry, bool *created);
+PRIVATE void OrderedMap_CommitEmplace(OrderedMap *map, OrderedMapEntry *entry);
+PRIVATE void OrderedMap_AbortEmplace(OrderedMap *map, OrderedMapEntry *entry);
+
+PRIVATE void OrderedMap_GetEntry(
+    const OrderedMap *map,
+    OrderedMapEntry *entry,
+    void **key,
+    void **value);
+
+static inline void *OrderedMap_GetKey(
+    const OrderedMap *map, OrderedMapEntry *entry)
+{
+    void *key;
+    OrderedMap_GetEntry(map, entry, &key, NULL);
+    return key;
+}
+
+static inline void *OrderedMap_GetValue(
+    const OrderedMap *map, OrderedMapEntry *entry)
+{
+    void *value;
+    OrderedMap_GetEntry(map, entry, NULL, &value);
+    return value;
+}
+
+static inline Status OrderedMap_Update(
+    OrderedMap *map, const void *key, const void *value)
+{
+    OrderedMapEntry *entry;
+    if (OrderedMap_Emplace(map, key, &entry, NULL) != BLIMP_OK) {
+        return Blimp_Reraise(map->blimp);
+    }
+
+    memcpy(OrderedMap_GetValue(map, entry), value, map->value_size);
+    OrderedMap_CommitEmplace(map, entry);
+
+    return BLIMP_OK;
+}
 
 PRIVATE Status OrderedMap_Iterator(
+    const OrderedMap *map, OrderedMapIterator *it);
+PRIVATE Status OrderedMap_RIterator(
     const OrderedMap *map, OrderedMapIterator *it);
 
 /**
@@ -57,6 +99,12 @@ PRIVATE Status OrderedMap_Iterator(
  *      be called again with the same iterator.
  */
 PRIVATE bool OrderedMap_Next(
+    const OrderedMap *map,
+    OrderedMapIterator *it,
+    const void **key,
+    void **value);
+
+PRIVATE bool OrderedMap_RNext(
     const OrderedMap *map,
     OrderedMapIterator *it,
     const void **key,

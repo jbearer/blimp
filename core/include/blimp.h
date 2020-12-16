@@ -808,6 +808,8 @@ BlimpStatus Blimp_ParseFile(Blimp *blimp, const char *path, BlimpExpr **output);
  */
 BlimpStatus Blimp_ParseString(Blimp *blimp, const char *str, BlimpExpr **output);
 
+void Blimp_DumpGrammarVitals(FILE *file, Blimp *blimp);
+
 /**
  * @}
  *
