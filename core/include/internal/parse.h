@@ -20,6 +20,7 @@ typedef enum {
     TOK_MSG_NAME,
     TOK_MSG_THIS,
     TOK_SYMBOL,
+
     NUM_TOKEN_TYPES,
 } TokenType;
 
@@ -80,6 +81,7 @@ typedef struct {
     Vector/*<const char *>*/ non_terminal_strings;
         // A map from non-terminals to human-readable names. Used for error
         // messages and pretty-printing.
+    struct GrammarListener *listeners;
 } Grammar;
 
 typedef struct {
@@ -108,6 +110,6 @@ PRIVATE void Grammar_SetNonTerminalString(
 PRIVATE void Grammar_DumpVitals(FILE *file, const Grammar *grammar);
 
 PRIVATE Status Parse(
-    Lexer *lex, const Grammar *grammar, void *parser_state, Expr **expr);
+    Lexer *lex, Grammar *grammar, void *parser_state, Expr **expr);
 
 #endif

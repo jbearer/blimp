@@ -378,6 +378,7 @@
 
 #include "hash_map.h"
 #include "hash_set.h"
+#include "ordered_multiset.h"
 #include "ordered_set.h"
 #include "vector.h"
 
@@ -453,6 +454,51 @@ static size_t GrammarSymbol_Hash(const GrammarSymbol *sym, void *arg)
     return hash;
 }
 
+typedef struct GrammarListener {
+    struct GrammarListener *next;
+    struct GrammarListener *prev;
+    GrammarSymbol min_new_precedence;
+    bool dirty;
+} GrammarListener;
+
+static void Grammar_Listen(Grammar *grammar, GrammarListener *listener)
+{
+    listener->dirty = false;
+
+    listener->prev = NULL;
+    listener->next = grammar->listeners;
+    if (listener->next != NULL) {
+        listener->next->prev = listener;
+    }
+    grammar->listeners = listener;
+}
+
+static void Grammar_Unlisten(Grammar *grammar, GrammarListener *listener)
+{
+    if (listener->next != NULL) {
+        listener->next->prev = listener->prev;
+    }
+    if (listener->prev != NULL) {
+        listener->prev->next = listener->next;
+    } else {
+        assert(listener == grammar->listeners);
+        grammar->listeners = listener->next;
+    }
+}
+
+static bool GrammarListener_ShouldUpdate(
+    GrammarListener *listener, const GrammarSymbol *min_precedence)
+{
+    if (listener->dirty &&
+        GrammarSymbol_Cmp(min_precedence, &listener->min_new_precedence) < 0)
+    {
+        listener->dirty = false;
+        return true;
+    } else {
+        return false;
+    }
+}
+
 // The rule
 //      (Production){p, n, h, {sym1, sym2, ..., sym_n}}
 // represents the production
@@ -487,6 +533,7 @@ Status Grammar_Init(Blimp *blimp, Grammar *grammar, Terminal eof)
         blimp, &grammar->non_terminal_strings, sizeof(char *), FreeDestructor);
     grammar->num_terminals = NUM_TOKEN_TYPES;
     grammar->eof_terminal = eof;
+    grammar->listeners = NULL;
 
     // For each terminal `t`, create a human readable string name "T(t)". These
     // might be replaced later by the caller, if they want to provide more
@@ -629,6 +676,27 @@ static Status Grammar_AddProduction(Grammar *grammar, Production *production)
             productions_for_non_terminal, &production->index) != BLIMP_OK)
     {
         goto error;
+    }
+
+    // If any parsing operations are in progress and listening for updates to
+    // the grammar, inform them of the new production.
+    const GrammarSymbol *first_sym = &production->symbols[0];
+    for (GrammarListener *listener = grammar->listeners;
+         listener != NULL;
+         listener = listener->next)
+    {
+        if (listener->dirty) {
+            // The listener only cares about the new production if it is lower
+            // precedence than the ones they already know about.
+            if (GrammarSymbol_Cmp(
+                    first_sym, &listener->min_new_precedence) < 0)
+            {
+                listener->min_new_precedence = *first_sym;
+            }
+        } else {
+            listener->dirty = true;
+            listener->min_new_precedence = *first_sym;
+        }
     }
 
     return BLIMP_OK;
@@ -2186,8 +2254,7 @@ void Grammar_DumpVitals(FILE *file, const Grammar *grammar)
 // Parsing
 //
 
-Status Parse(
-    Lexer *lex, const Grammar *grammar, void *parser_state, Expr **result)
+Status Parse(Lexer *lex, Grammar *grammar, void *parser_state, Expr **result)
 {
     Blimp *blimp = lex->blimp;
 
@@ -2210,6 +2277,26 @@ Status Parse(
     // expression, which is the result of parsing.
     Vector tree;
     Vector_Init(blimp, &tree, sizeof(Expr *), ExprDestructor);
+
+    // `output` is a stack of grammar symbols which mirrors `tree`. While `tree`
+    // tells us which expressions we have generated so far, `output` tells us
+    // which non-terminals (and, occasionally, terminals) they correspond to in
+    // the grammar.
+    Vector/*<GrammarSymbol>*/ output;
+    Vector_Init(blimp, &output, sizeof(GrammarSymbol), NULL);
+
+    // `output_precedences` is a multiset of the symbols in `output`, ordered by
+    // precedence.
+    OrderedMultiset/*<GrammarSymbol>*/ output_precedences;
+    OrderedMultiset_Init(
+        blimp,
+        &output_precedences,
+        sizeof(GrammarSymbol),
+        (CmpFunc)GrammarSymbol_Cmp
+    );
+
+    GrammarListener listener;
+    Grammar_Listen(grammar, &listener);
 
     while (true) {
         const State *state = StateMachine_GetState(
@@ -2242,6 +2329,38 @@ Status Parse(
                     Blimp_FreeExpr(expr);
                     goto error;
                 }
+
+                // Push a terminal symbol onto `output` to correspond to the
+                // token expression we just pushed onto `tree`.
+                GrammarSymbol sym = {
+                    .is_terminal = true, .terminal = tok.type
+                };
+                if (Vector_PushBack(&output, &sym) != BLIMP_OK) {
+                    goto error;
+                }
+
+                // Update the count of `sym` symbols in the `output_precedences`
+                // multiset.
+                if (OrderedMultiset_Insert(
+                        &output_precedences, &sym) != BLIMP_OK)
+                {
+                    goto error;
+                }
+
+                // Since `output_precedences` has changed, we should check if
+                // we can update the parse table with any new productions which
+                // have been added by macros. We will end up updating the table
+                // if the highest-precedence symbol in the output is lower
+                // precedence than the first symbol of all new productions.
+                const GrammarSymbol *max_precedence = OrderedMultiset_Max(
+                    &output_precedences);
+                if (GrammarListener_ShouldUpdate(&listener, max_precedence)) {
+                    StateMachine_Destroy(&m);
+                    if (MakeParseTable(grammar, &m) != BLIMP_OK) {
+                        goto error;
+                    }
+                }
+
                 break;
             }
 
@@ -2281,6 +2400,32 @@ Status Parse(
                     // element from the vector, so this should not cause an
                     // allocation that could fail.
 
+                // Remove the corresponding symbols from `output` and
+                // `output_precedences` for each expression consumed from
+                // `tree`.
+                for (size_t i = 0; i < production->num_symbols; ++i) {
+                    GrammarSymbol sym;
+                    Vector_PopBack(&output, &sym);
+                    OrderedMultiset_Remove(&output_precedences, &sym);
+                }
+
+                // Push a non-terminal symbol corresponding to the newly
+                // produced expression onto `output`.
+                GrammarSymbol sym = {
+                    .is_terminal = false,
+                    .non_terminal = production->non_terminal,
+                };
+                if (Vector_PushBack(&output, &sym) != BLIMP_OK) {
+                    goto error;
+                }
+
+                // Add the symbol we just pushed to `output_precedences`.
+                if (OrderedMultiset_Insert(
+                        &output_precedences, &sym) != BLIMP_OK)
+                {
+                    goto error;
+                }
+
                 // Remove the states corresponding to each of the consumed parse
                 // tree fragments.
                 Vector_Contract(&stack, production->num_symbols);
@@ -2298,6 +2443,17 @@ Status Parse(
                     goto error;
                 }
 
+                // `output_precedences` has changed, so we need to check if we
+                // should update the parse table.
+                const GrammarSymbol *max_precedence = OrderedMultiset_Max(
+                    &output_precedences);
+                if (GrammarListener_ShouldUpdate(&listener, max_precedence)) {
+                    StateMachine_Destroy(&m);
+                    if (MakeParseTable(grammar, &m) != BLIMP_OK) {
+                        goto error;
+                    }
+                }
+
                 break;
             }
 
@@ -2307,8 +2463,11 @@ Status Parse(
                 assert(Vector_Length(&tree) == 1);
                 Vector_PopBack(&tree, result);
 
+                Grammar_Unlisten(grammar, &listener);
                 Vector_Destroy(&stack);
                 Vector_Destroy(&tree);
+                Vector_Destroy(&output);
+                OrderedMultiset_Destroy(&output_precedences);
                 StateMachine_Destroy(&m);
                 return BLIMP_OK;
             }
@@ -2324,8 +2483,11 @@ Status Parse(
     }
 
 error:
+    Grammar_Unlisten(grammar, &listener);
     Vector_Destroy(&stack);
     Vector_Destroy(&tree);
+    Vector_Destroy(&output);
+    OrderedMultiset_Destroy(&output_precedences);
     StateMachine_Destroy(&m);
     return Reraise(blimp);
 }

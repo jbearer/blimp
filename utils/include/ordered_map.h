@@ -80,6 +80,33 @@ static inline Status OrderedMap_Update(
     return BLIMP_OK;
 }
 
+PRIVATE OrderedMapEntry *OrderedMap_FindEntry(
+    const OrderedMap *map, const void *key);
+
+static inline void *OrderedMap_Find(const OrderedMap *map, const void *key)
+{
+    OrderedMapEntry *entry = OrderedMap_FindEntry(map, key);
+    if (entry) {
+        return OrderedMap_GetValue(map, entry);
+    } else {
+        return NULL;
+    }
+}
+
+PRIVATE OrderedMapEntry *OrderedMap_MaxEntry(const OrderedMap *map);
+
+static inline const void *OrderedMap_MaxKey(const OrderedMap *map)
+{
+    OrderedMapEntry *entry = OrderedMap_MaxEntry(map);
+    if (entry) {
+        return OrderedMap_GetKey(map, entry);
+    } else {
+        return NULL;
+    }
+}
+
+PRIVATE bool OrderedMap_Remove(OrderedMap *map, const void *key, void *value);
+
 PRIVATE Status OrderedMap_Iterator(
     const OrderedMap *map, OrderedMapIterator *it);
 PRIVATE Status OrderedMap_RIterator(

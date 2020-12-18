@@ -9,14 +9,16 @@ static inline size_t RoundUpToAlignment(size_t n)
     return (n + (ALIGNMENT - 1)) & ~(ALIGNMENT - 1);
 }
 
+typedef enum {
+    RED,
+    BLACK,
+} Color;
+
 typedef struct OrderedMapNode {
     struct OrderedMapNode *parent;
     struct OrderedMapNode *left;
     struct OrderedMapNode *right;
-    enum {
-        RED,
-        BLACK,
-    } color;
+    Color color;
     bool pending;
 
     char key[] __attribute__((aligned (ALIGNMENT)));
@@ -127,6 +129,16 @@ static void RotateRight(OrderedMap *map, Node *n1)
     n2->right = n1;
     n1->parent = n2;
 }
+
+static inline void RotateUp(OrderedMap *map, Node *n)
+{
+    if (n == n->parent->left) {
+        RotateRight(map, n->parent);
+    } else {
+        RotateLeft(map, n->parent);
+    }
+}
+
 void OrderedMap_Init(
     Blimp *blimp,
     OrderedMap *map,
@@ -570,4 +582,373 @@ void OrderedMap_GetEntry(
     if (value != NULL) {
         *value = NodeValue(map, entry);
     }
+}
+
+OrderedMapEntry *OrderedMap_FindEntry(const OrderedMap *map, const void *key)
+{
+    Node *curr = map->root;
+    while (curr != NULL) {
+        int cmp = map->cmp(key, NodeKey(map, curr));
+        if (cmp == 0) {
+            return curr;
+        } else if (cmp < 0) {
+            curr = curr->left;
+        } else {
+            curr = curr->right;
+        }
+    }
+
+    return NULL;
+}
+
+OrderedMapEntry *OrderedMap_MaxEntry(const OrderedMap *map)
+{
+    Node *curr = map->root;
+    while (curr != NULL && curr->right != NULL) {
+        curr = curr->right;
+    }
+    return curr;
+}
+
+static void ReplaceNode(OrderedMap *map, Node *replacee, Node *replacer)
+{
+    if (replacer != NULL) {
+        replacer->parent = replacee->parent;
+    }
+
+    if (replacee->parent == NULL) {
+        assert(replacee == map->root);
+        map->root = replacer;
+    } else if (replacee == replacee->parent->left) {
+        replacee->parent->left = replacer;
+    } else {
+        assert(replacee == replacee->parent->right);
+        replacee->parent->right = replacer;
+    }
+}
+
+static inline Node *GetSibling(Node *n, Node *parent)
+{
+    if (n == parent->left) {
+        return parent->right;
+    } else {
+        return parent->left;
+    }
+}
+
+static inline Color NodeColor(Node *node)
+{
+    if (node == NULL) {
+        // NULL nodes are considered black.
+        return BLACK;
+    } else {
+        return node->color;
+    }
+}
+
+bool OrderedMap_Remove(OrderedMap *map, const void *key, void *value)
+{
+    Node *curr = OrderedMap_FindEntry(map, key);
+    if (curr == NULL) {
+        return false;
+    }
+
+    if (value != NULL) {
+        memcpy(value, NodeValue(map, curr), map->value_size);
+    }
+
+    if (curr->left != NULL && curr->right != NULL) {
+        // The algorithm below handles deletion of nodes with 0 or 1 child. If
+        // the node we are deleting has 2 children, we reduce it to the 0- or 1-
+        // child case by finding the in-order successor of `curr` (which is the
+        // leftmost node in curr's right subtree, and therefore does not have a
+        // left child), moving its data to `curr`, and then deleting the
+        // successor.
+        Node *succ = curr->right;
+        while (succ->left != NULL) {
+            succ = succ->left;
+        }
+        memcpy(NodeKey(map, curr), NodeKey(map, succ), map->key_size);
+        memcpy(NodeValue(map, curr), NodeValue(map, succ), map->value_size);
+        curr = succ;
+    }
+
+    // Now `curr` has at most 1 child. Select one of them arbitrarily and
+    // replace `curr` with the selected child. Note that the selected child may
+    // be NULL, but only if both of `curr`s children ar NULL.
+    Node *child;
+    if (curr->left == NULL) {
+        child = curr->right;
+    } else {
+        assert(curr->right == NULL);
+        child = curr->left;
+    }
+    ReplaceNode(map, curr, child);
+
+    if (curr->color == RED) {
+        // If we removed a red node, we could not have broken any of the tree
+        // invariants. We can't have created a double red by removing one, and
+        // we can't have changed the number of black nodes on any path by
+        // removing a red node. So, we don't have to do any fixup.
+        assert(NodeColor(child) == BLACK);
+        free(curr);
+    } else if (child != NULL) {
+        // If the node we removed was black and the child we replaced it with is
+        // non-NULL, then the child must be red:
+        assert(NodeColor(child) == RED);
+        // because otherwise, paths through `curr` would have at least one more
+        // black node on the side of `child` than on the other side (since at
+        // most one of `curr`s children was non-NULL).
+        //
+        // In this case, we decreased the number of black nodes by 1 in all
+        // paths through `curr`, but all paths that used to pass through `curr`
+        // now pass through `child`, so we can fix this by simply making child
+        // black.
+        child->color = BLACK;
+        free(curr);
+    } else {
+        // In the case where we removed a black node and the child we replaced
+        // it with is also black (or NULL) then the fixup is complicated and
+        // requires us to walk up the tree some ways.
+
+        // We'll need to keep track of the parent node as we walk up the tree,
+        // but remember that `child` might be NULL, so we can't get it from
+        // `child->parent`. But we know `curr` is not NULL and, even though it
+        // has been removed from the tree, its parent pointer is still valid.
+        Node *parent = curr->parent;
+
+        // `curr` points to a node that is no longer in the tree, so free that
+        // node's memory and begin our traversal from the node that replaced it.
+        free(curr);
+        curr = child;
+
+        while (parent != NULL) {
+            assert(NodeColor(curr) == BLACK);
+                // Loop invariant.
+
+            Node *sibling = GetSibling(curr, parent);
+            assert(sibling != NULL);
+                // Loop invariant. We know this holds for the first iteration
+                // because the node we deleted and its child were both black, so
+                // that subtree had a black height of at least 2. If `sibling`
+                // were NULL, its black height would be only 1.
+
+            // We have the following situation:
+            //
+            //        parent-> *                                              //
+            //                / \                                             //
+            //       curr -> b   * <- sibling                                 //
+            //
+            // and we know paths through `curr` have one too few black nodes.
+            // We will address this in several cases, each one either making a
+            // small adjustment and falling through to the next, or continuing
+            // the loop higher up the tree.
+            if (NodeColor(sibling) == RED) {
+                // If `sibling` is red, we perform the following recoloring and
+                // rotation:
+                //                           b                                //
+                //          b               / \                               //
+                //         / \      =>     r   b                              //
+                //     -> b   r           / \                                 //
+                //           / \      -> b   b                                //
+                //          b   b
+                //
+                // This transforms the situation to the next case (where both
+                // `curr` and `sibling` are black) and does not change the
+                // number of black nodes in paths through `curr`, so we fall
+                // through.
+                assert(NodeColor(parent) == BLACK);
+                    // If `sibling` is red, `parent` must be black, or else we
+                    // would have consecutive red nodes.
+
+                parent->color = RED;
+                sibling->color = BLACK;
+                RotateUp(map, sibling);
+
+                sibling = GetSibling(curr, parent);
+                    // `curr`s sibling has changed.
+            } else if (NodeColor(parent) == BLACK &&
+                       NodeColor(sibling) == BLACK &&
+                       NodeColor(sibling->left) == BLACK &&
+                       NodeColor(sibling->right) == BLACK)
+            {
+                // If `parent`, `sibling`, and `sibling`s children are black, we
+                // recolor `sibling`:
+                //
+                //
+                //          b               b                                 //
+                //         / \             / \                                //
+                //     -> b   b        -> b   r                               //
+                //           / \             / \                              //
+                //          b   b           b   b                             //
+                //
+                // This decreases the number of black nodes in all paths through
+                // `sibling`, so now all paths through `sibling` or `curr` (that
+                // is, all paths through `parent`) have the same number of black
+                // nodes, which is one fewer than other paths. Thus, we can move
+                // up the tree and start fixing paths through `parent`.
+                //
+                // Note that our loop invariants will hold for the next
+                // iteration:
+                //  * `parent` (which will become the new `curr` stays black).
+                //  * `parent`s sibling cannot be NULL, because the black height
+                //    of parent is at least 2, and this is one too small, so the
+                //    black height of `parent`s sibling must be at least 3.
+                sibling->color = RED;
+                curr = parent;
+                parent = curr->parent;
+                continue;
+            }
+
+            // If we reach here, then, whether naturally or by the fall-through
+            // adjustment above, we know:
+            assert(NodeColor(curr) == BLACK);
+            assert(NodeColor(sibling) == BLACK);
+            // And at least one of the nodes in question is red:
+            assert(NodeColor(parent) == RED ||
+                   NodeColor(sibling->left) == RED ||
+                   NodeColor(sibling->right) == RED);
+            // otherwise we would have continued in the previous case. So we
+            // have:
+            //
+            //          b                                                     //
+            //         / \                                                    //
+            //        *   b                                                   //
+            //       / \                                                      //
+            //   -> b   b                                                     //
+            //         / \                                                    //
+            //        *   *                                                   //
+            //
+            // Where at least one * is red.
+            if (NodeColor(parent) == RED &&
+                NodeColor(sibling->left) == BLACK &&
+                NodeColor(sibling->right) == BLACK)
+            {
+                // In this situation (which is a sub-case of the above):
+                //
+                //          b                                                 //
+                //         / \                                                //
+                //        r   b                                               //
+                //       / \                                                  //
+                //   -> b   b                                                 //
+                //         / \                                                //
+                //        b   b                                               //
+                //
+                // we can finish immediately by swapping the colors of `sibling`
+                // and `parent`:
+                //
+                //          b                                                 //
+                //         / \                                                //
+                //        b   b                                               //
+                //       / \                                                  //
+                //   -> b   r                                                 //
+                //         / \                                                //
+                //        b   b                                               //
+                //
+                // Note how this does not create any red bubbles, but it does
+                // increase the number of black nodes in paths through `curr`
+                // without changing the number inf paths through `sibling`. This
+                // fully restores our invariant.
+                sibling->color = RED;
+                parent->color = BLACK;
+                break;
+            }
+
+            // If we don't fall into the previous case, then we know at least
+            // one of `sibling`s children is red. If they were both black, then
+            // parent cannot be red (that's the case above) or black (since at
+            // least one of the three is red), which is a contradiction.
+            //
+            // First we ensure that the red child of `sibling` is on the same
+            // side of `sibling` as `sibling` is of parent. We want one of the
+            // following:
+            //
+            //        *                           *                           //
+            //       / \                         / \                          //
+            //   -> b   b           or          b   b <-                      //
+            //         / \                     / \                            //
+            //        *   r                   r   *                           //
+            if (sibling == parent->left && NodeColor(sibling->left) == BLACK) {
+                assert(NodeColor(sibling->right) == RED);
+                // Rotate and recolor to transform:
+                //
+                //        *               *                                   //
+                //       / \             / \                                  //
+                //      b   b <-    =>  b   b <-                              //
+                //     / \             /                                      //
+                //    b   r           r                                       //
+                //                   /                                        //
+                //                  b                                         //
+                //
+                // Notice that this does not change the number of black nodes in
+                // any path through `curr` (since its subtree is not affected)
+                // or through its new sibling compared to through its old
+                // sibling.
+                //
+                sibling->right->color = BLACK;
+                sibling->color = RED;
+                RotateLeft(map, sibling);
+
+                sibling = sibling->parent;
+                    // `sibling`s new parent (its old right child) is the new
+                    // sibling of `curr`.
+            } else if (sibling == parent->right &&
+                       NodeColor(sibling->right) == BLACK)
+            {
+                assert(NodeColor(sibling->left) == RED);
+                // Mirage image of the above:
+                //
+                //       *            *                                       //
+                //      / \          / \                                      //
+                //  -> b   b    =>  b   b                                     //
+                //        / \            \                                    //
+                //       r   b            r                                   //
+                //                         \                                  //
+                //                          b                                 //
+                //
+                sibling->left->color = BLACK;
+                sibling->color = RED;
+                RotateRight(map, sibling);
+
+                sibling = sibling->parent;
+                    // `sibling`s new parent (its old left child) is the new
+                    // sibling of `curr`.
+            }
+
+            // Now we have the following:
+            //       *                                                        //
+            //      / \                                                       //
+            //  -> b   b                                                      //
+            //          \                                                     //
+            //           r                                                    //
+            // or its mirror image.
+            if (sibling == parent->right) {
+                // Perform the following rotation and recoloring:
+                //       *            *                                       //
+                //      / \          / \                                      //
+                //  -> b   b    =>  b   b                                     //
+                //          \      /                                          //
+                //           r    b                                           //
+                //
+                // This does not change the number of black nodes in paths
+                // through the new parent's right subtree, but it increases the
+                // number of black nodes in paths through `curr`, which was our
+                // goal, so we can break from the loop.
+                RotateLeft(map, parent);
+                sibling->color = parent->color;
+                parent->color = BLACK;
+                sibling->right->color = BLACK;
+                break;
+            } else {
+                // Do the mirror image of above.
+                RotateRight(map, parent);
+                sibling->color = parent->color;
+                parent->color = BLACK;
+                sibling->left->color = BLACK;
+                break;
+            }
+        }
+    }
+
+    return true;
 }

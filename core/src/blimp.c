@@ -259,6 +259,26 @@ static Status DefaultGrammar(Blimp *blimp, Grammar *grammar)
     // the corresponding non-terminal except sentences that start with a ^msg
     // token.
     //
+    // Finally, there is one more factorization we need to do. We want the
+    // parser to update itself with new productions added by macros at least as
+    // often as in between top-level statements; that is, after parsing
+    // `Stmt ;` or `StmtNoMsg ;`. Unfortunately, at such a point in parsing, the
+    // presence of `;` (which, being a terminal, has higher precedence than any
+    // non-terminal) in the output precludes us from being able to add new
+    // productions that start with a non-terminal (even if that non-terminal is
+    // relatively high precedence, like Term). To fix this, we force the parser
+    // to reduce `;` into a low-precedence non-terminal as soon as it sees it,
+    // by adding the rule `Semi -> ;`, where `Semi` has precedence just higher
+    // than StmtNoMsg. We then replace the two productions that used the `;`
+    // terminal with:
+    //
+    //  Expr      -> Stmt Semi Expr
+    //  ExprNoMsg -> StmtNoMsg Semi Expr
+    //
+    // Now, after parsing a top-level statement, the output consists only of two
+    // non-terminals `Stmt Semi`, both of which have lower precedence than most
+    // non-terminals that we would find in a newly added rule.
+    //
     // Here are our non-terminals in order of ascending precedence:
     enum {
         Start,
@@ -266,6 +286,7 @@ static Status DefaultGrammar(Blimp *blimp, Grammar *grammar)
         ExprNoMsg,
         Stmt,
         StmtNoMsg,
+        Semi,
         Term,
         TermNoMsg,
     };
@@ -276,10 +297,10 @@ static Status DefaultGrammar(Blimp *blimp, Grammar *grammar)
     TRY(ADD_GRAMMAR_RULE(grammar, Start, (NT(Expr)),
         IdentityHandler, NULL));
 
-    // Expr[NoMsg] = Stmt[NoMsg] ";" Expr
-    TRY(ADD_GRAMMAR_RULE(grammar, Expr, (NT(Stmt), T(SEMI), NT(Expr)),
+    // Expr[NoMsg] = Stmt[NoMsg] Semi Expr
+    TRY(ADD_GRAMMAR_RULE(grammar, Expr, (NT(Stmt), NT(Semi), NT(Expr)),
         SequenceHandler, NULL));
-    TRY(ADD_GRAMMAR_RULE(grammar, ExprNoMsg, (NT(StmtNoMsg), T(SEMI), NT(Expr)),
+    TRY(ADD_GRAMMAR_RULE(grammar, ExprNoMsg, (NT(StmtNoMsg), NT(Semi), NT(Expr)),
         SequenceHandler, NULL));
     //      \ Stmt[NoMsg]
     TRY(ADD_GRAMMAR_RULE(grammar, Expr, (NT(Stmt)),
@@ -296,6 +317,10 @@ static Status DefaultGrammar(Blimp *blimp, Grammar *grammar)
     TRY(ADD_GRAMMAR_RULE(grammar, Stmt, (NT(Term)),
         IdentityHandler, NULL));
     TRY(ADD_GRAMMAR_RULE(grammar, StmtNoMsg, (NT(TermNoMsg)),
+        IdentityHandler, NULL));
+
+    // Semi = ";"
+    TRY(ADD_GRAMMAR_RULE(grammar, Semi, (T(SEMI)),
         IdentityHandler, NULL));
 
     // Term = TermNoMsg \ Msg
@@ -330,6 +355,7 @@ static Status DefaultGrammar(Blimp *blimp, Grammar *grammar)
     Grammar_SetNonTerminalString(grammar, ExprNoMsg, "E'");
     Grammar_SetNonTerminalString(grammar, Stmt, "S");
     Grammar_SetNonTerminalString(grammar, StmtNoMsg, "S'");
+    Grammar_SetNonTerminalString(grammar, Semi, "Semi");
     Grammar_SetNonTerminalString(grammar, Term, "T");
     Grammar_SetNonTerminalString(grammar, TermNoMsg, "T'");
 
