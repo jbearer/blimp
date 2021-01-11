@@ -7,7 +7,10 @@ typedef HashMap SymbolTable;
 
 PRIVATE Status SymbolTable_Init(Blimp *blimp, SymbolTable *symbols);
 PRIVATE Status SymbolTable_GetSymbol(
-    SymbolTable *symbols, const char *name, const Symbol **symbol);
+    SymbolTable *symbols,
+    const char *name,
+    size_t length,
+    const Symbol **symbol);
 PRIVATE void SymbolTable_Destroy(SymbolTable *symbols);
 
 PRIVATE bool SymbolEq(const Symbol **sym1, const Symbol **sym2, void *arg);

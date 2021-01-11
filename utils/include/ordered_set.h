@@ -44,4 +44,14 @@ static inline size_t OrderedSet_Size(const OrderedSet *set)
     return OrderedMap_Size(set);
 }
 
+static inline bool OrderedSet_Empty(const OrderedSet *set)
+{
+    return OrderedMap_Empty(set);
+}
+
+static inline void OrderedSet_RemoveMin(OrderedSet *set, void *elem)
+{
+    OrderedMap_RemoveMin(set, elem, NULL);
+}
+
 #endif

@@ -610,6 +610,15 @@ OrderedMapEntry *OrderedMap_MaxEntry(const OrderedMap *map)
     return curr;
 }
 
+OrderedMapEntry *OrderedMap_MinEntry(const OrderedMap *map)
+{
+    Node *curr = map->root;
+    while (curr != NULL && curr->left != NULL) {
+        curr = curr->left;
+    }
+    return curr;
+}
+
 static void ReplaceNode(OrderedMap *map, Node *replacee, Node *replacer)
 {
     if (replacer != NULL) {
@@ -646,17 +655,8 @@ static inline Color NodeColor(Node *node)
     }
 }
 
-bool OrderedMap_Remove(OrderedMap *map, const void *key, void *value)
+void OrderedMap_RemoveEntry(OrderedMap *map, Node *curr)
 {
-    Node *curr = OrderedMap_FindEntry(map, key);
-    if (curr == NULL) {
-        return false;
-    }
-
-    if (value != NULL) {
-        memcpy(value, NodeValue(map, curr), map->value_size);
-    }
-
     if (curr->left != NULL && curr->right != NULL) {
         // The algorithm below handles deletion of nodes with 0 or 1 child. If
         // the node we are deleting has 2 children, we reduce it to the 0- or 1-
@@ -950,5 +950,35 @@ bool OrderedMap_Remove(OrderedMap *map, const void *key, void *value)
         }
     }
 
+    --map->size;
+}
+
+bool OrderedMap_Remove(OrderedMap *map, const void *key, void *value)
+{
+    Node *entry = OrderedMap_FindEntry(map, key);
+    if (entry == NULL) {
+        return false;
+    }
+
+    if (value != NULL) {
+        memcpy(value, NodeValue(map, entry), map->value_size);
+    }
+
+    OrderedMap_RemoveEntry(map, entry);
     return true;
+}
+
+void OrderedMap_RemoveMin(OrderedMap *map, void *key, void *value)
+{
+    Node *entry = OrderedMap_MinEntry(map);
+    assert(entry != NULL);
+
+    if (key != NULL) {
+        memcpy(key, NodeKey(map, entry), map->key_size);
+    }
+    if (value != NULL) {
+        memcpy(value, NodeValue(map, entry), map->value_size);
+    }
+
+    OrderedMap_RemoveEntry(map, entry);
 }

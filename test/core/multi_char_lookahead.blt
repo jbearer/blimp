@@ -1,0 +1,16 @@
+# Create a token `a+c`, which we will use to force the lexer into a multi-
+# character lookahead loop.
+{^`a+c`} @7 {{^`confusing_token`}};
+
+a{^} {foo};
+foo{^} {bar};
+
+!expect_eq (a+b) bar;
+    # Should lex: a + b.
+    #
+    # If lookahead erroneously consumes characters, we will get: a b (where the
+    # + gets consumed in the search for the `a+c` token).
+    #
+    # `a + b` evaluates to `(a +) b` == bar, whereas `a b` evaluates to
+    # `(a b)` == foo.
+.

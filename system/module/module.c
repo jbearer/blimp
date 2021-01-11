@@ -84,15 +84,196 @@ static BlimpStatus MakeModulePath(
     return BLIMP_OK;
 }
 
-static BlimpStatus ImportSource(
-    Blimp *blimp, BlimpObject *context, const char *path, BlimpObject **result)
+// Handler for the `import` function.
+static BlimpStatus ImportMethod(
+    Blimp *blimp,
+    BlimpObject *context,
+    BlimpObject *receiver,
+    BlimpObject *message,
+    BlimpObject **result)
 {
-    BlimpStatus status;
+    const char **path;
+    if (BlimpObject_ParseExtension(
+            receiver, NULL, (void **)&path) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
 
-    // Parse the file.
-    BlimpExpr *expr;
-    if ((status = Blimp_ParseFile(blimp, path, &expr)) != BLIMP_OK)
+    const BlimpSymbol *module;
+    if (BlimpObject_ParseSymbol(message, &module) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    return BlimpModule_Import(
+        blimp, BlimpSymbol_GetName(module), context, path, result);
+}
+
+// Handler for the `import_source` function.
+static BlimpStatus ImportSourceMethod(
+    Blimp *blimp,
+    BlimpObject *context,
+    BlimpObject *receiver,
+    BlimpObject *message,
+    BlimpObject **result)
+{
+    (void)receiver;
+
+    const BlimpSymbol *path;
+    if (BlimpObject_ParseSymbol(message, &path) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    return BlimpModule_ImportSource(
+        blimp, BlimpSymbol_GetName(path), context, result);
+}
+
+// Handler for the `import_extension` function.
+static BlimpStatus ImportExtensionMethod(
+    Blimp *blimp,
+    BlimpObject *context,
+    BlimpObject *receiver,
+    BlimpObject *message,
+    BlimpObject **result)
+{
+    (void)receiver;
+
+    const BlimpSymbol *path;
+    if (BlimpObject_ParseSymbol(message, &path) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    return BlimpModule_ImportExtension(
+        blimp, BlimpSymbol_GetName(path), context, result);
+}
+
+// Handler for the `import module` macro.
+static BlimpStatus ImportHandler(
+    Blimp *blimp, BlimpExpr **sub_exprs, void *arg, BlimpExpr **parsed)
+{
+    const char **path = (const char **)arg;
+
+    const BlimpSymbol *module;
+    if (BlimpExpr_ParseSymbol(sub_exprs[1], &module) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    return BlimpModule_StaticImport(
+        blimp, BlimpSymbol_GetName(module), path, parsed);
+}
+
+BlimpStatus BlimpModule_Init(Blimp *blimp, const char **path)
+{
+    // This function binds several global names as macros and functions:
+    //
+    //  * The import macro -- import <symbol> -- imports a module at parse
+    //    time, so that if the module defines macros, they will be used to parse
+    //    the remaining input after the import statement.
+    //  * The import function -- `import` <symbol> -- imports a module at
+    //    runtime. This is useful, for example, when the name of the module is
+    //    computed dynamically; however, it means macros defined in the module
+    //    are not available at parse time.
+    //  * The import_source function -- `import_source` <symbol> -- imports a
+    //    source module named by its full path, skipping the search procedure
+    //    performed by `import`.
+    //  * The import_extension function -- `import_extension` <symbol> -- is
+    //    like `import_source`, except the module named by the path must be an
+    //    extension module, not a source module.
+
+    const BlimpSymbol *import, *import_source, *import_extension;
+    if (Blimp_GetSymbol(blimp, "import", &import) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+    if (Blimp_GetSymbol(blimp, "import_source", &import_source) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+    if (Blimp_GetSymbol(blimp, "import_extension", &import_extension)
+            != BLIMP_OK)
     {
+        return Blimp_Reraise(blimp);
+    }
+
+    // Define the `import` function.
+    BlimpObject *method;
+    if (BlimpObject_NewExtension(
+            blimp,
+            Blimp_GlobalObject(blimp),
+            (void *)path,
+            ImportMethod,
+            NULL,
+            &method) != BLIMP_OK)
+    {
+        return Blimp_Reraise(blimp);
+    }
+    if (BlimpObject_Set(
+            Blimp_GlobalObject(blimp), import, method) != BLIMP_OK)
+    {
+        BlimpObject_Release(method);
+        return Blimp_Reraise(blimp);
+    }
+    BlimpObject_Release(method);
+
+    // Define the `import_source` function.
+    if (BlimpObject_NewExtension(
+            blimp,
+            Blimp_GlobalObject(blimp),
+            NULL,
+            ImportSourceMethod,
+            NULL,
+            &method) != BLIMP_OK)
+    {
+        return Blimp_Reraise(blimp);
+    }
+    if (BlimpObject_Set(
+            Blimp_GlobalObject(blimp), import_source, method) != BLIMP_OK)
+    {
+        BlimpObject_Release(method);
+        return Blimp_Reraise(blimp);
+    }
+    BlimpObject_Release(method);
+
+    // Define the `import_extension` function.
+    if (BlimpObject_NewExtension(
+            blimp,
+            Blimp_GlobalObject(blimp),
+            NULL,
+            ImportExtensionMethod,
+            NULL,
+            &method) != BLIMP_OK)
+    {
+        return Blimp_Reraise(blimp);
+    }
+    if (BlimpObject_Set(
+            Blimp_GlobalObject(blimp), import_extension, method) != BLIMP_OK)
+    {
+        BlimpObject_Release(method);
+        return Blimp_Reraise(blimp);
+    }
+    BlimpObject_Release(method);
+
+    // Define the `import module` macro.
+    BlimpGrammarSymbol macro_symbols[2] = {
+        {.is_terminal=true, .terminal=import},
+        {.is_terminal=false,.precedence=7},
+    };
+    if (Blimp_DefineMacro(
+            blimp, 3, macro_symbols, 2, ImportHandler, (void *)path)
+        != BLIMP_OK)
+    {
+        return Blimp_Reraise(blimp);
+    }
+
+    return BLIMP_OK;
+}
+
+BlimpStatus BlimpModule_Import(
+    Blimp *blimp,
+    const char *module,
+    BlimpObject *context,
+    const char **path,
+    BlimpObject **result)
+{
+    // Locate the module and parse it into an expression.
+    BlimpExpr *expr;
+    if (BlimpModule_StaticImport(blimp, module, path, &expr) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
 
@@ -102,20 +283,131 @@ static BlimpStatus ImportSource(
     return ret;
 }
 
+BlimpStatus BlimpModule_StaticImport(
+    Blimp *blimp, const char *module, const char **path, BlimpExpr **result)
+{
+    // Search the path for a file matching `module`.
+    for (const char **path_entry = path; *path_entry; ++path_entry) {
+        const char *dir = *path_entry;
+
+        // Look for a .bli source module at this path.
+        char *source_path;
+        if (MakeModulePath(blimp, dir, "", module, ".bli", &source_path)
+                == BLIMP_OK)
+        {
+            if (access(source_path, R_OK) == 0) {
+                // Parse the source file at `source_path` and return the
+                // resulting expression.
+                BlimpStatus ret = Blimp_ParseFile(
+                    blimp, source_path, result);
+                free(source_path);
+                return ret;
+            }
+        }
+        free(source_path);
+
+        // Look for a .so binary module at this path.
+        char *binary_path;
+        if (MakeModulePath(blimp, dir, "lib", module, ".so", &binary_path)
+                == BLIMP_OK)
+        {
+            if (access(binary_path, R_OK) == 0) {
+                // There's nothing we can do at parse time to import a binary
+                // module, except to emit an instruction to load the module at
+                // runtime. Get a symbol for the path so we can create an
+                // expression reprsenting the file name.
+                const BlimpSymbol *path_sym;
+                if (Blimp_GetSymbol(blimp, binary_path, &path_sym)
+                        != BLIMP_OK)
+                {
+                    free(binary_path);
+                    return Blimp_Reraise(blimp);
+                }
+                free(binary_path);
+                    // We don't need `binary_path` anymore, now that we have
+                    // `path_sym`.
+
+                // The expression we emit will be a send:
+                //          import_extension binary_path
+                // The `import_extension` symbol is bound to an extension object
+                // which requires a full path and imports the corresponding
+                // binary module.
+                //
+                // Before we can construct the send, we need an expression for
+                // the receiver:
+                const BlimpSymbol *import_extension;
+                BlimpExpr *receiver;
+                if (Blimp_GetSymbol(
+                        blimp, "import_extension", &import_extension)
+                    != BLIMP_OK)
+                {
+                    return Blimp_Reraise(blimp);
+                }
+                if (BlimpExpr_NewSymbol(blimp, import_extension, &receiver)
+                        != BLIMP_OK)
+                {
+                    return Blimp_Reraise(blimp);
+                }
+
+                // And an expression for the message:
+                BlimpExpr *message;
+                if (BlimpExpr_NewSymbol(blimp, path_sym, &message)
+                        != BLIMP_OK)
+                {
+                    Blimp_FreeExpr(receiver);
+                    return Blimp_Reraise(blimp);
+                }
+
+                // Now we can construct the send:
+                if (BlimpExpr_NewSend(blimp, receiver, message, result)
+                        != BLIMP_OK)
+                {
+                    Blimp_FreeExpr(receiver);
+                    Blimp_FreeExpr(message);
+                    return Blimp_Reraise(blimp);
+                }
+
+                return BLIMP_OK;
+            }
+        }
+        free(binary_path);
+    }
+
+    return Blimp_ErrorMsg(
+        blimp, BLIMP_ERROR, "could not find module `%s'", module);
+}
+
+BlimpStatus BlimpModule_ImportSource(
+    Blimp *blimp,
+    const char *path,
+    BlimpObject *context,
+    BlimpObject **result)
+{
+    // Parse the file.
+    BlimpExpr *expr;
+    if (Blimp_ParseFile(blimp, path, &expr) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    // Evaluate the parsed expression.
+    BlimpStatus ret = Blimp_Eval(blimp, expr, context, result);
+    Blimp_FreeExpr(expr);
+    return ret;
+}
+
 #define _STRINGIFY(x) #x
 #define STRINGIFY(x) _STRINGIFY(x)
 
-static BlimpStatus ImportBinary(
+BlimpStatus BlimpModule_ImportExtension(
     Blimp *blimp,
-    BlimpObject *context,
-    const char *module,
     const char *path,
+    BlimpObject *context,
     BlimpObject **result)
 {
     void *lib = dlopen(path, RTLD_NOW|RTLD_LOCAL);
     if (lib == NULL) {
         return Blimp_ErrorMsg(blimp, BLIMP_ERROR,
-            "could not open extension module %s: %s", module, dlerror());
+            "could not open extension module %s: %s", path, dlerror());
     }
 
     BlimpModuleInfo *info = dlsym(lib, STRINGIFY(BLIMP_MODULE_SYMBOL));
@@ -144,100 +436,4 @@ static BlimpStatus ImportBinary(
     }
 
     return info->init(blimp, context, result);
-}
-
-static BlimpStatus ImportMethod(
-    Blimp *blimp,
-    BlimpObject *context,
-    BlimpObject *receiver,
-    BlimpObject *message,
-    BlimpObject **result)
-{
-    const char **path;
-    if (BlimpObject_ParseExtension(
-            receiver, NULL, (void **)&path) != BLIMP_OK) {
-        return Blimp_Reraise(blimp);
-    }
-
-    const BlimpSymbol *module;
-    if (BlimpObject_ParseSymbol(message, &module) != BLIMP_OK) {
-        return Blimp_Reraise(blimp);
-    }
-
-    return BlimpModule_Import(
-        blimp, BlimpSymbol_GetName(module), context, path, result);
-}
-
-BlimpStatus BlimpModule_Init(Blimp *blimp, const char **path)
-{
-    const BlimpSymbol *import;
-    if (Blimp_GetSymbol(blimp, "import", &import) != BLIMP_OK) {
-        return Blimp_Reraise(blimp);
-    }
-
-    BlimpObject *method;
-    if (BlimpObject_NewExtension(
-            blimp,
-            Blimp_GlobalObject(blimp),
-            (void *)path,
-            ImportMethod,
-            NULL,
-            &method) != BLIMP_OK)
-    {
-        return Blimp_Reraise(blimp);
-    }
-
-    if (BlimpObject_Set(
-            Blimp_GlobalObject(blimp), import, method) != BLIMP_OK)
-    {
-        BlimpObject_Release(method);
-        return Blimp_Reraise(blimp);
-    }
-    BlimpObject_Release(method);
-
-    return BLIMP_OK;
-}
-
-BlimpStatus BlimpModule_Import(
-    Blimp *blimp,
-    const char *module,
-    BlimpObject *context,
-    const char **search_path,
-    BlimpObject **result)
-{
-    // Search the path for a file matching `path`.
-    for (const char **path_entry = search_path; *path_entry; ++path_entry) {
-        const char *dir = *path_entry;
-
-        // Look for a .bli source module at this path.
-        char *source_path;
-        if (MakeModulePath(blimp, dir, "", module, ".bli", &source_path)
-                == BLIMP_OK)
-        {
-            if (access(source_path, R_OK) == 0) {
-                BlimpStatus ret = ImportSource(
-                    blimp, context, source_path, result);
-                free(source_path);
-                return ret;
-            }
-        }
-        free(source_path);
-
-        // Look for a .so binary module at this path.
-        char *binary_path;
-        if (MakeModulePath(blimp, dir, "lib", module, ".so", &binary_path)
-                == BLIMP_OK)
-        {
-            if (access(binary_path, R_OK) == 0) {
-                BlimpStatus ret = ImportBinary(
-                    blimp, context, module, binary_path, result);
-                free(binary_path);
-                return ret;
-            }
-        }
-        free(binary_path);
-    }
-
-    return Blimp_ErrorMsg(
-        blimp, BLIMP_ERROR, "could not find module `%s'", module);
 }

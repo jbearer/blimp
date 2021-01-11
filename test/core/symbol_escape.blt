@@ -1,5 +1,8 @@
 #: --skip-racket
 
+# (`foo`) and (foo) are the same symbol.
+!expect_eq `foo` foo;
+
 # Symbols with spaces.
 !expect_eq `foo bar` `foo bar`;
 
@@ -17,6 +20,6 @@
 
 # Symbols with unicode.
 !expect_eq
-    `∀ε>0. ∃δ>0. |x-x₀| < δ -> |f(x)-f(x₀)| < ε`
-    `∀ε>0. ∃δ>0. |x-x₀| < δ -> |f(x)-f(x₀)| < ε`;
+    `∀ε>0. ∃δ>0. |x-x₀| < δ ⟹ |f(x)-f(x₀)| < ε`
+    `∀ε>0. ∃δ>0. |x-x₀| < δ ⟹ |f(x)-f(x₀)| < ε`;
 .

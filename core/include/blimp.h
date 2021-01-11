@@ -661,6 +661,14 @@ typedef struct BlimpSymbol BlimpSymbol;
 BlimpStatus Blimp_GetSymbol(
     Blimp *blimp, const char *name, const BlimpSymbol **symbol);
 
+/**
+ * \brief
+ *      Like Blimp_GetSymbol(), except `name` is a non-null-terminated string of
+ *      length `length`.
+ */
+BlimpStatus Blimp_GetSymbolWithLength(
+    Blimp *blimp, const char *name, size_t length, const BlimpSymbol **symbol);
+
 const char *BlimpSymbol_GetName(const BlimpSymbol *symbol);
 size_t BlimpSymbol_Hash(const BlimpSymbol *symbol);
 
@@ -685,6 +693,8 @@ BlimpStatus BlimpExpr_NewSend(
     Blimp *blimp, BlimpExpr *receiver, BlimpExpr *message, BlimpExpr **expr);
 
 void BlimpExpr_SetSourceRange(BlimpExpr *expr, const BlimpSourceRange *range);
+
+BlimpStatus BlimpExpr_ParseSymbol(BlimpExpr *expr, const BlimpSymbol **sym);
 
 /**
  * \brief Free memory associated with an expression.
@@ -752,14 +762,6 @@ typedef struct BlimpStream {
      * \brief Close a stream and clean up its resources.
      */
     void (*Close)(struct BlimpStream *self);
-
-#ifndef DOXYGEN
-    // Reserved for internal use. These fields allow us to implement peeking,
-    // which returns the next character in the stream without consuming it.
-    int peek;
-    bool peek_valid;
-    BlimpSourceLoc peek_loc;
-#endif
 } BlimpStream;
 
 /**
@@ -809,6 +811,78 @@ BlimpStatus Blimp_ParseFile(Blimp *blimp, const char *path, BlimpExpr **output);
 BlimpStatus Blimp_ParseString(Blimp *blimp, const char *str, BlimpExpr **output);
 
 void Blimp_DumpGrammarVitals(FILE *file, Blimp *blimp);
+
+/**
+ * \brief Handler which is called when a macro expansion is triggered.
+ *
+ * \param[in]  blimp     The interpreter.
+ * \param[in]  sub_exprs The sequences of expressions which triggered the macro.
+ * \param[in]  arg       Argument registered with Blimp_DefineMacro().
+ * \param[out] parsed    A new expression; the result of the macro.
+ *
+ * Macro handlers are registered when macros are defined with Blimp_DefineMacro.
+ * Whenever the parser encounters a sequence of parsed sub-expressions matching
+ * the symbols given to Blimp_DefineMacro(), it will call the handler associated
+ * with that macro. The handler will receive the sequence of expressions which
+ * triggered the macro, and it must return an expression which is the result of
+ * the macro. This may be a new expression, or it may be a new reference to an
+ * existing expression (see BlimpExpr_Borrow()).
+ */
+typedef BlimpStatus(*BlimpMacroHandler)(
+    Blimp *blimp, BlimpExpr **sub_exprs, void *arg, BlimpExpr **parsed);
+
+/**
+ * \brief A symbol which matches a section of input in a macro definition.
+ *
+ * A grammar symbol can either be a terminal or a non-terminal. A terminal
+ * matches a single token, and it is defined by the text of the token it matches
+ * (in the form of a BlimpSymbol).
+ *
+ * A non-terminal matches an expression, which has already been parsed from a
+ * sequence of one or more tokens. It is defined by its precedence, which
+ * describes how greedily the symbol should match input. If there are two
+ * symbols which could match a sequence of input, the higher-precedence symbol
+ * will match first. If that produces a newly parsed expression which still
+ * matches the lower-precedence symbol, only then will the lower-precedence
+ * symbol be matched. In other words, the higher the precedence of a symbol is,
+ * the earlier in parsing it tends to match, and the smaller expressions it
+ * tends to match with.
+ */
+typedef struct {
+    bool is_terminal;
+    union {
+        const BlimpSymbol *terminal;
+        size_t precedence;
+    };
+} BlimpGrammarSymbol;
+
+/**
+ * \brief
+ *      Define a macro to be triggered when parsing a certain sequence of
+ *      symbols.
+ *
+ * \param[in] blimp
+ *      The interpreter.
+ * \param[in] precedence
+ *      The precedence of expressions produced by this macro.
+ * \param[in] symbols
+ *      A sequence of grammar symbols which will trigger this macro when the
+ *      parser encounters a sequence of input expressions which match those
+ *      symbols.
+ * \param[in] num_symbols
+ *      The length of `symbols`.
+ * \param[in] handler
+ *      The BlimpMacroHandler to run when the macro is triggered.
+ * \param[in] handler_arg
+ *      An extra argument to pass to `handler` whenever it runs.
+ */
+BlimpStatus Blimp_DefineMacro(
+    Blimp *blimp,
+    size_t precedence,
+    BlimpGrammarSymbol *symbols,
+    size_t num_symbols,
+    BlimpMacroHandler handler,
+    void *handler_arg);
 
 /**
  * @}
@@ -1421,6 +1495,8 @@ BlimpStatus Blimp_SendAndParseSymbol(
     BlimpObject *receiver,
     BlimpObject *message,
     const BlimpSymbol **sym);
+
+BlimpObject *Blimp_CurrentScope(Blimp *blimp);
 
 /**
  * @}

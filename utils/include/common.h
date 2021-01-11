@@ -72,9 +72,9 @@ typedef BlimpObject Object;
 static inline Status Strndup(
     Blimp *blimp, const char *str, size_t length, char **ret)
 {
-    TRY(Malloc(blimp, length, ret));
-    strncpy(*ret, str, length);
-    (*ret)[length-1] = '\0';
+    TRY(Malloc(blimp, length+1, ret));
+    memcpy(*ret, str, length);
+    (*ret)[length] = '\0';
     return BLIMP_OK;
 }
 

@@ -24,7 +24,7 @@
  *
  * \param path  NULL-terminated array of file paths to search for modules.
  *
- * This will bind module-system methods like `import symbol`.
+ * This will bind module-system methods and macros like `import symbol`.
  */
 BlimpStatus BlimpModule_Init(Blimp *blimp, const char **path);
 
@@ -58,6 +58,42 @@ BlimpStatus BlimpModule_Import(
     const char *module,
     BlimpObject *context,
     const char **path,
+    BlimpObject **result);
+
+/**
+ * \brief Import, but do not evaluate, the named module.
+ *
+ * This function imports `module` exactly like BlimpModule_Import(), but instead
+ * of evaluating the imported module, it simply parses it and returns the
+ * resulting expression.
+ */
+BlimpStatus BlimpModule_StaticImport(
+    Blimp *blimp, const char *module, const char **path, BlimpExpr **result);
+
+/**
+ * \brief Import the source module located at `path`.
+ *
+ * This function is like BlimpModule_Import(), except it does not attempt to
+ * find the module based on the module search path. Instead, `path` must be a
+ * full path (absolute or relative) to a bl:mp source module.
+ */
+BlimpStatus BlimpModule_ImportSource(
+    Blimp *blimp,
+    const char *path,
+    BlimpObject *context,
+    BlimpObject **result);
+
+/**
+ * \brief Import the extension module located at `path`.
+ *
+ * This function is like BlimpModule_Import(), except it does not attempt to
+ * find the module based on the module search path. Instead, `path` must be a
+ * full path (absolute or relative) to a bl:mp extension module.
+ */
+BlimpStatus BlimpModule_ImportExtension(
+    Blimp *blimp,
+    const char *path,
+    BlimpObject *context,
     BlimpObject **result);
 
 /**

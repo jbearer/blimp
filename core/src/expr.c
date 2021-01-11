@@ -6,6 +6,7 @@ static Status Expr_New(Blimp *blimp, ExprType type, Expr **expr)
 {
     TRY(Calloc(blimp, 1, sizeof(Expr), expr));
 
+    (*expr)->blimp = blimp;
     (*expr)->tag = type;
     (*expr)->refcount = 1;
     (*expr)->next = NULL;
@@ -46,13 +47,6 @@ Status BlimpExpr_NewSend(
     return BLIMP_OK;
 }
 
-Status BlimpExpr_NewToken(Blimp *blimp, const Token *tok, Expr **expr)
-{
-    TRY(Expr_New(blimp, EXPR_TOKEN, expr));
-    (*expr)->tok = *tok;
-    return BLIMP_OK;
-}
-
 Status BlimpExpr_NewMsgName(Blimp *blimp, const Symbol *name, Expr **expr)
 {
     TRY(Expr_New(blimp, EXPR_MSG_NAME, expr));
@@ -64,6 +58,16 @@ Status BlimpExpr_NewMsgIndex(Blimp *blimp, size_t index, Expr **expr)
 {
     TRY(Expr_New(blimp, EXPR_MSG, expr));
     (*expr)->msg.index = index;
+    return BLIMP_OK;
+}
+
+Status BlimpExpr_ParseSymbol(Expr *expr, const Symbol **sym)
+{
+    if (expr->tag != EXPR_SYMBOL) {
+        return Blimp_Error(expr->blimp, BLIMP_MUST_BE_SYMBOL);
+    }
+
+    *sym = expr->symbol;
     return BLIMP_OK;
 }
 
@@ -103,11 +107,6 @@ static Status ResolveStmt(Blimp *blimp, Expr *stmt, DeBruijnMap *scopes)
             }
             return BLIMP_OK;
         }
-        case EXPR_TOKEN:
-            // Raw tokens should have been reduced away by the parser.
-            return ErrorFrom(blimp, stmt->range,
-                UnexpectedTokenError(stmt->tok.type),
-                "unexpected %s", StringOfTokenType(stmt->tok.type));
         default:
             assert(false);
             return Error(blimp, BLIMP_INVALID_EXPR);
@@ -180,8 +179,6 @@ void Blimp_FreeExpr(Expr *expr)
             case EXPR_MSG:
                 break;
             case EXPR_MSG_NAME:
-                break;
-            case EXPR_TOKEN:
                 break;
         }
 
@@ -301,7 +298,7 @@ void PrintClosure(FILE *f, const Expr *expr, DeBruijnMap *scopes)
             case EXPR_SEND:
                 fputc('(', f);
                 PrintClosure(f, expr->send.receiver, scopes);
-                fputs(") (", f);
+                fputc(' ', f);
                 PrintClosure(f, expr->send.message, scopes);
                 fputc(')', f);
                 break;

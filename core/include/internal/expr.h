@@ -14,12 +14,12 @@ typedef enum {
 
     // Unresolved expressions. These should be eliminated from the AST after the
     // parse/resolve phase.
-    EXPR_TOKEN,
     EXPR_MSG_NAME,
 } ExprType;
 
 struct BlimpExpr {
     ExprType tag;
+    Blimp *blimp;
 
     size_t refcount;
     SourceRange range;
@@ -97,7 +97,6 @@ struct BlimpExpr {
     };
 };
 
-PRIVATE Status BlimpExpr_NewToken(Blimp *blimp, const Token *tok, Expr **expr);
 PRIVATE Status BlimpExpr_NewMsgName(Blimp *blimp, const Symbol *name, Expr **expr);
 PRIVATE Status BlimpExpr_NewMsgIndex(Blimp *blimp, size_t index, Expr **expr);
 

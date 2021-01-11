@@ -23,6 +23,7 @@ struct Blimp {
     GlobalObject *global;
     Signals signals;
     Optimizer optimizer;
+    TokenTrie tokens;
     Grammar grammar;
     size_t counter;
 

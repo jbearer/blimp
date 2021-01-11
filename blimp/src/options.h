@@ -5,6 +5,7 @@
 
 typedef enum {
     ACTION_EVAL,
+    ACTION_PARSE,
     ACTION_DUMP,
     ACTION_COMPILE,
 } Action;

@@ -4,9 +4,10 @@
 #include "blimp.h"
 #include "common.h"
 
+typedef Status(*CopyFunc)(void *from, void *to);
 typedef void(*Destructor)(void *);
 
-typedef struct {
+typedef struct Vector {
     Blimp *blimp;
     void *data;
     size_t size;
@@ -41,6 +42,11 @@ PRIVATE void Vector_Init(
  * non-NULL) on each element remaining in the vector.
  */
 PRIVATE void Vector_Destroy(Vector *v);
+
+PRIVATE Status Vector_Copy(const Vector *from, Vector *to, CopyFunc copy);
+PRIVATE Status Vector_Split(Vector *from, size_t i, Vector *to);
+PRIVATE void Vector_Shift(Vector *v, size_t n);
+PRIVATE void Vector_Clear(Vector *v);
 
 /**
  * \brief Append a new, uninitialized element and return a pointer to it.
@@ -87,6 +93,11 @@ PRIVATE Status Vector_Resize(Vector *v, size_t new_size);
  * If `delta` is greater than the current size of `v`, all elements are removed.
  */
 PRIVATE Status Vector_Contract(Vector *v, size_t delta);
+
+static inline void *Vector_Data(const Vector *v)
+{
+    return v->data;
+}
 
 static inline size_t Vector_Length(const Vector *v)
 {

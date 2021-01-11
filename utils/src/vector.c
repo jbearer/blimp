@@ -22,6 +22,51 @@ void Vector_Destroy(Vector *v)
     free(v->data);
 }
 
+Status Vector_Copy(const Vector *from, Vector *to, CopyFunc copy)
+{
+    Vector_Init(from->blimp, to, from->elem_size, from->destructor);
+    TRY(Vector_Reserve(to, from->size));
+
+    if (copy == NULL) {
+        memcpy(to->data, from->data, from->size*from->elem_size);
+        to->size = from->size;
+    } else {
+        for (size_t i = 0; i < from->size; ++i) {
+            if (copy(
+                    (char *)from->data + i*from->elem_size,
+                    (char *)to->data   + i*from->elem_size
+                ) != BLIMP_OK)
+            {
+                Vector_Destroy(to);
+            }
+            ++to->size;
+        }
+    }
+
+    return BLIMP_OK;
+}
+
+Status Vector_Split(Vector *from, size_t i, Vector *to)
+{
+    assert(i < from->size);
+
+    Vector_Init(from->blimp, to, from->elem_size, from->destructor);
+    TRY(Vector_Reserve(to, from->size - i));
+    memcpy(
+        to->data,
+        (char *)from->data + i*from->elem_size,
+        (from->size - i)*from->elem_size
+    );
+    to->size = from->size - i;
+    from->size = i;
+    return BLIMP_OK;
+}
+
+void Vector_Clear(Vector *v)
+{
+    CHECK(Vector_Resize(v, 0));
+}
+
 Status Vector_EmplaceBack(Vector *v, void **elem)
 {
     TRY(Vector_Reserve(v, ++v->size));
@@ -79,6 +124,27 @@ Status Vector_Resize(Vector *v, size_t new_size)
 
     v->size = new_size;
     return BLIMP_OK;
+}
+
+void Vector_Shift(Vector *v, size_t n)
+{
+    if (n > v->size) {
+        n = v->size;
+    }
+
+    if (v->destructor != NULL) {
+        for (size_t i = 0; i < n; ++i) {
+            v->destructor(Vector_Index(v, i));
+        }
+    }
+
+    memmove(
+        v->data,
+        (char *)v->data + v->elem_size*n,
+        v->elem_size*(v->size - n)
+    );
+
+    v->size -= n;
 }
 
 Status Vector_Contract(Vector *v, size_t delta)

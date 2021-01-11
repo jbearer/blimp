@@ -5,26 +5,25 @@
 #include "internal/error.h"
 #include "internal/symbol.h"
 
-static size_t StringHash(const char **str, void *arg)
+typedef struct {
+    const char *data;
+    size_t length;
+} String;
+
+static size_t StringHash(const String *str, void *arg)
 {
     (void)arg;
 
-    // FNV1a hash function.
-
-    static const size_t offset = 14695981039346656037ull;
-    static const size_t prime  = 1099511628211ull;
-
-    size_t hash = offset;
-    for (const char *c = *str; *c; ++c) {
-        hash = (hash ^ *c) * prime;
-    }
+    size_t hash = HASH_SEED;
+    Hash_AddBytes(&hash, str->data, str->length);
     return hash;
 }
 
-static bool StringEq(const char **str1, const char **str2, void *arg)
+static bool StringEq(const String *str1, const String *str2, void *arg)
 {
     (void)arg;
-    return strcmp(*str1, *str2) == 0;
+    return str1->length == str2->length
+        && memcmp(str1->data, str2->data, str1->length) == 0;
 }
 
 PRIVATE size_t SymbolHash(const Symbol **symbol, void *arg)
@@ -42,7 +41,7 @@ bool SymbolEq(const Symbol **sym1, const Symbol **sym2, void *arg)
 Status SymbolTable_Init(Blimp *blimp, SymbolTable *symbols)
 {
     return HashMap_Init(
-        blimp, symbols, sizeof(char *), sizeof(Symbol *),
+        blimp, symbols, sizeof(String), sizeof(Symbol *),
         (EqFunc)StringEq, (HashFunc)StringHash, NULL);
 }
 
@@ -62,15 +61,18 @@ void SymbolTable_Destroy(SymbolTable *symbols)
 }
 
 Status SymbolTable_GetSymbol(
-    SymbolTable *symbols, const char *name, const Symbol **symbol)
+    SymbolTable *symbols,
+    const char *name,
+    size_t length,
+    const Symbol **symbol)
 {
     Blimp *blimp = HashMap_GetBlimp(symbols);
 
     HashMapEntry *entry;
     bool created;
-    TRY(HashMap_Emplace(symbols, &name, &entry, &created));
+    TRY(HashMap_Emplace(symbols, &(String){name, length}, &entry, &created));
 
-    char **key;
+    String *key;
     Symbol **value;
     size_t hash;
     HashMap_GetEntry(symbols, entry, (void **)&key, (void **)&value, &hash);
@@ -84,12 +86,11 @@ Status SymbolTable_GetSymbol(
 
     // Otherwise, we created and inserted a new entry into the map. Now we need
     // to initialie it. It's key is currently the same pointer as `name`:
-    assert(*key == name);
+    assert(key->data == name);
     // In order to take ownership of that string, we need to duplicate it into
     // our own memory:
-    size_t len = strlen(name);
     Status ret;
-    if ((ret = Strndup(blimp, name, len+1, key)) != BLIMP_OK) {
+    if ((ret = Strndup(blimp, name, length, (char **)&key->data)) != BLIMP_OK) {
         HashMap_AbortEmplace(symbols, entry);
         return ret;
     }
@@ -101,8 +102,8 @@ Status SymbolTable_GetSymbol(
         return ret;
     }
     Object_Init((Object *)new_symbol, blimp, OBJ_SYMBOL);
-    new_symbol->length = len;
-    new_symbol->name   = *key;
+    new_symbol->length = length;
+    new_symbol->name   = key->data;
     new_symbol->hash   = hash;
     *value  = new_symbol;
     *symbol = new_symbol;

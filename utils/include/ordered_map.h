@@ -105,7 +105,9 @@ static inline const void *OrderedMap_MaxKey(const OrderedMap *map)
     }
 }
 
+PRIVATE void OrderedMap_RemoveEntry(OrderedMap *map, OrderedMapEntry *entry);
 PRIVATE bool OrderedMap_Remove(OrderedMap *map, const void *key, void *value);
+PRIVATE void OrderedMap_RemoveMin(OrderedMap *map, void *key, void *value);
 
 PRIVATE Status OrderedMap_Iterator(
     const OrderedMap *map, OrderedMapIterator *it);
@@ -140,6 +142,11 @@ PRIVATE bool OrderedMap_RNext(
 static inline size_t OrderedMap_Size(const OrderedMap *map)
 {
     return map->size;
+}
+
+static inline bool OrderedMap_Empty(const OrderedMap *map)
+{
+    return map->size == 0;
 }
 
 #endif

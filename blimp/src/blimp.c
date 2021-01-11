@@ -51,7 +51,9 @@ static void PrintUsage(FILE *f, int argc, char *const *argv)
     fprintf(f, "    -a, --action\n");
     fprintf(f, "        Set the action to perform on the input program:\n");
     fprintf(f, "            * eval: evaluate the program and print the result\n");
-    fprintf(f, "            * dump: dump the parsed input expression\n");
+    fprintf(f, "            * parse: pretty-print the parsed input expression\n");
+    fprintf(f, "            * dump: dump a representation of the parsed input\n");
+    fprintf(f, "                  in the formal semantics.\n");
     fprintf(f, "            * compile: print the compiled bytecode for an input\n");
     fprintf(f, "                  expression\n");
     fprintf(f, "        The default is `eval'.\n");
@@ -289,6 +291,12 @@ static BlimpStatus DoAction(
             }
 
             BlimpObject_Release(result);
+            break;
+        }
+
+        case ACTION_PARSE: {
+            Blimp_PrintExpr(blimp, stdout, expr);
+            putchar('\n');
             break;
         }
 
@@ -653,6 +661,8 @@ int main(int argc, char *const *argv)
             case FLAG_ACTION:
                 if (strcmp(optarg, "eval") == 0) {
                     options.action = ACTION_EVAL;
+                } else if (strcmp(optarg, "parse") == 0) {
+                    options.action = ACTION_PARSE;
                 } else if (strcmp(optarg, "dump") == 0) {
                     options.action = ACTION_DUMP;
                 } else if (strcmp(optarg, "compile") == 0) {

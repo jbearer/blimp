@@ -488,6 +488,28 @@ static BlimpStatus PrintCode(
     return VoidReturn(blimp, result);
 }
 
+static BlimpStatus Eval(
+    Blimp *blimp, Test *test, BlimpObject **args, BlimpObject **result)
+{
+    (void)test;
+
+    const BlimpSymbol *code;
+    if (BlimpObject_ParseSymbol(args[0], &code) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    BlimpExpr *expr;
+    if (Blimp_ParseString(blimp, BlimpSymbol_GetName(code), &expr) != BLIMP_OK)
+    {
+        return Blimp_Reraise(blimp);
+    }
+
+    BlimpStatus status = Blimp_Eval(
+        blimp, expr, Blimp_CurrentScope(blimp), result);
+    Blimp_FreeExpr(expr);
+    return status;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // The TestBlimp object (bound to ! in the global scope).
 //
@@ -601,6 +623,7 @@ static const TestBlimpMethod methods[] = {
     {"gc_check_collect",    0,  GC_CheckCollect },
     {"gc_print_stats",      0,  GC_PrintStats   },
     {"print_code",          0,  PrintCode       },
+    {"eval",                1,  Eval            },
 };
 
 static BlimpStatus TestBlimp_Receive(

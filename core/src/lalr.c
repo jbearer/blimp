@@ -338,42 +338,39 @@
 // We do this using precedence. First, the states in the state machine are
 // ordered based on the precedences of the symbols that must be encountered to
 // reach the items in their kernel. The starting state (whose kernel is always
-// {S -> ⋅N} for some non-terminal N) comes first. Then comes the state we
-// transition to from the start state given the lowest-precedence non-terminal.
-// Then come all the states we can reach from that state, followed by the state
-// reached from the start state given the second lowest precedence non-terminal.
-// In other words, the order of states is a depth-first, weighted topological
-// sorting starting from the start state.
+// {S -> ⋅N} for some non-terminal N) comes first. The remaining states are
+// ordered based on the highest-precedence symbol in the lowest-precedence path
+// from the starting state to each state. We define the precedence `Prec(i)` of
+// a state `i` as the precedence of this symbol.
 //
-// We can now define the precedence of a state by the highest-precedence symbol
-// in the lowest-precedence path from the start state to that state (that is,
-// the path taken by the weighted depth-first traversal described above). This
-// gives us the crucial result: the addition of a production whose first symbol
-// has precedence `p` cannot change the index or interpretation of a state `i`
-// with `Prec(i) < p`, because any state whose kernel contains an item derived
-// from the new production can only be reached from another state by a
+// This choice of ordering constrains how the state machine can change when new
+// rules are added to the grammar: the addition of a production whose first
+// symbol has precedence `p` cannot change the index or interpretation of a
+// state `i` with `Prec(i) < p`, because any state whose kernel contains an item
+// derived from the new production can only be reached from another state by a
 // transition of precedence `p`, and therefore such a state comes after state
-// `i` in the depth-first traversal.
+// `i` in the order.
 //
 // Let S be the multiset of the precedences of each state on the state stack at
 // some point during parsing. It is clear from the above that if `max(S) < p`,
 // then it is safe to add a new production that begins with `p`. There must be
-// some symbol α in the partial output such that `Prec(α) = max(S)`, since we
-// must have transitioned on such a symbol to reach a state whose precedence is
-// `max(S)`. Therefore, if all symbols in the output of precedence less than
-// `p`, then `max(S) < p`. This leads to an algorithm which does not require
-// computing state precedences at all. Instead, we can just look at the
-// precedences of symbols in the output.
+// some symbol α in the partial output such that `max(S) <= Prec(α)`, since we
+// must have transitioned on such a symbol (or one with a higher precedence, if
+// we did not take the lowest-precedence path used to define Prec) to reach a
+// state whose precedence is `max(S)`. Therefore, if all symbols in the output
+// have precedence less than `p` (so, in particular, Prec(α) < p), then `max(S)
+// < p`. This leads to an algorithm which does not require computing state
+// precedences at all. Instead, we can just look at the precedences of symbols
+// in the output.
 //
 // We maintain two auxiliary pieces of state (in addition to the usual state:
 // input, stack of automaton states, and partial output). These are
 //  1. O: The multiset of the precedences of each symbol in the output.
-//  2. P: The multiset of the precedences of the first symbol of each production
+//  2. P: The minimum of the precedences of the first symbol of each production
 //        which has been added to the grammar since we last updated the parse
 //        table.
-// Whenever O or P changes, we check if `max(O) < min(P)`. If it is, we
-// regenerate the parse table from the new grammar and switch to the new parse
-// table.
+// Whenever O changes, we check if `max(O) < P`. If it is, we regenerate the
+// parse table from the new grammar and switch to the new parse table.
 //
 
 #include "hash_map.h"
@@ -384,6 +381,65 @@
 
 #include "internal/expr.h"
 #include "internal/parse.h"
+
+////////////////////////////////////////////////////////////////////////////////
+// Productions
+//
+// The rule
+//      (Production){p, n, h, {sym1, sym2, ..., sym_n}}
+// represents the production
+//      p -> sym1 sym2 ... sym_n
+// where `p` is the precedence of the non-terminal of the rule.
+//
+// Whenever a reduction is performed with parse tree fragments `tree1`, `tree2`,
+// `tree_n` on the output stack, the handler `h` is invoked as:
+//      h(context, {tree1, tree2, ..., tree_n})
+// producing a new parse tree fragment which replaces the `n` existing fragments
+// on the stack.
+typedef struct {
+    ProductionHandler handler;
+    void *handler_arg;
+    size_t index;
+
+    NonTerminal non_terminal;
+
+    size_t num_symbols;
+    GrammarSymbol symbols[];
+} Production;
+
+// For each non-terminal `N` in a grammar, we also get a conceptual pseduo-
+// terminal `pt(N)` and a production `N -> pt(N)`. This effectively defines an
+// injection from non-terminals to terminals. Whenever the parser shifts a
+// pseudo-terminal `pt(N)`, it will immediately reduce it to `N` and proceed
+// exactly as if it had "shifted" an already-parsed parse-tree with precedence
+// `N`. This allows us to parse sequences of parse trees just as easily as we
+// can parse sequences of tokens, which is helpful because bl:mp macros return
+// sequences of parse trees with associated precedences that need to be combined
+// into a single parse tree.
+//
+// We represent pseudo-terminals as terminals with values greater than any
+// normal terminal, so `pt(N) = max(normal terminals) + 1 + N`. Since new
+// terminals can be added at any time, pseudo-terminals are only constant for a
+// particular snapshot of a grammar, and thus they are associated with a state
+// machine built from a grammar, not with the grammar itself. Similarly, the
+// pseduo-productions `N -> pt(N)` are not stored with the rest of the grammar
+// productions. They are generated and processed on the fly during the state
+// machine generation process, after it processes normal productions.
+
+// All pseudo-productions have PSEUDO_PRODUCTION_INDEX as their index field.
+#define PSEUDO_PRODUCTION_INDEX ((size_t)-1)
+
+// All pseudo-productions are handled during parsing by PseudoHandler(), which
+// simply returns the top-level expression from the parse tree represented by
+// the pseudo-terminal.
+static Status PseudoHandler(
+    ParserContext *ctx, const Vector/*<ParseTree>*/ *trees, Expr **result)
+{
+    (void)ctx;
+
+    *result = BlimpExpr_Borrow(ParsedExpr(trees, 0));
+    return BLIMP_OK;
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 // Grammar API
@@ -454,17 +510,37 @@ static size_t GrammarSymbol_Hash(const GrammarSymbol *sym, void *arg)
     return hash;
 }
 
+// A GrammarListener can be used to get updates when a Grammar changes. Each
+// Grammar keeps a list of all of its active listeners. When a new rule is
+// added, the Grammar updates each of its listeners with the precedence of the
+// new rule. GrammarListener_ShouldUpdate() can then be used to determine if
+// data structures derived from the Grammar (like parse tables) need updating
+// and if they can be safely updated.
 typedef struct GrammarListener {
+    GrammarSymbol min_new_precedence;
+        // The minimum precedence of the first symbols of each rule added to the
+        // grammar since the last successful call to
+        // GrammarListener_ShouldUpdate().
+        //
+        // An in-progress parser can safely update its data structures as long
+        // as all of the symbols on its output stack have precedence lower than
+        // this.
+    bool dirty;
+        // Whether any new rules have been added to the grammar since the last
+        // successful call to GrammarListener_ShouldUpdate().
+        // `min_new_precedence` is only valid if `dirty` is `true`.
+
+    // Each GrammarListener belongs to a doubly-linked list of listeners owned
+    // by a Grammar.
     struct GrammarListener *next;
     struct GrammarListener *prev;
-    GrammarSymbol min_new_precedence;
-    bool dirty;
 } GrammarListener;
 
 static void Grammar_Listen(Grammar *grammar, GrammarListener *listener)
 {
     listener->dirty = false;
 
+    // Add the new listener to this grammar's list of listeners.
     listener->prev = NULL;
     listener->next = grammar->listeners;
     if (listener->next != NULL) {
@@ -475,10 +551,12 @@ static void Grammar_Listen(Grammar *grammar, GrammarListener *listener)
 
 static void Grammar_Unlisten(Grammar *grammar, GrammarListener *listener)
 {
+    // Remove `listener` from this grammar's list of listeners.
     if (listener->next != NULL) {
         listener->next->prev = listener->prev;
     }
     if (listener->prev != NULL) {
+        assert(listener != grammar->listeners);
         listener->prev->next = listener->next;
     } else {
         assert(listener == grammar->listeners);
@@ -499,28 +577,6 @@ static bool GrammarListener_ShouldUpdate(
     }
 }
 
-// The rule
-//      (Production){p, n, h, {sym1, sym2, ..., sym_n}}
-// represents the production
-//      p -> sym1 sym2 ... sym_n
-// where `p` is the precedence of the non-terminal of the rule.
-//
-// Whenever a reduction is performed with parse tree fragments `tree1`, `tree2`,
-// `tree_n` on the output stack, the handler `h` is invoked as:
-//      h(context, {tree1, tree2, ..., tree_n})
-// producing a new parse tree fragment which replaces the `n` existing fragments
-// on the stack.
-typedef struct {
-    ProductionHandler handler;
-    void *handler_arg;
-    size_t index;
-
-    NonTerminal non_terminal;
-
-    size_t num_symbols;
-    GrammarSymbol symbols[];
-} Production;
-
 Status Grammar_Init(Blimp *blimp, Grammar *grammar, Terminal eof)
 {
     Vector_Init(
@@ -531,21 +587,13 @@ Status Grammar_Init(Blimp *blimp, Grammar *grammar, Terminal eof)
         blimp, &grammar->terminal_strings, sizeof(char *), FreeDestructor);
     Vector_Init(
         blimp, &grammar->non_terminal_strings, sizeof(char *), FreeDestructor);
-    grammar->num_terminals = NUM_TOKEN_TYPES;
     grammar->eof_terminal = eof;
     grammar->listeners = NULL;
 
-    // For each terminal `t`, create a human readable string name "T(t)". These
-    // might be replaced later by the caller, if they want to provide more
-    // meaningful names specific to this grammar. But this way, we will always
-    // have default names if we need to pretty-print the grammar or format any
-    // error messages.
-    TRY(Vector_Reserve(&grammar->terminal_strings, grammar->num_terminals));
-    for (Terminal t = 0; t < grammar->num_terminals; ++t) {
-        char *string;
-        TRY(Malloc(blimp, 8, &string));
-        snprintf(string, 8, "T(%d)", (int)t);
-        CHECK(Vector_PushBack(&grammar->terminal_strings, &string));
+    grammar->num_terminals = 0;
+    if (Grammar_AddTerminal(grammar, NUM_BUILT_IN_TOKENS - 1) != BLIMP_OK) {
+        Grammar_Destroy(grammar);
+        return Reraise(blimp);
     }
 
     return BLIMP_OK;
@@ -733,6 +781,31 @@ Status Grammar_AddRule(
     // Add the new production to the grammar.
     TRY(Grammar_AddProduction(grammar, rule));
 
+    return BLIMP_OK;
+}
+
+Status Grammar_AddTerminal(Grammar *grammar, Terminal terminal)
+{
+    if (terminal < grammar->num_terminals) {
+        return BLIMP_OK;
+    }
+
+    Blimp *blimp = Grammar_GetBlimp(grammar);
+
+    // For each new terminal `t`, create a human readable string name
+    // "T(t)". These might be replaced later by the caller, if they want to
+    // provide more meaningful names specific to this grammar. But this way,
+    // we will always have default names if we need to pretty-print the
+    // grammar or format any error messages.
+    TRY(Vector_Reserve(&grammar->terminal_strings, grammar->num_terminals));
+    for (Terminal t = grammar->num_terminals; t <= terminal; ++t) {
+        char *string;
+        TRY(Malloc(blimp, 8, &string));
+        snprintf(string, 8, "T(%d)", (int)t);
+        CHECK(Vector_PushBack(&grammar->terminal_strings, &string));
+    }
+
+    grammar->num_terminals = terminal + 1;
     return BLIMP_OK;
 }
 
@@ -970,47 +1043,94 @@ static inline size_t Action_Data(Action action)
     return action >> 2;
 }
 
+#define NO_ACTION ((Action)0)
+    // If there is no action for a state, we treat it as an ERROR (ActionType 0)
+    // with no accompanying information (Action_Data(NO_ACTION) == 0).
+
+// Information about errors caused by conflicting actions in the same state. If
+// we encounter one of these, it means the input grammar was not LALR(1);.
+//
+// The algorithm is willing to generate state machines containing conflict
+// states, and the error will only be reported if we actually reach that state
+// during parsing. These means, for example, users can define left- and right-
+// associative operators with the same precedence, and an error will only be
+// raised if a programmer mixes those operators without disambiguating
+// parentheses.
+typedef enum {
+    NULL_CONFLICT = 0,
+        // Uninitialized actions have type ERROR and data 0, so we reserve the
+        // 0 field of the LALR_Conflict enum so that we can distinguish between
+        // uninitialized errors and real conflicts. The enum values below will
+        // all be non-zero.
+    SHIFT_REDUCE_CONFLICT,
+        // This error indicates that the input grammar is not LALR(1). It may
+        // still be LR(1).
+    REDUCE_REDUCE_CONFLICT,
+        // If there is a reduce-reduce conflict, the grammar is not even LR(1).
+} LALR_Conflict;
+
 static inline Status InitActions(
     Blimp *blimp, Action **actions, const Grammar *grammar)
 {
-    TRY(Calloc(blimp, Grammar_NumTerminals(grammar), sizeof(Action), actions));
-        // Each state in the parse table has one Action for each terminal.
-        // Calloc will initialize the array to zeroes. Since a 0 Action is
-        // ERROR, this means that every action which is not explicitly assigned
-        // another action later on will result in a parse error if encountered.
+    // Calloc will initialize the array to zeroes. Since a 0 Action is
+    // NO_ACTION, this means that every action which is not explicitly assigned
+    // another action later on will result in a generic parse error if
+    // encountered.
+    TRY(Calloc(
+        blimp,
+        Grammar_NumTerminals(grammar) + Grammar_NumNonTerminals(grammar),
+            // Each state in the parse table has one Action for each terminal,
+            // plus one action for a pseudo-terminal corresponding to each non-
+            // terminal.
+        sizeof(Action),
+        actions));
+
     return BLIMP_OK;
 }
 
-static inline Status SetAction(
-    const Grammar *grammar,
+static inline void SetAction(
     Action *actions,
     Terminal terminal,
     ActionType type,
     size_t data)
 {
-    Blimp *blimp = Grammar_GetBlimp(grammar);
     Action action = MakeAction(type, data);
 
-    if (actions[terminal] != ERROR && actions[terminal] != action) {
+    if (actions[terminal] != NO_ACTION && actions[terminal] != action) {
         // If there is already an action set for this terminal, and it is
         // different than the one we are trying to set, then we have a conflict:
         // the grammar is not LALR(1).
-        const char *terminal_name = *(const char **)Vector_Index(
-            &grammar->terminal_strings, terminal);
-        return ErrorMsg(blimp, BLIMP_AMBIGUOUS_PARSE,
-            "%s-%s conflict at terminal %s",
-            Action_Type(actions[terminal]) == REDUCE ? "reduce" : "shift",
-            type == REDUCE ? "reduce" : "shift", terminal_name);
+        switch (Action_Type(actions[terminal])) {
+            case ERROR:
+                // If there is already error information for this action, leave
+                // it alone.
+                break;
+            case SHIFT:
+                assert(Action_Type(action) == REDUCE);
+                    // Shift-shift conflicts should not be possible;
+                actions[terminal] = MakeAction(ERROR, SHIFT_REDUCE_CONFLICT);
+                break;
+            case REDUCE:
+            case ACCEPT: // For the purposes of error reporting, ACCEPT is a
+                         // special case of REDUCE.
+                if (Action_Type(action) == SHIFT) {
+                    actions[terminal] = MakeAction(
+                        ERROR, SHIFT_REDUCE_CONFLICT);
+                } else {
+                    actions[terminal] = MakeAction(
+                        ERROR, REDUCE_REDUCE_CONFLICT);
+                }
+                break;
+        }
+    } else {
+        actions[terminal] = action;
     }
-
-    actions[terminal] = action;
-    return BLIMP_OK;
 }
 
 static inline Status InitGotos(
     Blimp *blimp, size_t **gotos, const Grammar *grammar)
 {
-    size_t num_gotos = Grammar_NumTerminals(grammar);
+    size_t num_gotos = Grammar_NumNonTerminals(grammar);
         // Each state in the parse table has one Goto for each non-terminal.
     TRY(Malloc(blimp, num_gotos*sizeof(size_t), gotos));
     memset(*gotos, -1, num_gotos*sizeof(size_t));
@@ -1031,11 +1151,17 @@ static inline Status SetGoto(
     Blimp *blimp = Grammar_GetBlimp(grammar);
 
     if (gotos[non_terminal] != (size_t)-1) {
-        // If there is already a value for this Goto, we have a conflict.
-        const char *string = Vector_Index(
+        // If there is already a value for this Goto, we have a conflict. Unlike
+        // conflicts in Actions, we don't try to delay error reporting for Goto
+        // conflicts until we encounter the conflicted state during parsing. All
+        // Goto conflicts are reduce-reduce, which means the grammar is not
+        // LR(1) (that is, the grammar is pretty strange) and so these errors
+        // are unlikely to cause much of an annoyance if they are reported
+        // early.
+        const char *nt_name = *(const char **)Vector_Index(
             &grammar->non_terminal_strings, non_terminal);
         return ErrorMsg(blimp, BLIMP_AMBIGUOUS_PARSE,
-            "reduce-reduce conflict at non-terminal %s", string);
+            "reduce-reduce conflict at non-terminal `%s'", nt_name);
     }
 
     gotos[non_terminal] = state;
@@ -1071,6 +1197,13 @@ static size_t Item_Hash(const Item *item, void *arg)
     Hash_AddPointer(&hash, item->production);
     Hash_AddInteger(&hash, item->cursor);
     return hash;
+}
+
+static void Item_Destroy(Item *item)
+{
+    if (item->production->index == PSEUDO_PRODUCTION_INDEX) {
+        free((void *)item->production);
+    }
 }
 
 // A state is a collection of items. For ease of inspection, we break the
@@ -1186,7 +1319,6 @@ typedef struct {
     };
 } StateIterator;
 
-
 static inline StateIterator State_Iterator(const State *state)
 {
     StateIterator it;
@@ -1222,6 +1354,10 @@ static inline bool State_Next(
     return true;
 }
 
+typedef struct StateMachine StateMachine;
+static Terminal StateMachine_PseudoTerminal(
+    const StateMachine *m, NonTerminal nt);
+
 // If the cursor in `item` is before a non-terminal which is not already in
 // `closure`, create items for the productions of that non-terminal, add them to
 // the closure of `state`, and add the non-terminal to `closure` to prevent the
@@ -1230,8 +1366,11 @@ static Status State_AddClosureOfItem(
     State *state,
     const Grammar *grammar,
     const Item *item,
+    const StateMachine *m,
     HashSet *closure)
 {
+    Blimp *blimp = Grammar_GetBlimp(grammar);
+
     if (item->cursor >= item->production->num_symbols) {
         // The cursor is not before any symbols.
         return BLIMP_OK;
@@ -1266,11 +1405,37 @@ static Status State_AddClosureOfItem(
         TRY(Vector_PushBack(&state->closure, &new_item));
     }
 
+    // Add a pseudo-production for the non-terminal: N -> pt(N) where pt(N) is a
+    // pseudo-terminal representing `sym->non_terminal`. This will allow us to
+    // handle parsed non-terminals as input when reparsing a sequence of parse
+    // trees.
+    Production *pseudo_production;
+    TRY(Malloc(
+        blimp,
+        sizeof(Production) + 1*sizeof(GrammarSymbol),
+        &pseudo_production));
+    pseudo_production->non_terminal = sym->non_terminal;
+    pseudo_production->handler = PseudoHandler;
+    pseudo_production->index = PSEUDO_PRODUCTION_INDEX;
+    pseudo_production->num_symbols = 1;
+    pseudo_production->symbols[0] = (GrammarSymbol) {
+        .is_terminal = true,
+        .terminal = StateMachine_PseudoTerminal(m, sym->non_terminal),
+    };
+    Item pseduo_item = {pseudo_production, 0};
+    if (Vector_PushBack(&state->closure, &pseduo_item) != BLIMP_OK) {
+        Free(blimp, &pseudo_production);
+        return Reraise(blimp);
+    }
+
     return BLIMP_OK;
 }
 
 static Status State_Init(
-    State *state, const Grammar *grammar, OrderedSet *kernel)
+    State *state,
+    const Grammar *grammar,
+    const StateMachine *m,
+    OrderedSet *kernel)
 {
     Blimp *blimp = Grammar_GetBlimp(grammar);
 
@@ -1303,14 +1468,14 @@ static Status State_Init(
         goto err_closure;
     }
 
-    Vector_Init(blimp, &state->closure, sizeof(Item), NULL);
+    Vector_Init(blimp, &state->closure, sizeof(Item), (Destructor)Item_Destroy);
 
     // Add the closure of each item in the kernel.
     Item *item;
     OrderedSetIterator it;
     CHECK(OrderedSet_Iterator(state->kernel, &it));
     while (OrderedSet_Next(state->kernel, &it, (const void **)&item)) {
-        if (State_AddClosureOfItem(state, grammar, item, &closure)
+        if (State_AddClosureOfItem(state, grammar, item, m, &closure)
                 != BLIMP_OK)
         {
             goto error;
@@ -1322,7 +1487,8 @@ static Status State_Init(
     // the productions for that non-terminal to the closure.
     for (size_t i = 0; i < Vector_Length(&state->closure); ++i) {
         Item *item = Vector_Index(&state->closure, i);
-        if (State_AddClosureOfItem(state, grammar, item, &closure) != BLIMP_OK)
+        if (State_AddClosureOfItem(state, grammar, item, m, &closure)
+                != BLIMP_OK)
         {
             goto error;
         }
@@ -1346,22 +1512,42 @@ err_actions:
 typedef struct {
     size_t from_state;
     GrammarSymbol sym;
+    GrammarSymbol max_sym;
     OrderedSet kernel;
 } Transition;
 
+static int Transition_Cmp(const Transition *t1, const Transition *t2)
+{
+    int cmp = GrammarSymbol_Cmp(&t1->max_sym, &t2->max_sym);
+    if (cmp != 0) {
+        return cmp;
+    }
+
+    if (t1->from_state != t2->from_state) {
+        return (int)t1->from_state - (int)t2->from_state;
+    }
+
+    cmp = GrammarSymbol_Cmp(&t1->sym, &t2->sym);
+    assert(cmp != 0);
+    return cmp;
+}
+
 static Status State_VisitTransitions(
-    State *state, size_t index, Vector/*<Transition>*/ *dfs_stack)
+    State *state,
+    size_t index,
+    const GrammarSymbol *max_sym,
+    OrderedSet/*<Transition>*/ *transitions)
 {
     Blimp *blimp = Vector_GetBlimp(&state->closure);
 
-    OrderedMap/*<GrammarSymbol, OrderedSet>*/ transitions;
+    OrderedMap/*<GrammarSymbol, OrderedSet>*/ new_kernels;
         // Map from symbols to the kernel of the state we transition to on that
         // symbol. We will add to the kernels in this mapping as we process
         // items from this state, since potentially more than one item
         // transitions on the same symbol.
     OrderedMap_Init(
         blimp,
-        &transitions,
+        &new_kernels,
         sizeof(GrammarSymbol),
         sizeof(OrderedSet),
         (CmpFunc)GrammarSymbol_Cmp
@@ -1369,8 +1555,8 @@ static Status State_VisitTransitions(
 
     // For each item in the state, create a new item by feeding it the next
     // symbol it is expecting from the input, and add the new item to
-    // `transitions[symbol]`. At the end of this process, for each symbol in
-    // `transitions`, `transitions[symbol]` will be the kernel of the state
+    // `new_kernels[symbol]`. At the end of this process, for each symbol in
+    // `new_kernels`, `new_kernels[symbol]` will be the kernel of the state
     // we would transition to from this state when given that symbol.
     Item *item;
     for (StateIterator it = State_Iterator(state);
@@ -1385,21 +1571,21 @@ static Status State_VisitTransitions(
         const GrammarSymbol *expected_sym =
             &item->production->symbols[item->cursor];
 
-        // Get a reference to `transitions[expected_sym]`, creating a new
+        // Get a reference to `new_kernels[expected_sym]`, creating a new
         // empty kernel for `expected_sym` if one does not already exist.
         OrderedMapEntry *transition;
         bool new_transition;
         if (OrderedMap_Emplace(
-                &transitions, expected_sym, &transition, &new_transition)
+                &new_kernels, expected_sym, &transition, &new_transition)
             != BLIMP_OK)
         {
             goto error;
         }
         OrderedSet *transition_kernel = OrderedMap_GetValue(
-            &transitions, transition);
+            &new_kernels, transition);
 
         if (new_transition) {
-            // If we just inserted a new kernel into `transitions`, we need
+            // If we just inserted a new kernel into `new_kernels`, we need
             // to initialize it.
             OrderedSet_Init(
                 blimp,
@@ -1415,36 +1601,41 @@ static Status State_VisitTransitions(
                 &(Item) {item->production, item->cursor + 1})
             != BLIMP_OK)
         {
+            OrderedMap_AbortEmplace(&new_kernels, transition);
             goto error;
         }
-        OrderedMap_CommitEmplace(&transitions, transition);
+        OrderedMap_CommitEmplace(&new_kernels, transition);
     }
 
-    // For each (symbol, kernel) pair that we just aded to `transitions`
+    // For each (symbol, kernel) pair that we just added to `new_kernels`
     // create a transition on `symbol` from this state to the state with
-    // `kernel` and push it onto the depth-first traversal stack.
+    // `kernel` and add it to the set of transitions that need processing.
     const GrammarSymbol *sym;
     OrderedSet *kernel;
     OrderedMapIterator it;
-    CHECK(OrderedMap_RIterator(&transitions, &it));
-    while (OrderedMap_RNext(
-            &transitions, &it, (const void **)&sym, (void **)&kernel))
+    CHECK(OrderedMap_Iterator(&new_kernels, &it));
+    while (OrderedMap_Next(
+            &new_kernels, &it, (const void **)&sym, (void **)&kernel))
     {
-        if (Vector_PushBack(dfs_stack, &(Transition) {
+        if (OrderedSet_Insert(transitions, &(Transition) {
                 .from_state = index,
                 .kernel = *kernel,
                 .sym = *sym,
+                .max_sym =
+                    (max_sym != NULL && GrammarSymbol_Cmp(max_sym, sym) > 0)
+                        ? *max_sym
+                        : *sym
             }) != BLIMP_OK)
         {
             goto error;
         }
     }
 
-    OrderedMap_Destroy(&transitions);
+    OrderedMap_Destroy(&new_kernels);
     return BLIMP_OK;
 
 error:
-    OrderedMap_Destroy(&transitions);
+    OrderedMap_Destroy(&new_kernels);
     return Reraise(blimp);
 }
 
@@ -1488,17 +1679,47 @@ static inline size_t State_GetGoto(
     return state->gotos[non_terminal];
 }
 
-static inline size_t State_GetTransition(
-    const State *state, const GrammarSymbol *sym)
+static Status State_GetTransition(
+    const Grammar *grammar,
+    const State *state,
+    const GrammarSymbol *sym,
+    size_t *next_state)
 {
     if (sym->is_terminal) {
         // Shift actions encode state transitions on non-terminals.
         Action shift = State_GetAction(state, sym->terminal);
-        assert(Action_Type(shift) == SHIFT);
-        return Action_Data(shift);
+        if (Action_Type(shift) == SHIFT) {
+            *next_state = Action_Data(shift);
+            return BLIMP_OK;
+        }
+
+        // The only way the user can get an invalid transition into the state
+        // machine is by creating conflicting grammar rules. In this case we
+        // will report an error, but anything else is an internal logic error
+        // and should fail one of these asserts:
+        assert(Action_Type(shift) == ERROR);
+        assert(Action_Data(shift) != 0);
+
+        // If there is a conflict type associated with this error, we will
+        // report an error message detailing the kind of conflict and suggesting
+        // a possible fix.
+        const char *conflict =
+            Action_Data(shift) == SHIFT_REDUCE_CONFLICT
+                ? "shift-reduce"
+                : "reduce-reduce";
+
+        const char *terminal_name = *(const char **)Vector_Index(
+            &grammar->terminal_strings, sym->terminal);
+
+        return ErrorMsg(Grammar_GetBlimp(grammar), BLIMP_AMBIGUOUS_PARSE,
+            "potential ambiguous parse at input `%s' (%s conflict). "
+            "Perhaps you need to add parentheses?",
+            terminal_name, conflict
+        );
     } else {
         // Gotos encode transitions on non-terminals.
-        return State_GetGoto(state, sym->non_terminal);
+        *next_state = State_GetGoto(state, sym->non_terminal);
+        return BLIMP_OK;
     }
 }
 
@@ -1506,13 +1727,14 @@ static inline size_t State_GetTransition(
 // The LALR State Machine
 //
 
-typedef struct {
+struct StateMachine {
     Vector/*<State>*/ states;
     HashMap/*<OrderedSet<Item> *, size_t>*/ index;
         // Lookup table to find the index of the unique state with a given
         // kernel.
     const Grammar *grammar;
-} StateMachine;
+    size_t first_pseudo_terminal;
+};
 
 static inline State *StateMachine_Begin(const StateMachine *m)
 {
@@ -1545,10 +1767,34 @@ static inline State *StateMachine_GetState(const StateMachine *m, size_t i)
     return Vector_Index(&m->states, i);
 }
 
+static inline size_t StateMachine_NumTerminals(const StateMachine *m)
+{
+    return m->first_pseudo_terminal + Grammar_NumNonTerminals(m->grammar);
+}
+
+static inline size_t StateMachine_NumNonTerminals(const StateMachine *m)
+{
+    return Grammar_NumNonTerminals(m->grammar);
+}
+
+static inline Terminal StateMachine_PseudoTerminal(
+    const StateMachine *m, NonTerminal nt)
+{
+    return m->first_pseudo_terminal + nt;
+}
+
+static inline NonTerminal StateMachine_UnPseudoTerminal(
+    const StateMachine *m, Terminal t)
+{
+    assert(t >= m->first_pseudo_terminal);
+    return t - m->first_pseudo_terminal;
+}
+
 static Status StateMachine_NewState(
     StateMachine *m,
     OrderedSet *kernel,
-    Vector/*<Transition>*/ *dfs_stack,
+    const GrammarSymbol *max_sym,
+    OrderedSet/*<Transition>*/ *transitions,
     size_t *index)
 {
     // For the caller's convenience, `index` is optional. For our
@@ -1563,15 +1809,15 @@ static Status StateMachine_NewState(
     // Append and initialize the new state.
     State *state;
     TRY(Vector_EmplaceBack(&m->states, (void **)&state));
-    TRY(State_Init(state, m->grammar, kernel));
+    TRY(State_Init(state, m->grammar, m, kernel));
 
     // Update the kernel-to-state lookup table.
     assert(HashMap_Find(&m->index, &state->kernel) == NULL);
     TRY(HashMap_Update(&m->index, &state->kernel, index));
 
-    // Push transitions from this state onto the depth-first traversal stack so
-    // we visit them next.
-    TRY(State_VisitTransitions(state, *index, dfs_stack));
+    // Add transitions out of this state to the set of transitions that need
+    // processing.
+    TRY(State_VisitTransitions(state, *index, max_sym, transitions));
 
     return BLIMP_OK;
 }
@@ -1592,20 +1838,15 @@ static Status MakeStateMachine(const Grammar *grammar, StateMachine *m)
     Vector_Init(
         blimp, &m->states, sizeof(State), (Destructor)State_Destroy);
     m->grammar = grammar;
+    m->first_pseudo_terminal = Grammar_NumTerminals(grammar);
 
-    // In order to ensure that states are added in the correct precedence order
-    // for the dynamic parsing algorithm to work, we must traverse the graph
-    // depth-first from the start state as we build the graph.
-    //
-    // We will use `stack` to keep track of states whose neighbors we have yet
-    // to visit. At each state, we will push all of its unvisited neighbors onto
-    // `stack`, in order of decreasing precedence, so that the lowest-precedence
-    // neighbor of the current state becomes the new top of the stack. This way,
-    // the next state we visit will be the neighbor of the current state with
-    // the lowest precedence, giving us the weighted depth-first traversal we
-    // want.
-    Vector/*<Transition>*/ stack;
-    Vector_Init(blimp, &stack, sizeof(Transition), NULL);
+    // `transitions` is a set of transitions to states we have not yet added, in
+    // precedence order. By processing transitions and creating new states in
+    // this order, and by inserting new transitions in order as we process new
+    // states, we ensure that the final list of states is in precedence order.
+    OrderedSet/*<Transition>*/ transitions;
+    OrderedSet_Init(
+        blimp, &transitions, sizeof(Transition), (CmpFunc)Transition_Cmp);
 
     // Create the starting state from the grammar's initial production.
     OrderedSet initial_kernel;
@@ -1617,14 +1858,16 @@ static Status MakeStateMachine(const Grammar *grammar, StateMachine *m)
     {
         goto error;
     }
-    if (StateMachine_NewState(m, &initial_kernel, &stack, NULL) != BLIMP_OK) {
+    if (StateMachine_NewState(m, &initial_kernel, NULL, &transitions, NULL)
+            != BLIMP_OK)
+    {
         goto error;
     }
 
     // Begin the depth-first traversal.
-    while (!Vector_Empty(&stack)) {
+    while (!OrderedSet_Empty(&transitions)) {
         Transition transition;
-        Vector_PopBack(&stack, &transition);
+        OrderedSet_RemoveMin(&transitions, &transition);
 
         const GrammarSymbol *sym = &transition.sym;
         OrderedSet *kernel = &transition.kernel;
@@ -1640,11 +1883,12 @@ static Status MakeStateMachine(const Grammar *grammar, StateMachine *m)
             OrderedSet_Destroy(kernel);
         } else {
             // Otherwise, we create the state we're transitioning to (which will
-            // cause the new state's neighbors to be pushed onto the top of
-            // `stack`, preparing us to continue the depth-first traversal in
-            // the next iteration of this loop).
+            // cause the new state's neighbors to be added to `transitions`,
+            // preparing us to continue the depth-first traversal in the next
+            // iteration of this loop).
             if (StateMachine_NewState(
-                    m, kernel, &stack, &to_index) != BLIMP_OK)
+                    m, kernel, &transition.max_sym, &transitions, &to_index)
+                != BLIMP_OK)
             {
                 goto error;
             }
@@ -1654,12 +1898,7 @@ static Status MakeStateMachine(const Grammar *grammar, StateMachine *m)
         State *from = StateMachine_GetState(m, transition.from_state);
         if (sym->is_terminal) {
             // Transitions on terminals are represented as shift actions.
-            if (SetAction(
-                    grammar, from->actions, sym->terminal, SHIFT, to_index)
-                != BLIMP_OK)
-            {
-                goto error;
-            }
+            SetAction(from->actions, sym->terminal, SHIFT, to_index);
         } else {
             // Transitions on non-terminals are represented as gotos.
             if (SetGoto(
@@ -1671,11 +1910,11 @@ static Status MakeStateMachine(const Grammar *grammar, StateMachine *m)
         }
     }
 
-    Vector_Destroy(&stack);
+    OrderedSet_Destroy(&transitions);
     return BLIMP_OK;
 
 error:
-    Vector_Destroy(&stack);
+    OrderedSet_Destroy(&transitions);
     StateMachine_Destroy(m);
     return Reraise(blimp);
 }
@@ -1785,7 +2024,14 @@ static Status ExtendedGrammar_Project(
         // terminal or non-terminal, as appropriate.
         sym->is_terminal = extended_sym->symbol.is_terminal;
         if (sym->is_terminal) {
+            // Create a new terminal identifier in the projection grammar.
             sym->terminal = Vector_Length(&grammar->terminals);
+            if (Grammar_AddTerminal(&grammar->projection, sym->terminal)
+                    != BLIMP_OK)
+            {
+                HashMap_AbortEmplace(&grammar->project, entry);
+                return Reraise(blimp);
+            }
 
             // Add `extended_sym` to the reverse mapping so we can recover it
             // from the projection `sym` later on.
@@ -1998,8 +2244,12 @@ static Status MakeExtendedGrammar(
                     goto error;
                 }
 
-                curr = State_GetTransition(
-                    StateMachine_GetState(m, curr), sym);
+                if (State_GetTransition(
+                        grammar, StateMachine_GetState(m, curr), sym, &curr)
+                    != BLIMP_OK)
+                {
+                    goto error;
+                }
             }
 
             // Add the new projected production and a reverse mapping so we can
@@ -2090,12 +2340,7 @@ static Status MakeParseTable(const Grammar *grammar, StateMachine *table)
          state = StateMachine_Next(table, state))
     {
         if (State_IsAccepting(state)) {
-            if (SetAction(
-                    grammar, state->actions, grammar->eof_terminal, ACCEPT, 0)
-                != BLIMP_OK)
-            {
-                goto error;
-            }
+            SetAction(state->actions, grammar->eof_terminal, ACCEPT, 0);
         }
     }
 
@@ -2123,8 +2368,16 @@ static Status MakeParseTable(const Grammar *grammar, StateMachine *table)
         const ExtendedGrammarSymbol *final_sym = ExtendedGrammar_Unproject(
             &extended_grammar, &production->symbols[production->num_symbols - 1]);
         State *from_state = StateMachine_GetState(table, final_sym->from_state);
-        State *state = StateMachine_GetState(
-            table, State_GetTransition(from_state, &final_sym->symbol));
+        size_t state_index;
+        if (State_GetTransition(
+                grammar, from_state, &final_sym->symbol, &state_index)
+            != BLIMP_OK)
+        {
+            ExtendedGrammar_Destroy(&extended_grammar);
+            Vector_Destroy(&follows);
+            return BLIMP_OK;
+        }
+        State *state = StateMachine_GetState(table, state_index);
 
         const Production *original_production =
             ExtendedGrammar_UnprojectProduction(&extended_grammar, i);
@@ -2135,7 +2388,8 @@ static Status MakeParseTable(const Grammar *grammar, StateMachine *table)
 
             // Follow(S) should be {$}.
             assert(HashSet_Size(follow) == 1
-                && HashSet_Contains(follow, &grammar->eof_terminal));
+                && HashSet_Contains(
+                        follow, &extended_grammar.projection.eof_terminal));
 
             continue;
         }
@@ -2154,34 +2408,25 @@ static Status MakeParseTable(const Grammar *grammar, StateMachine *table)
                 }
             );
             assert(terminal->symbol.is_terminal);
-            if (SetAction(
-                    grammar,
-                    state->actions,
-                    terminal->symbol.terminal,
-                    REDUCE,
-                    (size_t)original_production
-                ) != BLIMP_OK)
-            {
-                goto error;
-            }
+            SetAction(
+                state->actions,
+                terminal->symbol.terminal,
+                REDUCE,
+                (size_t)original_production
+            );
         }
     }
 
     ExtendedGrammar_Destroy(&extended_grammar);
     Vector_Destroy(&follows);
     return BLIMP_OK;
-
-error:
-    ExtendedGrammar_Destroy(&extended_grammar);
-    Vector_Destroy(&follows);
-    return Reraise(blimp);
 }
 
 static void DumpParseTable(
     FILE *file, const Grammar *grammar, const StateMachine *m)
 {
-    size_t num_terminals = Grammar_NumTerminals(grammar);
-    size_t num_non_terminals = Grammar_NumNonTerminals(grammar);
+    size_t num_terminals = StateMachine_NumTerminals(m);
+    size_t num_non_terminals = StateMachine_NumNonTerminals(m);
 
     fprintf(file, "State |");
     for (Terminal i = 0; i < num_terminals; ++i) {
@@ -2206,10 +2451,15 @@ static void DumpParseTable(
                 case SHIFT:
                     fprintf(file, "   s%.2zu   |", Action_Data(action));
                     break;
-                case REDUCE:
-                    fprintf(file, "   r%.2zu   |",
-                        ((Production *)Action_Data(action))->index);
+                case REDUCE: {
+                    Production *production = (Production *)Action_Data(action);
+                    if (production->index == PSEUDO_PRODUCTION_INDEX) {
+                        fprintf(file, "   r*    |");
+                    } else {
+                        fprintf(file, "   r%.2zu   |", production->index);
+                    }
                     break;
+                }
                 case ACCEPT:
                     fprintf(file, "   acc   |");
                     break;
@@ -2254,9 +2504,157 @@ void Grammar_DumpVitals(FILE *file, const Grammar *grammar)
 // Parsing
 //
 
-Status Parse(Lexer *lex, Grammar *grammar, void *parser_state, Expr **result)
+void ParseTree_Destroy(ParseTree *tree)
 {
-    Blimp *blimp = lex->blimp;
+    Blimp_FreeExpr(tree->parsed);
+    Vector_Destroy(&tree->sub_trees);
+}
+
+Status ParseTree_Copy(const ParseTree *from, ParseTree *to)
+{
+    to->symbol = from->symbol;
+    to->parsed = BlimpExpr_Borrow(from->parsed);
+    return Vector_Copy(
+        &from->sub_trees, &to->sub_trees, (CopyFunc)ParseTree_Copy);
+}
+
+Expr *ParsedExpr(const Vector/*<ParseTree>*/ *trees, size_t i)
+{
+    return ((ParseTree *)Vector_Index(trees, i))->parsed;
+}
+
+const Symbol *ParsedToken(const Vector/*<ParseTree>*/ *trees, size_t i)
+{
+    ParseTree *tree = Vector_Index(trees, i);
+    assert(tree->parsed->tag == EXPR_SYMBOL);
+    return tree->parsed->symbol;
+}
+
+// A ParseTreeStream is an input abstraction for the parser which yields
+// ParseTrees. It can either be an adapter for a Lexer (in which case it will
+// always return trivial ParseTrees whose symbols are Terminals and whose
+// `parsed` expressions are just symbols representing tokens) or it can dispense
+// from a vector of already-parsed Trees, some of which may be complex
+// non-terminal trees with many sub-trees.
+//
+// The latter capability is used to implement Reparse() (which takes a sequence
+// of parse trees and parses them into one larger tree), but having this common
+// interface means the main parsing algorithm doesn't actually care whether it
+// is reparsing or parsing directly from a Lexer.
+typedef struct {
+    enum {
+        STREAM_LEXER,
+        STREAM_VECTOR,
+    } type;
+
+    union {
+        Lexer *lexer;
+        struct {
+            const Vector/*<ParseTree>*/ *trees;
+            size_t offset;
+        } vector;
+    };
+} ParseTreeStream;
+
+static void ParseTreeStream_InitLexer(ParseTreeStream *stream, Lexer *lexer)
+{
+    stream->type = STREAM_LEXER;
+    stream->lexer = lexer;
+}
+
+static void ParseTreeStream_InitVector(
+    ParseTreeStream *stream, const Vector/*<ParseTree>*/ *trees)
+{
+    stream->type = STREAM_VECTOR;
+    stream->vector.trees = trees;
+    stream->vector.offset = 0;
+}
+
+static Blimp *ParseTreeStream_GetBlimp(ParseTreeStream *stream)
+{
+    switch (stream->type) {
+        case STREAM_LEXER:
+            return stream->lexer->blimp;
+        case STREAM_VECTOR:
+            return Vector_GetBlimp(stream->vector.trees);
+        default:
+            abort();
+    }
+}
+
+static Status ParseTreeStream_Peek(ParseTreeStream *stream, ParseTree *tree)
+{
+    switch (stream->type) {
+        case STREAM_LEXER: {
+            Blimp *blimp = stream->lexer->blimp;
+
+            // User the Lexer interface to peek a Token.
+            Token tok;
+            TRY(Lexer_Peek(stream->lexer, &tok));
+
+            // Convert that Token to a ParseTree with a Terminal symbol and an
+            // EXPR_SYMBOL `parsed` expression.
+            TRY(BlimpExpr_NewSymbol(blimp, tok.symbol, &tree->parsed));
+            BlimpExpr_SetSourceRange(tree->parsed, &tok.range);
+            tree->symbol = (GrammarSymbol){
+                .is_terminal = true, .terminal = tok.type};
+            Vector_Init(
+                blimp,
+                &tree->sub_trees,
+                sizeof(ParseTree),
+                (Destructor)ParseTree_Destroy
+            );
+            return BLIMP_OK;
+        }
+
+        case STREAM_VECTOR: {
+            if (stream->vector.offset < Vector_Length(stream->vector.trees)) {
+                // If there are more trees in the input vector, return the next
+                // one.
+                TRY(ParseTree_Copy(
+                    Vector_Index(stream->vector.trees, stream->vector.offset),
+                    tree
+                ));
+            } else {
+                // Otherwise, return EOF.
+                tree->symbol = (GrammarSymbol) {
+                    .is_terminal = true,
+                    .terminal = TOK_EOF,
+                };
+                tree->parsed = NULL;
+            }
+            return BLIMP_OK;
+        }
+
+        default:
+            abort();
+    }
+}
+
+static Status ParseTreeStream_Next(ParseTreeStream *stream)
+{
+    switch (stream->type) {
+        case STREAM_LEXER: {
+            Token tok;
+            return Lexer_Next(stream->lexer, &tok);
+        }
+
+        case STREAM_VECTOR:
+            ++stream->vector.offset;
+            return BLIMP_OK;
+
+        default:
+            abort();
+    }
+}
+
+static Status ParseStream(
+    ParseTreeStream *stream,
+    Grammar *grammar,
+    void *parser_state,
+    ParseTree *result)
+{
+    Blimp *blimp = ParseTreeStream_GetBlimp(stream);
 
     StateMachine m;
     TRY(MakeParseTable(grammar, &m));
@@ -2270,22 +2668,16 @@ Status Parse(Lexer *lex, Grammar *grammar, void *parser_state, Expr **result)
         goto error;
     }
 
-    // `tree` is a stack of the parse tree fragments we have parsed so far.
+    // `output` is a stack of the parse tree fragments we have parsed so far.
     // Reductions pop some number of partial trees, reduce them into a single
-    // larger tree, and push that back onto `tree`. At the end of parsing (when
-    // we reach an ACCEPT state), `tree` should contain just a single
+    // larger tree, and push that back onto `output`. At the end of parsing
+    // (when we reach an ACCEPT state), `output` should contain just a single
     // expression, which is the result of parsing.
-    Vector tree;
-    Vector_Init(blimp, &tree, sizeof(Expr *), ExprDestructor);
+    Vector/*ParseTree*/ output;
+    Vector_Init(
+        blimp, &output, sizeof(ParseTree), (Destructor)ParseTree_Destroy);
 
-    // `output` is a stack of grammar symbols which mirrors `tree`. While `tree`
-    // tells us which expressions we have generated so far, `output` tells us
-    // which non-terminals (and, occasionally, terminals) they correspond to in
-    // the grammar.
-    Vector/*<GrammarSymbol>*/ output;
-    Vector_Init(blimp, &output, sizeof(GrammarSymbol), NULL);
-
-    // `output_precedences` is a multiset of the symbols in `output`, ordered by
+    // `output_precedences` is a multiset of the symbols in `tree`, ordered by
     // precedence.
     OrderedMultiset/*<GrammarSymbol>*/ output_precedences;
     OrderedMultiset_Init(
@@ -2302,48 +2694,47 @@ Status Parse(Lexer *lex, Grammar *grammar, void *parser_state, Expr **result)
         const State *state = StateMachine_GetState(
             &m, *(size_t *)Vector_RIndex(&stack, 0));
 
-        Token tok;
-        if (Lexer_Peek(lex, &tok) != BLIMP_OK) {
+        ParseTree tree;
+        if (ParseTreeStream_Peek(stream, &tree) != BLIMP_OK) {
             goto error;
         }
 
-        Action action = state->actions[tok.type];
+        Action action;
+        if (tree.symbol.is_terminal) {
+            action = state->actions[tree.symbol.terminal];
+        } else {
+            // If the input is a non-terminal, we need to convert it to a
+            // terminal so we can look up the appropriate Action. We do this by
+            // taking advantage of the injection from non-terminals to
+            // pseudo-terminals created by the addition of pseudo-productions
+            // during the construction of the state machine.
+            action = state->actions[
+                StateMachine_PseudoTerminal(&m, tree.symbol.non_terminal)];
+        }
+
         switch (Action_Type(action)) {
             case SHIFT: {
-                CHECK(Lexer_Next(lex, &tok));
-                    // Consume the token we peeked.
+                CHECK(ParseTreeStream_Next(stream));
+                    // Consume the tree we peeked.
+
+                // Push the tree onto the parse tree stack.
+                if (Vector_PushBack(&output, &tree) != BLIMP_OK) {
+                    ParseTree_Destroy(&tree);
+                    goto error;
+                }
+
+                // Update the count of `tree.symbol` symbols in the
+                // `output_precedences` multiset.
+                if (OrderedMultiset_Insert(
+                        &output_precedences, &tree.symbol) != BLIMP_OK)
+                {
+                    goto error;
+                }
 
                 // Push the next state onto the stack.
                 size_t next_state = Action_Data(action);
+                assert(next_state < StateMachine_NumStates(&m));
                 if (Vector_PushBack(&stack, &next_state) != BLIMP_OK) {
-                    goto error;
-                }
-
-                // Push the token onto the parse tree stack.
-                Expr *expr;
-                if (BlimpExpr_NewToken(blimp, &tok, &expr) != BLIMP_OK) {
-                    goto error;
-                }
-                BlimpExpr_SetSourceRange(expr, &tok.range);
-                if (Vector_PushBack(&tree, &expr) != BLIMP_OK) {
-                    Blimp_FreeExpr(expr);
-                    goto error;
-                }
-
-                // Push a terminal symbol onto `output` to correspond to the
-                // token expression we just pushed onto `tree`.
-                GrammarSymbol sym = {
-                    .is_terminal = true, .terminal = tok.type
-                };
-                if (Vector_PushBack(&output, &sym) != BLIMP_OK) {
-                    goto error;
-                }
-
-                // Update the count of `sym` symbols in the `output_precedences`
-                // multiset.
-                if (OrderedMultiset_Insert(
-                        &output_precedences, &sym) != BLIMP_OK)
-                {
                     goto error;
                 }
 
@@ -2368,13 +2759,32 @@ Status Parse(Lexer *lex, Grammar *grammar, void *parser_state, Expr **result)
                 const Production *production =
                     (const Production *)Action_Data(action);
 
+                ParseTree fragment = {
+                    .symbol = {
+                        .is_terminal = false,
+                        .non_terminal = production->non_terminal,
+                    }
+                };
+
                 // Get the parse tree fragments which this reduction will
-                // consume from the parse tree stack. Note that we do not remove
-                // them from the Vector until after calling the reduction
-                // handler, because we are passing a pointer into the Vector's
-                // memory to the handler. This avoids an allocation and copy.
-                Expr **sub_exprs = Vector_RIndex(
-                    &tree, production->num_symbols - 1);
+                // consume from the parse tree stack.
+                if (Vector_Split(
+                        &output,
+                        Vector_Length(&output) - production->num_symbols,
+                        &fragment.sub_trees
+                    ) != BLIMP_OK)
+                {
+                    goto error;
+                }
+                // Remove the corresponding symbols from `output_precedences`
+                // for each expression consumed from `output`.
+                for (ParseTree *consumed = Vector_Begin(&fragment.sub_trees);
+                     consumed != Vector_End(&fragment.sub_trees);
+                     consumed = Vector_Next(&fragment.sub_trees, consumed))
+                {
+                    OrderedMultiset_Remove(
+                        &output_precedences, &consumed->symbol);
+                }
 
                 // Call the handler to get a larger parse tree.
                 ParserContext ctx = {
@@ -2382,46 +2792,32 @@ Status Parse(Lexer *lex, Grammar *grammar, void *parser_state, Expr **result)
                     .parser_state = parser_state,
                     .arg = production->handler_arg,
                     .range = &(SourceRange){
-                        .start = sub_exprs[0]->range.start,
-                        .end = sub_exprs[production->num_symbols - 1]->range.end,
+                        .start = ParsedExpr(
+                            &fragment.sub_trees, 0)->range.start,
+                        .end = ParsedExpr(
+                            &fragment.sub_trees,
+                            production->num_symbols - 1)->range.end,
                     }
                 };
-                Expr *expr;
-                if (production->handler(&ctx, sub_exprs, &expr) != BLIMP_OK) {
+                if (production->handler(
+                        &ctx, &fragment.sub_trees, &fragment.parsed)
+                    != BLIMP_OK)
+                {
+                    Vector_Destroy(&fragment.sub_trees);
                     goto error;
                 }
-                BlimpExpr_SetSourceRange(expr, ctx.range);
+                BlimpExpr_SetSourceRange(fragment.parsed, ctx.range);
 
-                // Now we can remove the consumed parse trees from the stack and
-                // push the new expression in their place.
-                Vector_Contract(&tree, production->num_symbols);
-                CHECK(Vector_PushBack(&tree, &expr));
+                // Push the new expression onto the output stack, in place of
+                // sub-trees taht we removed.
+                CHECK(Vector_PushBack(&output, &fragment));
                     // CHECK not TRY, because we just removed at least one
                     // element from the vector, so this should not cause an
                     // allocation that could fail.
 
-                // Remove the corresponding symbols from `output` and
-                // `output_precedences` for each expression consumed from
-                // `tree`.
-                for (size_t i = 0; i < production->num_symbols; ++i) {
-                    GrammarSymbol sym;
-                    Vector_PopBack(&output, &sym);
-                    OrderedMultiset_Remove(&output_precedences, &sym);
-                }
-
-                // Push a non-terminal symbol corresponding to the newly
-                // produced expression onto `output`.
-                GrammarSymbol sym = {
-                    .is_terminal = false,
-                    .non_terminal = production->non_terminal,
-                };
-                if (Vector_PushBack(&output, &sym) != BLIMP_OK) {
-                    goto error;
-                }
-
-                // Add the symbol we just pushed to `output_precedences`.
+                // Add the symbol we just reduced to `output_precedences`.
                 if (OrderedMultiset_Insert(
-                        &output_precedences, &sym) != BLIMP_OK)
+                        &output_precedences, &fragment.symbol) != BLIMP_OK)
                 {
                     goto error;
                 }
@@ -2436,6 +2832,7 @@ Status Parse(Lexer *lex, Grammar *grammar, void *parser_state, Expr **result)
                 // reduction just produced.
                 const State *tmp_state = StateMachine_GetState(
                     &m, *(size_t *)Vector_RIndex(&stack, 0));
+                assert(tmp_state->gotos[production->non_terminal] != (size_t)-1);
                 if (Vector_PushBack(&stack,
                         &tmp_state->gotos[production->non_terminal])
                     != BLIMP_OK)
@@ -2459,13 +2856,13 @@ Status Parse(Lexer *lex, Grammar *grammar, void *parser_state, Expr **result)
 
             case ACCEPT: {
                 // Get the result from the parse tree.
-                assert(tok.type == TOK_EOF);
-                assert(Vector_Length(&tree) == 1);
-                Vector_PopBack(&tree, result);
+                assert(tree.symbol.is_terminal);
+                assert(tree.symbol.terminal == TOK_EOF);
+                assert(Vector_Length(&output) == 1);
+                Vector_PopBack(&output, result);
 
                 Grammar_Unlisten(grammar, &listener);
                 Vector_Destroy(&stack);
-                Vector_Destroy(&tree);
                 Vector_Destroy(&output);
                 OrderedMultiset_Destroy(&output_precedences);
                 StateMachine_Destroy(&m);
@@ -2473,9 +2870,72 @@ Status Parse(Lexer *lex, Grammar *grammar, void *parser_state, Expr **result)
             }
 
             case ERROR: {
-                ErrorFrom(blimp, tok.range,
-                    UnexpectedTokenError(tok.type),
-                    "unexpected %s", StringOfTokenType(tok.type));
+                if (Action_Data(action)) {
+                    // If there is a conflict type associated with this error,
+                    // we will report an error message detailing the kind of
+                    // conflict and suggesting a possible fix.
+                    const char *conflict =
+                        Action_Data(action) == SHIFT_REDUCE_CONFLICT
+                            ? "shift-reduce"
+                            : "reduce-reduce";
+
+                    if (tree.parsed->tag == EXPR_SYMBOL) {
+                        // If the input that caused the error is a terminal or a
+                        // non-terminal symbol, include it in the error message.
+                        ErrorFrom(blimp, tree.parsed->range,
+                            BLIMP_AMBIGUOUS_PARSE,
+                            "ambiguous parse at input `%s' (%s conflict). "
+                            "Perhaps you need to add parentheses?",
+                            tree.parsed->symbol->name, conflict
+                        );
+                    } else {
+                        // Otherwise, include the precedence of the non-terminal
+                        // which caused the error.
+                        NonTerminal nt;
+                        if (tree.symbol.is_terminal) {
+                            nt = StateMachine_UnPseudoTerminal(
+                                &m, tree.symbol.terminal);
+                        } else {
+                            nt = tree.symbol.non_terminal;
+                        }
+
+                        ErrorFrom(blimp, tree.parsed->range,
+                            BLIMP_AMBIGUOUS_PARSE,
+                            "ambiguous parse at expression with precedence %zu "
+                            "(%s conflict). Perhaps you need to add "
+                            "parentheses?", nt, conflict);
+                    }
+                } else if (tree.symbol.is_terminal &&
+                           tree.symbol.terminal == grammar->eof_terminal)
+                {
+                    // If this is not a grammar conflict (it's just an
+                    // unexpected input) and the unexpected symbol was EOF, we
+                    // have a special error message. The automatic line
+                    // continuation feature of the REPL relies on a unique error
+                    // code being returned when the unexpected input was EOF.
+                    ErrorFrom(blimp, tree.parsed->range,
+                        BLIMP_UNEXPECTED_EOF,
+                        "unexpected end of input");
+                } else if (tree.parsed->tag == EXPR_SYMBOL) {
+                    // If the unexpected input was a terminal or a symbol
+                    // non-terminal, include it in the output.
+                    ErrorFrom(blimp, tree.parsed->range,
+                        BLIMP_UNEXPECTED_TOKEN,
+                        "unexpected token `%s'", tree.parsed->symbol->name);
+                } else {
+                    // Otherwise, include the precedence of the unexpected
+                    // non-terminal.
+                    NonTerminal nt;
+                    if (tree.symbol.is_terminal) {
+                        nt = StateMachine_UnPseudoTerminal(
+                            &m, tree.symbol.terminal);
+                    } else {
+                        nt = tree.symbol.non_terminal;
+                    }
+                    ErrorFrom(blimp, tree.parsed->range,
+                        BLIMP_UNEXPECTED_TOKEN,
+                        "unexpected expression with precedence %zu", nt);
+                }
                 goto error;
             }
 
@@ -2485,9 +2945,34 @@ Status Parse(Lexer *lex, Grammar *grammar, void *parser_state, Expr **result)
 error:
     Grammar_Unlisten(grammar, &listener);
     Vector_Destroy(&stack);
-    Vector_Destroy(&tree);
     Vector_Destroy(&output);
     OrderedMultiset_Destroy(&output_precedences);
     StateMachine_Destroy(&m);
     return Reraise(blimp);
+}
+
+Status Parse(
+    Lexer *lex, Grammar *grammar, void *parser_state, Expr **expr)
+{
+    ParseTreeStream stream;
+    ParseTreeStream_InitLexer(&stream, lex);
+
+    ParseTree tree;
+    TRY(ParseStream(&stream, grammar, parser_state, &tree));
+
+    *expr = BlimpExpr_Borrow(tree.parsed);
+    ParseTree_Destroy(&tree);
+
+    return BLIMP_OK;
+}
+
+Status Reparse(
+    const Vector/*<ParseTree>*/ *input,
+    Grammar *grammar,
+    void *parser_state,
+    ParseTree *parsed)
+{
+    ParseTreeStream stream;
+    ParseTreeStream_InitVector(&stream, input);
+    return ParseStream(&stream, grammar, parser_state, parsed);
 }

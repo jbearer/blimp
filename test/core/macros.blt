@@ -1,0 +1,401 @@
+################################################################################
+# Simplest possible macro: create a new token and define it to a symbol.
+#
+# Kind of like `#define my_keyword foo`
+#
+
+# Before the macro is parsed, `my_keyword` just parses to `my_keyword`.
+!expect_error {
+    !expect_eq my_keyword foo
+};
+
+# Define the macro.
+{^ my_keyword} @7 {^toks
+    {^ foo}
+};
+
+# Once the macro has been parsed, `my_keyword` parses to `foo`.
+!expect_eq my_keyword foo;
+
+################################################################################
+# Defining macros for precedences, and using them to define new macros.
+#
+
+# Define an alias @term for the precedence level @7.
+{^ `@6`; ^ `@term`; ^ `@6` } @3 {^toks
+    {
+        n_ref{^ ^};
+        n n_ref;
+        n_ref 0;
+
+        macro{^ ^};
+        handler{^ ^};
+        ^toks {^tok
+            {
+                0{^{{
+                    macro {(^tok)};
+                    n_ref 1
+                }}};
+                1{^{{
+                    n_ref 2
+                }}};
+                2{^{{
+                    handler {(^tok)};
+                    n_ref 3
+                }}};
+
+                n[] []
+            }[]
+        };
+
+        {^ (macro[]); ^ `@7`; ^ (handler[]) }
+    }[]
+};
+
+# Define a new macro at precedence @7 using the @term alias.
+{^ `my_keyword2`} @term {{^ bar}};
+!expect_eq my_keyword2 bar;
+
+# Do it again, make sure the handler is idempotent.
+{^ `my_keyword3`} @term {{^ baz}};
+!expect_eq my_keyword3 baz;
+
+# Old macros should still work.
+!expect_eq my_keyword foo;
+
+################################################################################
+# Defining a macro in the production tree for another macro.
+#
+
+{
+    {^ `my_keyword4`} @7 {{^`foo`}};
+    ^ `my_keyword5`
+} @7 {
+    {^ `my_keyword4`}
+};
+
+!expect_eq my_keyword4 foo;
+
+################################################################################
+# Defining a macro in the handler for another macro.
+#
+
+{^ `my_keyword6`} @7 {
+    {^`my_keyword7`} @7 {{^`bar`}};
+    {^`my_keyword7`}
+};
+
+!expect_eq my_keyword6 bar;
+
+################################################################################
+# Defining a macro in the expansion of another macro.
+#
+
+{^`define_in_expansion`} @7 {
+    {
+        ^`{`; ^`^`; ^`defined_in_expansion`; ^`}`; ^`@7`; ^`{`;
+            ^`{`; ^`^`; ^`foo`; ^`}`;
+        ^`}`; ^`;`;
+        ^`defined_in_expansion`
+    }
+};
+
+!expect_eq define_in_expansion defined_in_expansion;
+    # The use of `defined_in_expansion` in the expansion of
+    # `define_in_expansion` does not itself get expanded to `foo`, because macro
+    # expansions are not piped through the lexer, since they are already
+    # formatted as a stream of tokens. So adding the keyword
+    # `defined_in_expansion` does not affect the token `defined_in_expansion`
+    # later in the expansion, which has already been lexed as a symbol.
+!expect_eq defined_in_expansion foo;
+
+# If we do the same thing, but now use a token that already exists for the macro
+# within the macro, then we should be able to use the inner macro in the
+# expansion of the outer one.
+{^`+`; ^`-`; ^`*`} @7 {{^ foo}};
+
+{^`define_in_expansion2`} @7 {
+    {
+        ^`{`; ^`^`; ^`\`+\``; ^`;`; ^`^`; ^`\`+\``; ^`}`; ^`@7`; ^`{`;
+            ^`{`; ^`^`; ^`bar`; ^`}`;
+        ^`}`; ^`;`;
+        ^`+`; ^`+`
+    }
+};
+
+!expect_eq define_in_expansion2 bar;
+!expect_eq + + bar;
+
+################################################################################
+# Macros may take effect during reparsing of the expansion of another macro, but
+# not take effect until sometime later outside of the expansion.
+#
+
+{^`define_in_expansion3`} @7 {
+    {
+        ^`{`; ^`^`; ^`\`@7\``; ^`;`; ^`^`; ^`\`-\``; ^`}`; ^`@3`; ^`{`;
+            ^`{`; ^`^`; ^`foo`; ^`}`;
+        ^`}`; ^`;`;
+        ^`bar`; ^`-`
+    }
+};
+
+{
+    !expect_eq define_in_expansion3 foo
+};
+!expect_eq (bar-) foo;
+
+# If we try to use the macro defined in the expansion while in a nested
+# expression, it won't work.
+{^`define_in_expansion4`} @7 {
+    {
+        ^`{`; ^`^`; ^`\`@7\``; ^`;`; ^`^`; ^`\`*\``; ^`}`; ^`@3`; ^`{`;
+            ^`{`; ^`^`; ^`foo`; ^`}`;
+        ^`}`; ^`;`;
+        ^`bar`; ^`*`
+    }
+};
+
+!expect_error {
+    !eval `{
+        define_in_expansion4;
+        bar*
+    }`
+};
+
+################################################################################
+# Macros can be used as soon as the parser state is lower precedence than the
+# new production -- even inside nested expressions.
+#
+
+!expect_eq (({^`nested`}@7{{^`foo`}}; {^}) nested) foo;
+
+################################################################################
+# Macro handler with mutable state.
+#
+
+{^`static`; ^`@7`} @3 {^toks
+    value_ref{^ ^};
+    value{^ref
+        value_ref{(^ref)};
+        value_ref[] {undefined}
+    };
+
+    {^old_value
+        ^toks {^tok
+            value_ref[] {(^tok)}
+        };
+
+        {^ ^old_value}
+    } (value[])
+};
+
+!expect_eq (static foo) undefined;
+!expect_eq (static bar) foo;
+!expect_eq (static[]) bar;
+
+################################################################################
+# Macro matching uses the correct precedence for arguments.
+#
+
+sub_from_3{^} {^rhs
+    3{^} {0};
+    2{^} {1};
+    1{^} {2};
+    ^rhs[]
+};
+
+sub_from_2{^} {^rhs
+    2{^} {0};
+    1{^} {1};
+    ^rhs[]
+};
+
+sub_from_1{^} {^rhs
+    1{^} {0};
+    ^rhs[]
+};
+
+subtract{^} {^lhs{^rhs
+    3{^} sub_from_3;
+    2{^} sub_from_2;
+    1{^} sub_from_1;
+    ^lhs ^rhs
+}};
+
+{^`@7`; ^`infixr-`; ^`@6`} @6 {^toks
+    {
+        n_ref{^ ^};
+        n n_ref;
+        n_ref 0;
+
+        lhs{^ ^};
+        rhs{^ ^};
+        ^toks {^tok
+            {
+                0{^{{
+                    lhs {(^tok)};
+                    n_ref 1
+                }}};
+                1{^{{
+                    n_ref 2
+                }}};
+                2{^{{
+                    rhs {(^tok)};
+                    n_ref 3
+                }}};
+
+                n[] []
+            }[]
+        };
+
+        {^`subtract`; ^(lhs[]); ^(rhs[])}
+    }[]
+};
+
+!expect_eq (3 infixr- 2 infixr- 1) 2;
+
+{^`@6`; ^`infixl-`; ^`@7`} @6 {^toks
+    {
+        n_ref{^ ^};
+        n n_ref;
+        n_ref 0;
+
+        lhs{^ ^};
+        rhs{^ ^};
+        ^toks {^tok
+            {
+                0{^{{
+                    lhs {(^tok)};
+                    n_ref 1
+                }}};
+                1{^{{
+                    n_ref 2
+                }}};
+                2{^{{
+                    rhs {(^tok)};
+                    n_ref 3
+                }}};
+
+                n[] []
+            }[]
+        };
+
+        {^`subtract`; ^(lhs[]); ^(rhs[])}
+    }[]
+};
+
+!expect_eq (3 infixl- 2 infixl- 1) 0;
+
+# Mixing equal-precedence operators with different associativities causes an
+# ambiguous parse error.
+!expect_error { !eval `3 infixr- 2 infixl- 1` };
+
+# But adding parentheses fixes the issue;
+!expect_eq ((3 infixr- 2) infixl- 1) 0;
+!expect_eq (3 infixr- (2 infixl- 1)) 2;
+
+################################################################################
+# Precedence of macro expansions matches the precedence of the macro definition.
+#
+
+{^`multi`; ^`token`; ^`term`} @7 {{^`{`; ^`^`; ^`}`; ^`foo`}};
+{^`requires_term`; ^`@7`} @7 {^toks
+    {
+        n_ref{^ ^};
+        n n_ref;
+        n_ref 0;
+
+        arg{^ ^};
+        ^toks {^tok
+            {
+                0{^{{
+                    n_ref 1
+                }}};
+                1{^{{
+                    arg{(^tok)};
+                    n_ref 2
+                }}};
+
+                n[] []
+            }[]
+        };
+
+        {^(arg[])}
+    }[]
+};
+
+!expect_eq requires_term multi token term foo;
+
+################################################################################
+# Macro parameters used in a handler have term precedence.
+#
+
+snd{^} {^x{^y ^y}};
+
+{^`snd_macro`; ^`@4`} @1 {^toks
+    {
+        n_ref{^ ^};
+        n n_ref;
+        n_ref 0;
+
+        arg{^ ^};
+        ^toks {^tok
+            {
+                0{^{{
+                    n_ref 1
+                }}};
+                1{^{{
+                    arg{(^tok)};
+                    n_ref 2
+                }}};
+
+                n[] []
+            }[]
+        };
+
+        {^`snd`; ^(arg[])}
+    }[]
+};
+
+!expect_eq ((snd_macro {^} {bar}) foo) foo;
+
+################################################################################
+# Macros defined in a module can be used in an importing module.
+#
+
+!expect_eq defined_in_module `defined_in_module`;
+import macro_module;
+!expect_eq defined_in_module foo;
+
+################################################################################
+# A symbol with a prefix which is a keyword is still parsed as a symbol.
+#
+
+{^`kw_prefix`; ^`@7`} @7 {^toks
+    {
+        n_ref{^ ^};
+        n n_ref;
+        n_ref 0;
+
+        arg{^ ^};
+        ^toks {^tok
+            {
+                0{^{{
+                    n_ref 1
+                }}};
+                1{^{{
+                    arg{(^tok)};
+                    n_ref 2
+                }}};
+                n[] []
+            }[]
+        };
+
+        {^(arg[])}
+    }[]
+};
+
+!expect_eq kw_prefixfoo `kw_prefixfoo`;
+
+.

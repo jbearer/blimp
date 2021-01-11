@@ -167,7 +167,7 @@ static Status ExecuteSend(
             break;
     }
 
-    if (status && !status->has_range) {
+    if (status != NULL && !status->has_range && range != NULL) {
         // A lot of extension methods do not assign source locations to their
         // errors. If this was one of those methods, or if for some other reason
         // we got an error with no location, set the location to the location of
@@ -210,6 +210,7 @@ static Status EvalSend(
         if ((*sp)->scope) BlimpObject_Release((Object*)(*sp)->scope);
         if ((*sp)->executing) BlimpBytecode_Free((*sp)->executing);
         Stack_Pop(blimp, &blimp->stack);
+        *sp = Stack_CurrentFrame(&blimp->stack);
     }
 
     if (ExecuteSend(
@@ -223,12 +224,20 @@ static Status EvalSend(
             ip)
         != BLIMP_OK)
     {
+        *ret = return_address == NULL;
+            // If we would have returned had this call been succesful, then we
+            // don't want the caller to unwind the stack when we raise an error.
+            // If they were to do that, they might miss the frame that causes a
+            // return to user code (if we already popped that frame as part of a
+            // tail call) and unwind too far.
+
         BlimpObject_Release((Object *)scope);
         return Reraise(blimp);
     }
     BlimpObject_Release((Object *)scope);
 
     // Update the instruction pointer and stack pointer.
+    *sp = Stack_CurrentFrame(&blimp->stack);
     if (*ip == NULL) {
         *ip = return_address;
         if (*ip == NULL) {
@@ -240,7 +249,6 @@ static Status EvalSend(
             return BLIMP_OK;
         }
     }
-    *sp = Stack_CurrentFrame(&blimp->stack);
 
     return BLIMP_OK;
 }
@@ -346,6 +354,7 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
     assert(sp->return_address == NULL);
     assert(sp->use_result == (result != NULL));
 
+    bool ret = false;
     while (true) {
         if (HandleSignals(&blimp->signals) != BLIMP_OK) {
             return Reraise(blimp);
@@ -593,7 +602,6 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                 Object *message  = ObjectStack_Pop(blimp, &blimp->result_stack);
                 Object *receiver = ObjectStack_Pop(blimp, &blimp->result_stack);
 
-                bool ret;
                 if (EvalSend(
                         blimp,
                         receiver,
@@ -628,7 +636,6 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                 Object *message  = ObjectStack_Pop(blimp, &blimp->result_stack);
                 Object *receiver = ObjectStack_Pop(blimp, &blimp->result_stack);
 
-                bool ret;
                 if (EvalSend(
                         blimp,
                         receiver,
@@ -668,7 +675,6 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                 // Get the message from the result stack.
                 Object *message = ObjectStack_Pop(blimp, &blimp->result_stack);
 
-                bool ret;
                 if (EvalSend(
                         blimp,
                         receiver,
@@ -707,7 +713,6 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                 // Get the message from the result stack.
                 Object *message = ObjectStack_Pop(blimp, &blimp->result_stack);
 
-                bool ret;
                 if (EvalSend(
                         blimp,
                         receiver,
@@ -776,19 +781,16 @@ error:
     }
 
     // Unwind the stack until we get to the frame which would have caused this
-    // function to return.
-    while (true) {
+    // function to return. `ret` is initially set only if we already popped such
+    // a stack frame as part of a tail call which later failed.
+    while (!ret) {
         if (sp->scope)     BlimpObject_Release((Object *)sp->scope);
         if (sp->message)   BlimpObject_Release(sp->message);
         if (sp->executing) BlimpBytecode_Free(sp->executing);
-        bool last_frame = sp->return_address == NULL;
-        Stack_Pop(blimp, &blimp->stack);
 
-        if (last_frame) {
-            break;
-        } else {
-            sp = Stack_CurrentFrame(&blimp->stack);
-        }
+        ret = sp->return_address == NULL;
+        Stack_Pop(blimp, &blimp->stack);
+        sp = Stack_CurrentFrame(&blimp->stack);
     }
 
     return Reraise(blimp);
@@ -897,11 +899,8 @@ PRIVATE Status Send(
         }
     } else {
         // Otherwise, the result should be stored on top of the result stack.
-        Object *obj = ObjectStack_Pop(blimp, &blimp->result_stack);
         if (result != NULL) {
-            *result = obj;
-        } else {
-            BlimpObject_Release(obj);
+            *result = ObjectStack_Pop(blimp, &blimp->result_stack);
         }
     }
 

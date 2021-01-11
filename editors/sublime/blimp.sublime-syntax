@@ -6,7 +6,7 @@ file_extensions: [bli, blt]
 scope: source.blimp
 
 variables:
- symbol: '[~@$%&\*\[\]\|\-\+=:",\.<>/\?!]*[a-zA-Z0-9_]*'
+ symbol: '[~$%&\*\[\]\|\-\+=:",\.<>/\?!]*[a-zA-Z0-9_]*'
 
 contexts:
   main:
@@ -28,6 +28,9 @@ contexts:
       captures:
         1: punctuation.definition.variable
         2: variable.other
+
+    - match: '@\d+'
+      scope: constant.language
 
     - match: '{{symbol}}'
       scope: variable.other.constant
@@ -59,6 +62,12 @@ contexts:
 
   symbol:
     - meta_scope: string.quoted.other
+
+    - match: '\\.'
+      scope: constant.character.escape
+
+    - match: '@\d+'
+      scope: constant.other.placeholder
 
     - match: '`'
       pop: true
