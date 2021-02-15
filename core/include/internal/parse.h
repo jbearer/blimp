@@ -127,6 +127,9 @@ typedef struct {
     Vector/*<Vector<size_t>>*/ productions_for_non_terminals;
         // A map from non-terminals to the list of all productions for that
         // non-terminal.
+    HashMap/*<Symbol *, NonTerminal>*/ non_terminals;
+        // A map from symbols to the precedence level of the non-terminals they
+        // represent.
     size_t num_terminals;
     Terminal eof_terminal;
     Vector/*<const char *>*/ terminal_strings;
@@ -159,9 +162,16 @@ PRIVATE const Symbol *ParsedToken(const Vector/*<ParseTree>*/ *trees, size_t i);
 typedef Status(*ProductionHandler)(
     ParserContext *ctx, const Vector/*<ParseTree>*/ *sub_trees, Expr **parsed);
 
+static inline Blimp *Grammar_GetBlimp(const Grammar *grammar)
+{
+    return Vector_GetBlimp(&grammar->productions);
+}
+
 PRIVATE Status Grammar_Init(Blimp *blimp, Grammar *grammar, Terminal eof);
 PRIVATE void Grammar_Destroy(Grammar *grammar);
 PRIVATE Status Grammar_AddTerminal(Grammar *grammar, Terminal terminal);
+PRIVATE Status Grammar_GetNonTerminal(
+    Grammar *grammar, const Symbol *sym, NonTerminal *non_terminal);
 PRIVATE Status Grammar_AddRule(
     Grammar *grammar,
     NonTerminal non_terminal,
@@ -173,6 +183,8 @@ PRIVATE void Grammar_SetTerminalString(
     Grammar *grammar, Terminal terminal, const char *string);
 PRIVATE void Grammar_SetNonTerminalString(
     Grammar *grammar, NonTerminal non_terminal, const char *string);
+PRIVATE Status Grammar_SetNonTerminalSymbol(
+    Grammar *grammar, NonTerminal non_terminal, const Symbol *sym);
 PRIVATE void Grammar_DumpVitals(FILE *file, const Grammar *grammar);
 
 PRIVATE Status Parse(

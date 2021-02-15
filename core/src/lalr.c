@@ -587,6 +587,24 @@ Status Grammar_Init(Blimp *blimp, Grammar *grammar, Terminal eof)
         blimp, &grammar->terminal_strings, sizeof(char *), FreeDestructor);
     Vector_Init(
         blimp, &grammar->non_terminal_strings, sizeof(char *), FreeDestructor);
+
+    if (HashMap_Init(
+            blimp,
+            &grammar->non_terminals,
+            sizeof(Symbol *),
+            sizeof(NonTerminal),
+            (EqFunc)SymbolEq,
+            (HashFunc)SymbolHash,
+            NULL)
+        != BLIMP_OK)
+    {
+        Vector_Destroy(&grammar->productions);
+        Vector_Destroy(&grammar->productions_for_non_terminals);
+        Vector_Destroy(&grammar->terminal_strings);
+        Vector_Destroy(&grammar->non_terminal_strings);
+        return Reraise(blimp);
+    }
+
     grammar->eof_terminal = eof;
     grammar->listeners = NULL;
 
@@ -605,11 +623,6 @@ void Grammar_Destroy(Grammar *grammar)
     Vector_Destroy(&grammar->productions_for_non_terminals);
     Vector_Destroy(&grammar->terminal_strings);
     Vector_Destroy(&grammar->non_terminal_strings);
-}
-
-static inline Blimp *Grammar_GetBlimp(const Grammar *grammar)
-{
-    return Vector_GetBlimp(&grammar->productions);
 }
 
 static inline size_t Grammar_NumProductions(const Grammar *grammar)
@@ -655,6 +668,59 @@ static inline size_t Grammar_NumTerminals(const Grammar *grammar)
     return grammar->num_terminals;
 }
 
+static Status Grammar_AddNonTerminal(
+    Grammar *grammar, NonTerminal nt, const char *name)
+{
+    // This loop ensures that
+    // productions_for_non_terminals[production->non_terminal] and
+    // non_terminal_strings[nt] both exist by
+    // appending empty Vectors to `productions_for_non_terminals` and default
+    // names (unless `name` is non-NULL) to `non_terminal_strings` until both
+    // are long enough.
+    while (Grammar_NumNonTerminals(grammar) <= nt) {
+        assert(Grammar_NumNonTerminals(grammar) ==
+               Vector_Length(&grammar->productions_for_non_terminals));
+        assert(Grammar_NumNonTerminals(grammar) ==
+               Vector_Length(&grammar->non_terminal_strings));
+
+        // Add an empty productions vector for the next non-terminal.
+        Vector *productions;
+        if (Vector_EmplaceBack(
+                &grammar->productions_for_non_terminals, (void **)&productions)
+            != BLIMP_OK)
+        {
+            return Reraise(Grammar_GetBlimp(grammar));
+        }
+        Vector_Init(
+            Grammar_GetBlimp(grammar), productions, sizeof(size_t), NULL);
+
+        char *string;
+        if (name == NULL || Grammar_NumTerminals(grammar) < nt) {
+            // If we were not given a name, or if this is not the ultimate non-
+            // terminal we're trying to add, create a default name of the form
+            // NT(precedence).
+            string = malloc(8);
+            if (string != NULL) {
+                snprintf(string, 8, "NT(%zu)",
+                    Vector_Length(&grammar->non_terminal_strings));
+            }
+        } else {
+            // Otherwise, use the provided name.
+            string = strdup(name);
+        }
+
+        if (Vector_PushBack(&grammar->non_terminal_strings, &string)
+            != BLIMP_OK)
+        {
+            Vector_Contract(&grammar->productions_for_non_terminals, 1);
+            free(string);
+            return Reraise(Grammar_GetBlimp(grammar));
+        }
+    }
+
+    return BLIMP_OK;
+}
+
 static Status Grammar_AddProduction(Grammar *grammar, Production *production)
 {
     Blimp *blimp = Grammar_GetBlimp(grammar);
@@ -668,52 +734,9 @@ static Status Grammar_AddProduction(Grammar *grammar, Production *production)
         return Reraise(blimp);
     }
 
-    // We want to append the new production to
-    // productions_for_non_terminals[production->non_terminal]. However, this
-    // may be the first time we're seeing a production with this non-terminal,
-    // so there might not yet be a corresponding entry in
-    // `productions_for_non_terminals`. Worse, we might be given rules out of
-    // order, so it's possible there aren't even entries for lower-precedence
-    // non-terminals.
-    //
-    // This loop ensures that
-    // productions_for_non_terminals[production->non_terminal] exists by
-    // appending empty Vectors to `productions_for_non_terminals` until it is
-    // long enough.
-    //
-    // As we do this, we will also add default human-readable non-terminal names
-    // to `non_terminal_strings`, to maintain the invariant that
-    // `non_terminal_strings` and `productions_for_non_terminals` have the same
-    // length.
-    while (Vector_Length(&grammar->productions_for_non_terminals)
-           <= production->non_terminal)
-    {
-        assert(Vector_Length(&grammar->productions_for_non_terminals) ==
-               Vector_Length(&grammar->non_terminal_strings));
-
-        // Add an empty productions vector for the next non-terminal.
-        Vector *productions;
-        if (Vector_EmplaceBack(
-                &grammar->productions_for_non_terminals, (void **)&productions)
-            != BLIMP_OK)
-        {
-            goto error;
-        }
-        Vector_Init(blimp, productions, sizeof(size_t), NULL);
-
-        // Add a name of the form NT(precedence) for the next non-terminal.
-        char *string = malloc(8);
-        if (string != NULL) {
-            snprintf(string, 8, "NT(%zu)",
-                Vector_Length(&grammar->non_terminal_strings));
-        }
-        if (Vector_PushBack(&grammar->non_terminal_strings, &string)
-                != BLIMP_OK)
-        {
-            Vector_Contract(&grammar->productions_for_non_terminals, 1);
-            goto error;
-        }
-    }
+    Grammar_AddNonTerminal(grammar, production->non_terminal, NULL);
+        // Ensure productions_for_non_terminal[production->non_terminal] exists
+        // so we can add the new production to it.
 
     // Now it is guaranteed that
     // productions_for_non_terminals[production->non_terminal] exists (even if
@@ -809,6 +832,33 @@ Status Grammar_AddTerminal(Grammar *grammar, Terminal terminal)
     return BLIMP_OK;
 }
 
+Status Grammar_GetNonTerminal(
+    Grammar *grammar, const Symbol *sym, NonTerminal *non_terminal)
+{
+    HashMapEntry *entry;
+    bool new_nt;
+    TRY(HashMap_Emplace(&grammar->non_terminals, &sym, &entry, &new_nt));
+
+    if (!new_nt) {
+        *non_terminal = *(NonTerminal *)HashMap_GetValue(
+            &grammar->non_terminals, entry);
+    } else {
+        *non_terminal = Grammar_NumNonTerminals(grammar);
+        if (Grammar_AddNonTerminal(grammar, *non_terminal, sym->name)
+                != BLIMP_OK)
+        {
+            HashMap_AbortEmplace(&grammar->non_terminals, entry);
+            return Reraise(Grammar_GetBlimp(grammar));
+        }
+
+        *(NonTerminal *)HashMap_GetValue(&grammar->non_terminals, entry) =
+            *non_terminal;
+    }
+
+    HashMap_CommitEmplace(&grammar->non_terminals, entry);
+    return BLIMP_OK;
+}
+
 void Grammar_SetTerminalString(
     Grammar *grammar, Terminal terminal, const char *string)
 {
@@ -830,6 +880,14 @@ void Grammar_SetNonTerminalString(
         free(*p);
         *p = copy;
     }
+}
+
+Status Grammar_SetNonTerminalSymbol(
+    Grammar *grammar, NonTerminal non_terminal, const Symbol *sym)
+{
+    TRY(HashMap_Update(&grammar->non_terminals, &sym, &non_terminal));
+    Grammar_SetTerminalString(grammar, non_terminal, sym->name);
+    return BLIMP_OK;
 }
 
 static Status Grammar_FirstSets(
@@ -1790,6 +1848,12 @@ static inline NonTerminal StateMachine_UnPseudoTerminal(
     return t - m->first_pseudo_terminal;
 }
 
+static inline bool StateMachine_IsPseudoTerminal(
+    const StateMachine *m, Terminal t)
+{
+    return t >= m->first_pseudo_terminal;
+}
+
 static Status StateMachine_NewState(
     StateMachine *m,
     OrderedSet *kernel,
@@ -2276,7 +2340,10 @@ error:
 }
 
 static void DumpExtendedGrammar(
-    FILE *file, const Grammar *grammar, const ExtendedGrammar *extended)
+    FILE *file,
+    const Grammar *grammar,
+    const StateMachine *table,
+    const ExtendedGrammar *extended)
 {
     for (Production **rule = Grammar_Begin(&extended->projection);
          rule != Grammar_End(&extended->projection);
@@ -2297,9 +2364,19 @@ static void DumpExtendedGrammar(
             const ExtendedGrammarSymbol *sym = ExtendedGrammar_Unproject(
                 extended, &(*rule)->symbols[i]);
             if (sym->symbol.is_terminal) {
-                const char *sym_name = *(const char **)Vector_Index(
-                    &grammar->terminal_strings, sym->symbol.terminal);
-                fprintf(file, " %s[%zu]", sym_name, sym->from_state);
+                if (StateMachine_IsPseudoTerminal(
+                        table, sym->symbol.terminal))
+                {
+                    NonTerminal nt = StateMachine_UnPseudoTerminal(
+                        table, sym->symbol.terminal);
+                    const char *sym_name = *(const char **)Vector_Index(
+                        &grammar->non_terminal_strings, nt);
+                    fprintf(file, " %s[%zu]", sym_name, sym->from_state);
+                } else {
+                    const char *sym_name = *(const char **)Vector_Index(
+                        &grammar->terminal_strings, sym->symbol.terminal);
+                    fprintf(file, " %s[%zu]", sym_name, sym->from_state);
+                }
             } else {
                 const char *sym_name = *(const char **)Vector_Index(
                     &grammar->non_terminal_strings, sym->symbol.non_terminal);
@@ -2430,9 +2507,16 @@ static void DumpParseTable(
 
     fprintf(file, "State |");
     for (Terminal i = 0; i < num_terminals; ++i) {
-        const char *string = *(const char **)Vector_Index(
-            &grammar->terminal_strings, i);
-        fprintf(file, " %-7.7s |", string);
+        if (StateMachine_IsPseudoTerminal(m, i)) {
+            const char *string = *(const char **)Vector_Index(
+                &grammar->non_terminal_strings,
+                StateMachine_UnPseudoTerminal(m, i));
+            fprintf(file, " %-7.7s |", string);
+        } else {
+            const char *string = *(const char **)Vector_Index(
+                &grammar->terminal_strings, i);
+            fprintf(file, " %-7.7s |", string);
+        }
     }
     fprintf(file, "|");
     for (NonTerminal i = 0; i < num_non_terminals; ++i) {
@@ -2489,7 +2573,7 @@ void Grammar_DumpVitals(FILE *file, const Grammar *grammar)
     if (MakeStateMachine(grammar, &table) == BLIMP_OK &&
         MakeExtendedGrammar(grammar, &table, &extended) == BLIMP_OK)
     {
-        DumpExtendedGrammar(file, grammar, &extended);
+        DumpExtendedGrammar(file, grammar, &table, &extended);
     }
     ExtendedGrammar_Destroy(&extended);
     StateMachine_Destroy(&table);

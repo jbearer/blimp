@@ -850,10 +850,7 @@ typedef BlimpStatus(*BlimpMacroHandler)(
  */
 typedef struct {
     bool is_terminal;
-    union {
-        const BlimpSymbol *terminal;
-        size_t precedence;
-    };
+    const BlimpSymbol *symbol;
 } BlimpGrammarSymbol;
 
 /**

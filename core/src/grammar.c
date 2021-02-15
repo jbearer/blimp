@@ -101,15 +101,20 @@ Status Blimp_DefineMacro(
         if (sym.is_terminal) {
             // Convert the symbol for the token into the unique identifier by
             // which the lexer knows that token.
-            if (CreateTerminal(
-                    blimp, symbols[i].terminal->name, &sym.terminal)
+            if (CreateTerminal(blimp, symbols[i].symbol->name, &sym.terminal)
                 != BLIMP_OK)
             {
                 Vector_Destroy(&grammar_symbols);
                 return Reraise(blimp);
             }
         } else {
-            sym.non_terminal = symbols[i].precedence;
+            if (Grammar_GetNonTerminal(
+                    &blimp->grammar, symbols[i].symbol, &sym.non_terminal)
+                != BLIMP_OK)
+            {
+                Vector_Destroy(&grammar_symbols);
+                return Reraise(blimp);
+            }
         }
 
         CHECK(Vector_PushBack(&grammar_symbols, &sym));
@@ -456,15 +461,14 @@ static Status SymbolVisitor(
     TRY(CreateToken(blimp, sym->name, &tok));
 
     if (tok.type == TOK_PRECEDENCE) {
-        // In the symbol list for a macro definition, a precedence token stands
-        // in for a non-terminal of that precedence.
-        assert(tok.symbol->name[0] == '@');
-        long prec = atol(&tok.symbol->name[1]);
-        assert(prec >= 0);
+        // In the symbol list for a macro definition, a precedence token
+        // represents a non-terminal.
+        NonTerminal nt;
+        TRY(Grammar_GetNonTerminal(&blimp->grammar, tok.symbol, &nt));
 
         TRY(Vector_PushBack(symbols, &(GrammarSymbol) {
             .is_terminal = false,
-            .non_terminal = (NonTerminal)prec,
+            .non_terminal = nt,
         }));
     } else {
         // Every other kind of token just represents a corresponding terminal.
@@ -493,9 +497,9 @@ static Status PrecedenceHandler(
 
     // Get the precedence of the non-terminal for the macro we're defining (the
     // left-hand side of the production).
-    const Symbol *prec_sym = ParsedToken(trees, 1);
-    assert(prec_sym->name[0] == '@');
-    size_t precedence = atol(&prec_sym->name[1]);
+    const Symbol *nt_sym = ParsedToken(trees, 1);
+    NonTerminal nt;
+    TRY(Grammar_GetNonTerminal(&ctx->blimp->grammar, nt_sym, &nt));
 
     // Evaluate the production expression to get an Object which is a stream of
     // symbols (the right-hand side of the production).
@@ -560,12 +564,12 @@ static Status PrecedenceHandler(
         return Reraise(ctx->blimp);
     }
     handler_arg->handler = handler_obj;
-    handler_arg->non_terminal_symbol = prec_sym;
+    handler_arg->non_terminal_symbol = nt_sym;
 
     // Add a new production which will be handled by `handler_obj`.
     if (Grammar_AddRule(
             &ctx->blimp->grammar,
-            precedence,
+            nt,
             Vector_Length(&symbols),
             Vector_Data(&symbols),
             MacroHandler,
@@ -579,7 +583,7 @@ static Status PrecedenceHandler(
     }
 
     Vector_Destroy(&symbols);
-    return BlimpExpr_NewSymbol(ctx->blimp, prec_sym, parsed);
+    return BlimpExpr_NewSymbol(ctx->blimp, nt_sym, parsed);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -723,6 +727,15 @@ static Status MsgThisHandler(
     return BlimpExpr_NewMsgIndex(ctx->blimp, 0, result);
 }
 
+static Status RegisterNonTerminal(
+    Grammar *grammar, NonTerminal nt, const char *name)
+{
+    const Symbol *sym;
+    TRY(Blimp_GetSymbol(Grammar_GetBlimp(grammar), name, &sym));
+    TRY(Grammar_SetNonTerminalSymbol(grammar, nt, sym));
+    return BLIMP_OK;
+}
+
 // You can't pass an array literal as an argument to a macro, because commas in
 // the macro argument list which are not intended to separate arguments must be
 // enclosed in parentheses, but enclosing a brace-enclosed array literal in
@@ -822,15 +835,15 @@ Status DefaultGrammar(Blimp *blimp, Grammar *grammar)
         Grammar_SetTerminalString(grammar, t, StringOfTokenType(t));
     }
 
-    // Give the parser readable names for all of the non-terminals.
-    Grammar_SetNonTerminalString(grammar, NT_Start, "Start");
-    Grammar_SetNonTerminalString(grammar, NT_Expr, "E");
-    Grammar_SetNonTerminalString(grammar, NT_ExprNoMsg, "E'");
-    Grammar_SetNonTerminalString(grammar, NT_Stmt, "S");
-    Grammar_SetNonTerminalString(grammar, NT_StmtNoMsg, "S'");
-    Grammar_SetNonTerminalString(grammar, NT_Semi, "Semi");
-    Grammar_SetNonTerminalString(grammar, NT_Term, "T");
-    Grammar_SetNonTerminalString(grammar, NT_TermNoMsg, "T'");
+    // Register symbolic names for all of the non-terminals.
+    TRY(RegisterNonTerminal(grammar, NT_Start,     "@0"));
+    TRY(RegisterNonTerminal(grammar, NT_Expr,      "@1"));
+    TRY(RegisterNonTerminal(grammar, NT_ExprNoMsg, "@2"));
+    TRY(RegisterNonTerminal(grammar, NT_Stmt,      "@3"));
+    TRY(RegisterNonTerminal(grammar, NT_StmtNoMsg, "@4"));
+    TRY(RegisterNonTerminal(grammar, NT_Semi,      "@5"));
+    TRY(RegisterNonTerminal(grammar, NT_Term,      "@6"));
+    TRY(RegisterNonTerminal(grammar, NT_TermNoMsg, "@7"));
 
     return BLIMP_OK;
 }

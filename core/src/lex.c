@@ -34,9 +34,9 @@
 // tokens whose matching paths through the state machine contain cycles, all
 // bl:mp tokens are described by literal strings, so for simplicity our matching
 // state machine is a modified trie, where the few special cases (for example,
-// TOK_PRECEDENCE = r"@\d+") are represented by trie nodes which are children
-// of themselves (for example, the `TOK_PRECEDENCE` node is its own child for
-// characters matching '\d').
+// TOK_PRECEDENCE = r"@IdentiferChar+") are represented by trie nodes which are
+// children of themselves (for example, the `TOK_PRECEDENCE` node is its own
+// child for characters matching 'IdentifierChar').
 //
 // Another special case regarding built-in tokens is the handling of symbols.
 // Any sequence of consecutive identifier characters (see IsIdentifierChar()) or
@@ -205,22 +205,27 @@ Status TokenTrie_Init(Blimp *blimp, TokenTrie *trie)
         // add below.
 
     // Add states to handle the built-in terminal TOK_PRECEDENCE, which matches
-    // the regular expression "@\d+".
-    TrieNode *tok_precedence_d_star;
-        // This state will match "\d*", and will accept the input.
-    TRY(NewTrieNode(trie->blimp, &tok_precedence_d_star));
-    tok_precedence_d_star->terminal = TOK_PRECEDENCE;
-    for (int d = '0'; d < '9'; ++d) {
-        tok_precedence_d_star->children[d] = tok_precedence_d_star;
+    // the regular expression "@IdentifierChar+".
+    TrieNode *tok_precedence_id_star;
+        // This state will match "IdentifierChar*", and will accept the input.
+    TRY(NewTrieNode(trie->blimp, &tok_precedence_id_star));
+    tok_precedence_id_star->terminal = TOK_PRECEDENCE;
+    for (int c = 0; c < NUM_CHARS; ++c) {
+        if (IsIdentifierChar(c)) {
+            tok_precedence_id_star->children[c] = tok_precedence_id_star;
+        }
     }
     TrieNode **tok_precedence = &trie->nodes['@'];
-        // This state (reached after seeing an "@") will match "\d+" by first
-        // matching one "\d" and then transitioning to the "\d*" accepting state
-        // above. This state itself is not accepting, because in this state we
-        // have not seen at least one "\d".
+        // This state (reached after seeing an "@") will match "IdentifierChar+"
+        // by first matching one "IdentifierChar" and then transitioning to the
+        // "IdentifierChar*" accepting state above. This state itself is not
+        // accepting, because in this state we have not seen at least one
+        // "IdentifierChar".
     TRY(NewTrieNode(trie->blimp, tok_precedence));
-    for (int digit = '0'; digit < '9'; ++digit) {
-        (*tok_precedence)->children[digit] = tok_precedence_d_star;
+    for (int c = 0; c < NUM_CHARS; ++c) {
+        if (IsIdentifierChar(c)) {
+            (*tok_precedence)->children[c] = tok_precedence_id_star;
+        }
     }
 
     // Add a state matching "^" for the built-in token TOK_MSG_THIS.
