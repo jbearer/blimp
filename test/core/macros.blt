@@ -1,3 +1,5 @@
+#: --skip-racket
+
 ################################################################################
 # Simplest possible macro: create a new token and define it to a symbol.
 #
@@ -21,8 +23,8 @@
 # Defining macros for precedences, and using them to define new macros.
 #
 
-# Define an alias @term for the precedence level @7.
-{^ `@6`; ^ `@term`; ^ `@6` } @3 {^toks
+# Define an alias @@term for the precedence level @7.
+{^ `@6`; ^ `@@term`; ^ `@6` } @3 {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -52,12 +54,12 @@
     }[]
 };
 
-# Define a new macro at precedence @7 using the @term alias.
-{^ `my_keyword2`} @term {{^ bar}};
+# Define a new macro at precedence @7 using the @@term alias.
+{^ `my_keyword2`} @@term {{^ bar}};
 !expect_eq my_keyword2 bar;
 
 # Do it again, make sure the handler is idempotent.
-{^ `my_keyword3`} @term {{^ baz}};
+{^ `my_keyword3`} @@term {{^ baz}};
 !expect_eq my_keyword3 baz;
 
 # Old macros should still work.
@@ -169,6 +171,13 @@
 #
 
 !expect_eq (({^`nested`}@7{{^`foo`}}; {^}) nested) foo;
+
+################################################################################
+# Adding a macro with very low precedence but a high-precedence first symbol.
+#
+
+{^`low_prec`} @1 {{^`foo`}};
+!expect_eq (low_prec) foo;
 
 ################################################################################
 # Macro handler with mutable state.
@@ -397,5 +406,108 @@ import macro_module;
 };
 
 !expect_eq kw_prefixfoo `kw_prefixfoo`;
+
+################################################################################
+# Definig an ad-hoc non-terminal (e.g. to represent a list of symbols).
+#
+
+{^`\`sym\``} @symbols {^toks
+    {^out
+        ^toks ^out;
+        ^out `nil`
+    }
+};
+
+{^`\`sym\``; ^`@symbols`} @symbols {^};
+
+{^`car`; ^`(`; ^`@symbols`; ^`)`} @7 {^toks
+    {
+        n_ref{^ ^};
+        n n_ref;
+        n_ref 0;
+
+        syms{^ ^};
+        ^toks {^tok
+            {
+                0{^{{
+                    n_ref 1
+                }}};
+                1{^{{
+                    n_ref 2
+                }}};
+                2{^{{
+                    syms ^tok;
+                    n_ref 3
+                }}};
+                3{^{{
+                    n_ref 4
+                }}};
+
+                n[] []
+            }[]
+        };
+
+        fst{^ ^};
+        syms {^sym
+            fst{(^sym)}
+        };
+
+        {^(fst[])}
+    }[]
+};
+
+{^`cdr`; ^`(`; ^`@symbols`; ^`)`} @symbols {^toks
+    {
+        n_ref{^ ^};
+        n n_ref;
+        n_ref 0;
+
+        syms{^ ^};
+        ^toks {^tok
+            {
+                0{^{{
+                    n_ref 1
+                }}};
+                1{^{{
+                    n_ref 2
+                }}};
+                2{^{{
+                    syms ^tok;
+                    n_ref 3
+                }}};
+                3{^{{
+                    n_ref 4
+                }}};
+
+                n[] []
+            }[]
+        };
+
+        {^out
+            fst_ref{^ ^};
+            fst fst_ref;
+            fst_ref true;
+
+            syms {^sym
+                {
+                    true{^{{
+                        fst_ref false
+                    }}};
+
+                    false{^{{
+                        (^out) ^sym
+                    }}};
+
+                    fst[] []
+                }[]
+            }
+        }
+    }[]
+};
+
+!expect_eq car(foo) foo;
+!expect_eq car(foo bar) foo;
+!expect_eq car(cdr(foo bar)) bar;
+!expect_eq car(cdr(foo bar baz)) bar;
 
 .

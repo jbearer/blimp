@@ -578,6 +578,48 @@ BlimpStatus Blimp_RuntimeErrorFrom(
     ...)
         __attribute__((format (printf, 4, 5)));
 
+struct BlimpExpr;
+
+/**
+ * \brief
+ *      Generate an error status with a source range matching the range of
+ *      `expr`, if `expr` is not `NULL`.
+ *
+ * \param[in] fmt A printf-style format string for the error message.
+ * \param[in] ... Arguments for formatting the error message.
+ *
+ * If `expr` is `NULL`, the resulting error message will not have a source range
+ * attached.
+ */
+BlimpStatus Blimp_ErrorFromExpr(
+    Blimp *blimp,
+    struct BlimpExpr *expr,
+    BlimpErrorCode code,
+    const char *fmt,
+    ...)
+        __attribute__((format (printf, 4, 5)));
+
+/**
+ * \brief
+ *      Generate an error status with a source range matching the range of
+ *      `expr`, if `expr` is not `NULL`.
+ *
+ * \param[in] fmt A printf-style format string for the error message.
+ * \param[in] ... Arguments for formatting the error message.
+ *
+ * If `expr` is `NULL`, the resulting error message will not have a source range
+ * attached.
+ *
+ * The error will contain a snapshot of the current stack trace from `blimp`.
+ */
+BlimpStatus Blimp_RuntimeErrorFromExpr(
+    Blimp *blimp,
+    struct BlimpExpr *expr,
+    BlimpErrorCode code,
+    const char *fmt,
+    ...)
+        __attribute__((format (printf, 4, 5)));
+
 /**
  * \brief Return the error status for the last error recorded in `blimp`.
  *

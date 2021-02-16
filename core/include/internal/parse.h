@@ -156,11 +156,10 @@ typedef struct {
 
 PRIVATE void ParseTree_Destroy(ParseTree *tree);
 PRIVATE Status ParseTree_Copy(const ParseTree *from, ParseTree *to);
-PRIVATE Expr *ParsedExpr(const Vector/*<ParseTree>*/ *trees, size_t i);
-PRIVATE const Symbol *ParsedToken(const Vector/*<ParseTree>*/ *trees, size_t i);
+PRIVATE Expr *SubExpr(const ParseTree *tree, size_t i);
+PRIVATE const Symbol *SubToken(const ParseTree *tree, size_t i);
 
-typedef Status(*ProductionHandler)(
-    ParserContext *ctx, const Vector/*<ParseTree>*/ *sub_trees, Expr **parsed);
+typedef Status(*ProductionHandler)(ParserContext *ctx, ParseTree *tree);
 
 static inline Blimp *Grammar_GetBlimp(const Grammar *grammar)
 {

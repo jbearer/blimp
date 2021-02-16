@@ -381,7 +381,7 @@ Status TokenTrie_InsertToken(TokenTrie *trie, const char *string, Token *tok)
     // matching `string`, so that we can continue matching.
     TrieNode *(*curr)[NUM_CHARS] = &trie->nodes;
         // Pointer to the `children` array of the current state.
-    TrieNode **node;
+    TrieNode **node = NULL;
         // The state we are currently in.
     for (const char *c = string; *c; ++c) {
         node = &(*curr)[(unsigned char)*c];

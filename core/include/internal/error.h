@@ -14,6 +14,8 @@
 #define RuntimeErrorAt(...) Blimp_RuntimeErrorAt(__VA_ARGS__)
 #define ErrorFrom(...) Blimp_ErrorFrom(__VA_ARGS__)
 #define RuntimeErrorFrom(...) Blimp_RuntimeErrorFrom(__VA_ARGS__)
+#define ErrorFromExpr(...) Blimp_ErrorFromExpr(__VA_ARGS__)
+#define RuntimeErrorFromExpr(...) Blimp_RuntimeErrorFromExpr(__VA_ARGS__)
 #define Reraise(...) Blimp_Reraise(__VA_ARGS__)
 #define RuntimeReraise(...) Blimp_RuntimeReraise(__VA_ARGS__)
 #define ReraiseFrom(...) Blimp_ReraiseFrom(__VA_ARGS__)

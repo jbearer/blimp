@@ -4,6 +4,7 @@
 
 #include "internal/blimp.h"
 #include "internal/error.h"
+#include "internal/expr.h"
 
 #define ANSI_GREEN  "\e[1;32m"
 #define ANSI_RED    "\e[1;31m"
@@ -311,6 +312,28 @@ Status Blimp_RuntimeErrorFrom(
     va_list args;
     va_start(args, fmt);
     VError(blimp, &range, code, true, fmt, args);
+    va_end(args);
+
+    return &blimp->last_error;
+}
+
+Status Blimp_ErrorFromExpr(
+    Blimp *blimp, Expr *expr, BlimpErrorCode code, const char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    VError(blimp, expr ? &expr->range : NULL, code, false, fmt, args);
+    va_end(args);
+
+    return &blimp->last_error;
+}
+
+Status Blimp_RuntimeErrorFromExpr(
+    Blimp *blimp, Expr *expr, BlimpErrorCode code, const char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    VError(blimp, expr ? &expr->range : NULL, code, true, fmt, args);
     va_end(args);
 
     return &blimp->last_error;

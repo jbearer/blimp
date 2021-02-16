@@ -77,7 +77,7 @@ static inline Status HashSet_Insert(HashSet *set, const void *elem)
 static inline Status HashSet_FindOrInsert(
     HashSet *set, const void *elem, bool *found)
 {
-    void *value;
+    void *value = NULL;
     TRY(HashMap_FindOrInsert(set, elem, NULL, &value));
     *found = value != NULL;
     return BLIMP_OK;
