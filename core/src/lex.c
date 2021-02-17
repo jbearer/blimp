@@ -120,11 +120,16 @@ static bool IsIdentifierChar(int c)
         || ('0' <= c && c <= '9');
 }
 
+typedef Status(*TokenHandler)(
+    Blimp *blimp, const char *match, size_t length, char **new_match);
+
 // A TrieNode is a state in the token-matching state machine.
 typedef struct TrieNode {
     Terminal terminal;
         // The token type matched by this state, or TOK_INVALID if this is not
         // an accepting state.
+    TokenHandler handler;
+        // Optional function to post-process a matched token string.
     struct TrieNode *children[NUM_CHARS];
         // States to transition to indexed by the next character we see. If a
         // character `c` is not expessed, then `children[c]` is `NULL`.
@@ -186,9 +191,49 @@ static Status NewTrieNode(Blimp *blimp, TrieNode **node)
     (*node)->terminal = TOK_INVALID;
         // By default, this is not an accepting state. The caller can set an
         // accepting terminal type later.
+    (*node)->handler = NULL;
+        // By default, there is no handler; the matched text will be used as-is
+        // for the symbol representing the token. The caller can set a handler
+        // if they want one.
     memset((*node)->children, 0, sizeof((*node)->children));
         // Set all of the children to `NULL`, meaning there are no transitions
         // out of this state unless explicitly added later.
+    return BLIMP_OK;
+}
+
+static Status SymbolHandler(
+    Blimp *blimp, const char *escaped, size_t length, char **unescaped)
+{
+    assert(length >= 2);
+    assert(escaped[0] == '`');
+    assert(escaped[length-1] == '`');
+
+    // Make a copy of the escaped string, where we will process escape
+    // characters in place. In making the copy, we leave out the leading and
+    // trailing `s, indicating that this was an escaped string.
+    TRY(Strndup(blimp, &escaped[1], length-2, unescaped));
+
+    // Walk the string with a read pointer and a write pointer (which is always
+    // equal to the read pointer or lagging behind it). Remove each unescaped
+    // backslash, and advance for all non-backslash characters.
+    char *write = *unescaped;
+    for (char *read = *unescaped; *read != '\0'; ++read) {
+        if (*read == '\\') {
+            // If we see an unescaped backslash, advance the read pointer but
+            // not the write pointer, effectively deleting the backslash.
+            ++read;
+            assert(*read != '\0');
+        }
+
+        // Now `*read` is either an escaped character or an unescaped
+        // non-special character, so copy it to `write`.
+        *write++ = *read;
+    }
+
+    *write = '\0';
+        // `write` may have ended up somewhat short of the end of the string, so
+        // create a new end.
+
     return BLIMP_OK;
 }
 
@@ -260,6 +305,7 @@ Status TokenTrie_Init(Blimp *blimp, TokenTrie *trie)
         // closing backtick.
     TRY(NewTrieNode(trie->blimp, &tok_symbol_end));
     tok_symbol_end->terminal = TOK_SYMBOL;
+    tok_symbol_end->handler = SymbolHandler;
     TrieNode *tok_symbol;
         // The main state we are in while lexing a symbol literal. Consumes any
         // character that isn't a backslash or backtick. Transitions to
@@ -341,6 +387,28 @@ void TokenTrie_Destroy(TokenTrie *trie)
     (void)trie;
 }
 
+static Status HandleToken(
+    Blimp *blimp,
+    TokenHandler handler,
+    const char *string,
+    size_t length,
+    const Symbol **sym)
+{
+    if (handler == NULL) {
+        // If there is no handler, just use the given string as-is.
+        return Blimp_GetSymbolWithLength(blimp, string, length, sym);
+    }
+
+    // If there is a handler, call it to get a new, processed, name.
+    char *name;
+    TRY(handler(blimp, string, length, &name));
+
+    Status ret = Blimp_GetSymbol(blimp, name, sym);
+
+    free(name);
+    return ret;
+}
+
 Status TokenTrie_GetToken(const TokenTrie *trie, const char *string, Token *tok)
 {
     // Follow `string` all the way through `trie` and see if we end up in an
@@ -367,7 +435,13 @@ Status TokenTrie_GetToken(const TokenTrie *trie, const char *string, Token *tok)
             // Otherwise, get the token type from the accepting state.
 
     memset(&tok->range, 0, sizeof(tok->range));
-    TRY(Blimp_GetSymbol(trie->blimp, string, &tok->symbol));
+    TRY(HandleToken(
+        trie->blimp,
+        node == NULL ? NULL : node->handler,
+        string,
+        strlen(string),
+        &tok->symbol
+    ));
 
     return BLIMP_OK;
 }
@@ -402,7 +476,8 @@ Status TokenTrie_InsertToken(TokenTrie *trie, const char *string, Token *tok)
 
     tok->type = (*node)->terminal;
     memset(&tok->range, 0, sizeof(tok->range));
-    TRY(Blimp_GetSymbol(trie->blimp, string, &tok->symbol));
+    TRY(HandleToken(
+        trie->blimp, (*node)->handler, string, strlen(string), &tok->symbol));
 
     return BLIMP_OK;
 }
@@ -674,7 +749,11 @@ static Status Lexer_LookAhead(Lexer *lex, int *c)
 }
 
 static Status Lexer_Consume(
-    Lexer *lex, size_t length, const Symbol **sym, SourceRange *range)
+    Lexer *lex,
+    size_t length,
+    TokenHandler handler,
+    const Symbol **sym,
+    SourceRange *range)
 {
     if (length > lex->look_ahead_end) {
         length = lex->look_ahead_end;
@@ -684,15 +763,14 @@ static Status Lexer_Consume(
             // the matched symbol, since it is not a real character anyways.
     }
 
-
     assert(lex->look_ahead_end <= Vector_Length(&lex->look_ahead_chars));
     assert(Vector_Length(&lex->look_ahead_chars) ==
            Vector_Length(&lex->look_ahead_locs));
 
     // Get the symbol corresponding to the prefix of `look_ahead_chars` with the
     // length we're consuming.
-    TRY(Blimp_GetSymbolWithLength(
-        lex->blimp, Vector_Data(&lex->look_ahead_chars), length, sym));
+    TRY(HandleToken(
+        lex->blimp, handler, Vector_Data(&lex->look_ahead_chars), length, sym));
 
     if (lex->look_ahead_end == 0) {
         // If nothing is buffered, get the source location from the input
@@ -802,6 +880,11 @@ static inline Terminal Matcher_MatchTerminal(const Matcher *m)
     return m->match->terminal;
 }
 
+static inline TokenHandler Matcher_MatchHandler(const Matcher *m)
+{
+    return m->match->handler;
+}
+
 Status Lexer_Peek(Lexer *lex, Token *tok)
 {
     InitStaticTokens();
@@ -861,7 +944,12 @@ Status Lexer_Peek(Lexer *lex, Token *tok)
         // Consume the characters we matched.
         tok->type = Matcher_MatchTerminal(match);
         TRY(Lexer_Consume(
-            lex, Matcher_MatchLength(match), &tok->symbol, &tok->range));
+            lex,
+            Matcher_MatchLength(match),
+            Matcher_MatchHandler(match),
+            &tok->symbol,
+            &tok->range
+        ));
     } while (tok->type == TOK_WHITESPACE);
 
     lex->peek = *tok;

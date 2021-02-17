@@ -669,60 +669,6 @@ static Status BlockHandler(ParserContext *ctx, ParseTree *tree)
     return BlimpExpr_NewBlock(ctx->blimp, msg_name, body, &tree->parsed);
 }
 
-// Handler for `Term -> symbol`
-static Status SymbolHandler(ParserContext *ctx, ParseTree *tree)
-{
-    const Symbol *tok = SubToken(tree, 0);
-
-    // The symbol name may be escaped: enclosed by backticks and possibly
-    // containing backslash escape sequences. Make a copy so we can transform it
-    // in place to an unescaped version.
-    char *escaped;
-    TRY(Strdup(ctx->blimp, tok->name, &escaped));
-    char *unescaped = escaped;
-
-    // If there are enclosing back-ticks, remove the first one.
-    if (*unescaped == '`') {
-        ++unescaped;
-    }
-
-    // Walk the string with a read pointer and a write pointer (which is always
-    // equal to the read pointer or lagging behind it). Remove each unescaped
-    // backslash, and advance for all non-backslash characters.
-    char *write = unescaped;
-    for (char *read = unescaped; *read != '\0'; ++read) {
-        if (*read == '\\') {
-            // If we see an unescaped backslash, advance the read pointer but
-            // not the write pointer, effectively deleting the backslash.
-            ++read;
-            assert(*read != '\0');
-        }
-
-        // Now `*read` is either an escaped character or an unescaped
-        // non-special character, so copy it to `write`.
-        *write++ = *read;
-    }
-
-    *write = '\0';
-        // `write` may have ended up somewhat short of the end of the string, so
-        // create a new end.
-
-    // If there are enclosing backticks, remove the closing one.
-    if (*(write - 1) == '`') {
-        *(write - 1) = '\0';
-    }
-
-    // Get a Symbol for the unescaped string we just created.
-    const Symbol *sym;
-    if (Blimp_GetSymbol(ctx->blimp, unescaped, &sym) != BLIMP_OK) {
-        free(escaped);
-        return Reraise(ctx->blimp);
-    }
-    free(escaped);
-
-    return BlimpExpr_NewSymbol(ctx->blimp, sym, &tree->parsed);
-}
-
 // Handler for `Term -> ^msg`
 static Status MsgHandler(ParserContext *ctx, ParseTree *tree)
 {
@@ -837,7 +783,7 @@ Status DefaultGrammar(Blimp *blimp, Grammar *grammar)
         BlockHandler, (void *)0));
     //      \ symbol
     TRY(ADD_GRAMMAR_RULE(grammar, TermNoMsg, (T(SYMBOL)),
-        SymbolHandler, NULL));
+        IdentityHandler, NULL));
     //      \ "^"
     TRY(ADD_GRAMMAR_RULE(grammar, TermNoMsg, (T(MSG_THIS)),
         MsgThisHandler, NULL));
