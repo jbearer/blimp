@@ -34,9 +34,9 @@
 // tokens whose matching paths through the state machine contain cycles, all
 // bl:mp tokens are described by literal strings, so for simplicity our matching
 // state machine is a modified trie, where the few special cases (for example,
-// TOK_PRECEDENCE = r"@IdentiferChar+") are represented by trie nodes which are
-// children of themselves (for example, the `TOK_PRECEDENCE` node is its own
-// child for characters matching 'IdentifierChar').
+// TOK_SYMBOL = r"IdentiferChar+|OperatorChar+") are represented by trie nodes
+// which are children of themselves (for example, the `TOK_SYMBOL` node is its
+// own child for characters matching 'IdentifierChar').
 //
 // Another special case regarding built-in tokens is the handling of symbols.
 // Any sequence of consecutive identifier characters (see IsIdentifierChar()) or
@@ -114,7 +114,7 @@ static bool IsOperatorChar(int c)
 
 static bool IsIdentifierChar(int c)
 {
-    return c == '_'
+    return c == '_' || c == '@'
         || ('a' <= c && c <= 'z')
         || ('A' <= c && c <= 'Z')
         || ('0' <= c && c <= '9');
@@ -248,30 +248,6 @@ Status TokenTrie_Init(Blimp *blimp, TokenTrie *trie)
         // Set all the nodes to `NULL`, so that initially there are no
         // transitions out of the starting state except the ones we explicitly
         // add below.
-
-    // Add states to handle the built-in terminal TOK_PRECEDENCE, which matches
-    // the regular expression "@IdentifierChar+".
-    TrieNode *tok_precedence_id_star;
-        // This state will match "IdentifierChar*", and will accept the input.
-    TRY(NewTrieNode(trie->blimp, &tok_precedence_id_star));
-    tok_precedence_id_star->terminal = TOK_PRECEDENCE;
-    for (int c = 0; c < NUM_CHARS; ++c) {
-        if (IsIdentifierChar(c)) {
-            tok_precedence_id_star->children[c] = tok_precedence_id_star;
-        }
-    }
-    TrieNode **tok_precedence = &trie->nodes['@'];
-        // This state (reached after seeing an "@") will match "IdentifierChar+"
-        // by first matching one "IdentifierChar" and then transitioning to the
-        // "IdentifierChar*" accepting state above. This state itself is not
-        // accepting, because in this state we have not seen at least one
-        // "IdentifierChar".
-    TRY(NewTrieNode(trie->blimp, tok_precedence));
-    for (int c = 0; c < NUM_CHARS; ++c) {
-        if (IsIdentifierChar(c)) {
-            (*tok_precedence)->children[c] = tok_precedence_id_star;
-        }
-    }
 
     // Add a state matching "^" for the built-in token TOK_MSG_THIS.
     TrieNode **tok_msg_this = &trie->nodes['^'];
@@ -676,7 +652,6 @@ const char *StringOfTokenType(TokenType t)
         case TOK_MSG_THIS:  return "^";
         case TOK_SYMBOL:    return "symbol";
         case TOK_EOF:       return "end of input";
-        case TOK_PRECEDENCE:return "precedence symbol";
         default:            return "invalid token";
     }
 }

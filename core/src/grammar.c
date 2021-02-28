@@ -457,6 +457,21 @@ static Status MacroHandler(ParserContext *ctx, ParseTree *tree)
     return BLIMP_OK;
 }
 
+static Status IgnorerMethod(
+    Blimp *blimp,
+    Object *context,
+    Object *receiver,
+    Object *message,
+    Object **result)
+{
+    (void)blimp;
+    (void)context;
+    (void)message;
+
+    *result = BlimpObject_Borrow(receiver);
+    return BLIMP_OK;
+}
+
 // Method for an extension object which visits a stream of symbols (of the kind
 // required on the left-hand side of a macro definition), converts them to
 // GrammarSymbols, and collects the results in a vector.
@@ -472,29 +487,59 @@ static Status SymbolVisitor(
     Vector/*<GrammarSymbol>*/ *symbols;
     TRY(BlimpObject_ParseExtension(receiver, NULL, (void **)&symbols));
 
-    const Symbol *sym;
-    TRY(BlimpObject_ParseSymbol(message, &sym));
+    if (Object_Type(message) == OBJ_SYMBOL) {
+        // If the grammar symbol is also a symbol object, it represents a
+        // terminal.
+        const Symbol *sym = (const Symbol *)message;
 
-    // Figure out what kind of token matches `sym`, creating a new keyword if
-    // necessary.
-    Token tok;
-    TRY(CreateToken(blimp, sym->name, &tok));
+        // Figure out what kind of token matches `sym`, creating a new keyword
+        // if necessary.
+        Token tok;
+        TRY(CreateToken(blimp, sym->name, &tok));
 
-    if (tok.type == TOK_PRECEDENCE) {
-        // In the symbol list for a macro definition, a precedence token
-        // represents a non-terminal.
+        TRY(Vector_PushBack(symbols, &(GrammarSymbol) {
+            .is_terminal = true,
+            .terminal = tok.type,
+        }));
+    } else {
+        // Otherwise, we treat the object as a parse tree representing a non-
+        // terminal. We only care about the precedence of the parse tree (it
+        // will match any non-terminal with the same precedence) so we send it a
+        // message to get its return value, which is a symbol representing the
+        // non-terminal.
+
+        // Create an extension object to send to the parse tree. The parse tree
+        // will try to output sub-trees by sending them to the extension; we'll
+        // use an extension object that just ignores them, since we only care
+        // about the return value of the parse tree.
+        Object *ignorer;
+        TRY(BlimpObject_NewExtension(
+            blimp,
+            (Object *)blimp->global,
+            NULL,
+            IgnorerMethod,
+            NULL,
+            &ignorer
+        ));
+
+        // Send the ignorer to the parse tree and get the return value.
+        const Symbol *nt_sym;
+        if (Blimp_SendAndParseSymbol(
+                blimp, (Object *)blimp->global, message, ignorer, &nt_sym)
+            != BLIMP_OK)
+        {
+            BlimpObject_Release(ignorer);
+            return Reraise(blimp);
+        }
+        BlimpObject_Release(ignorer);
+
+        // Convert the symbol to the internal representation of a non-terminal.
         NonTerminal nt;
-        TRY(Grammar_GetNonTerminal(&blimp->grammar, tok.symbol, &nt));
+        TRY(Grammar_GetNonTerminal(&blimp->grammar, nt_sym, &nt));
 
         TRY(Vector_PushBack(symbols, &(GrammarSymbol) {
             .is_terminal = false,
             .non_terminal = nt,
-        }));
-    } else {
-        // Every other kind of token just represents a corresponding terminal.
-        TRY(Vector_PushBack(symbols, &(GrammarSymbol) {
-            .is_terminal = true,
-            .terminal = tok.type,
         }));
     }
 
@@ -505,8 +550,8 @@ static Status SymbolVisitor(
 // Handler for `Stmt @prec Term`
 static Status PrecedenceHandler(ParserContext *ctx, ParseTree *tree)
 {
-    Expr *production = SubExpr(tree, 0);
-    Expr *handler    = SubExpr(tree, 2);
+    Expr *production = SubExpr(tree, 1);
+    Expr *handler    = SubExpr(tree, 3);
 
     // The expressions for the production and the handler have just now been
     // parsed; they have not been analyzed yet. Since we are going to evaluate
@@ -516,7 +561,7 @@ static Status PrecedenceHandler(ParserContext *ctx, ParseTree *tree)
 
     // Get the precedence of the non-terminal for the macro we're defining (the
     // left-hand side of the production).
-    const Symbol *nt_sym = SubToken(tree, 1);
+    const Symbol *nt_sym = SubToken(tree, 2);
     NonTerminal nt;
     TRY(Grammar_GetNonTerminal(&ctx->blimp->grammar, nt_sym, &nt));
 
@@ -723,12 +768,13 @@ Status DefaultGrammar(Blimp *blimp, Grammar *grammar)
     TRY(Grammar_Init(blimp, grammar, TOK_EOF));
 
     // Add terminals used by the default productions to the lexer:
-    Terminal TOK_SEMI, TOK_LBRACE, TOK_RBRACE, TOK_LPAREN, TOK_RPAREN;
+    Terminal TOK_SEMI, TOK_LBRACE, TOK_RBRACE, TOK_LPAREN, TOK_RPAREN, TOK_MACRO;
     TRY(CreateTerminal(blimp, ";", &TOK_SEMI));
     TRY(CreateTerminal(blimp, "{", &TOK_LBRACE));
     TRY(CreateTerminal(blimp, "}", &TOK_RBRACE));
     TRY(CreateTerminal(blimp, "(", &TOK_LPAREN));
     TRY(CreateTerminal(blimp, ")", &TOK_RPAREN));
+    TRY(CreateTerminal(blimp, "\\>", &TOK_MACRO));
 
     // And here are the productions:
 
@@ -752,10 +798,10 @@ Status DefaultGrammar(Blimp *blimp, Grammar *grammar)
         SendHandler, NULL));
     TRY(ADD_GRAMMAR_RULE(grammar, StmtNoMsg, (NT(StmtNoMsg), NT(Term)),
         SendHandler, NULL));
-    //      \ Stmt[NoMsg] @prec Term
-    TRY(ADD_GRAMMAR_RULE(grammar, Stmt, (NT(Stmt), T(PRECEDENCE), NT(Term)),
+    //      \> Term Term Term
+    TRY(ADD_GRAMMAR_RULE(grammar, Stmt, (T(MACRO), NT(Term), NT(Term), NT(Term)),
         PrecedenceHandler, NULL));
-    TRY(ADD_GRAMMAR_RULE(grammar, StmtNoMsg, (NT(StmtNoMsg), T(PRECEDENCE), NT(Term)),
+    TRY(ADD_GRAMMAR_RULE(grammar, StmtNoMsg, (T(MACRO), NT(Term), NT(Term), NT(Term)),
         PrecedenceHandler, NULL));
     //      \ term
     TRY(ADD_GRAMMAR_RULE(grammar, Stmt, (NT(Term)),

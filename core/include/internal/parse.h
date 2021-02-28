@@ -11,7 +11,6 @@
 PRIVATE void Stream_Delete(Stream *stream);
 
 typedef enum {
-    TOK_PRECEDENCE,
     TOK_MSG_NAME,
     TOK_MSG_THIS,
     TOK_SYMBOL,

@@ -29,7 +29,12 @@ contexts:
         1: punctuation.definition.variable
         2: variable.other
 
-    - match: '@{{symbol}}'
+    - match: '({{symbol}})(@)'
+      captures:
+        1: variable.parameter
+        2: punctuation.definition.variable
+
+    - match: "'{{symbol}}"
       scope: constant.language
 
     - match: '{{symbol}}'
@@ -65,9 +70,6 @@ contexts:
 
     - match: '\\.'
       scope: constant.character.escape
-
-    - match: '@{{symbol}}'
-      scope: constant.other.placeholder
 
     - match: '`'
       pop: true
