@@ -114,7 +114,7 @@ static bool IsOperatorChar(int c)
 
 static bool IsIdentifierChar(int c)
 {
-    return c == '_' || c == '@'
+    return c == '_'
         || ('a' <= c && c <= 'z')
         || ('A' <= c && c <= 'Z')
         || ('0' <= c && c <= '9');

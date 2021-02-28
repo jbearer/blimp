@@ -12,7 +12,7 @@
 };
 
 # Define the macro.
-\> {^ my_keyword} @7 {^toks
+\> 7 {^ my_keyword} {^toks
     {^ foo}
 };
 
@@ -23,8 +23,8 @@
 # Defining macros for precedences, and using them to define new macros.
 #
 
-# Define an alias @@term for the precedence level @7.
-\> {^ {@6}; ^ @@term; ^ {@6} } @3 {^toks
+# Define an alias @@term for the precedence level 7.
+\> 3 {^ {6}; ^ `@@term`; ^ {6} } {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -50,11 +50,11 @@
             }[]
         };
 
-        {^ `\\>`; ^ (macro[]); ^ @7; ^ (handler[]) }
+        {^ `\\>`; ^ 7; ^ (macro[]); ^ (handler[]) }
     }[]
 };
 
-# Define a new macro at precedence @7 using the @@term alias.
+# Define a new macro at precedence 7 using the @@term alias.
 {^ `my_keyword2`} @@term {{^ bar}};
 !expect_eq my_keyword2 bar;
 
@@ -65,25 +65,25 @@
 # Old macros should still work.
 !expect_eq my_keyword foo;
 
-# Just straight-up define @term to @7
-{^ @term} @@term {{^ @7}};
+# Just straight-up define @term to 7
+{^ `@term`} @@term {{^ 7}};
 
-# Define a new macro at precedence @7 using the @term alias.
-\> {^ `my_keyword20`} @term {{^ foo}};
+# Define a new macro at precedence 7 using the @term alias.
+\> @term {^ `my_keyword20`} {{^ foo}};
 !expect_eq my_keyword20 foo;
 
-# Define a macro with a @7-level parameter using the @term alias.
-\> {^ `my_keyword21`; ^{@term}} (`@7`) {{^ bar}};
+# Define a macro with a 7-level parameter using the @term alias.
+\> @term {^ `my_keyword21`; ^{@term}} {{^ bar}};
 !expect_eq my_keyword21 {^} bar;
 
 ################################################################################
 # Defining a macro in the production tree for another macro.
 #
 
-\> {
-    \> {^ `my_keyword4`} @7 {{^`foo`}};
+\> 7 {
+    \> 7 {^ `my_keyword4`} {{^`foo`}};
     ^ `my_keyword5`
-} @7 {
+} {
     {^ `my_keyword4`}
 };
 
@@ -93,8 +93,8 @@
 # Defining a macro in the handler for another macro.
 #
 
-\> {^ `my_keyword6`} @7 {
-    \> {^`my_keyword7`} @7 {{^`bar`}};
+\> 7 {^ `my_keyword6`} {
+    \> 7 {^`my_keyword7`} {{^`bar`}};
     {^`my_keyword7`}
 };
 
@@ -104,9 +104,9 @@
 # Defining a macro in the expansion of another macro.
 #
 
-\> {^`define_in_expansion`} @7 {
+\> 7 {^`define_in_expansion`} {
     {
-        ^`\\>`; ^`{`; ^`^`; ^`defined_in_expansion`; ^`}`; ^`@7`; ^`{`;
+        ^`\\>`; ^`7`; ^`{`; ^`^`; ^`defined_in_expansion`; ^`}`; ^`{`;
             ^`{`; ^`^`; ^`foo`; ^`}`;
         ^`}`; ^`;`;
         ^`defined_in_expansion`
@@ -125,11 +125,11 @@
 # If we do the same thing, but now use a token that already exists for the macro
 # within the macro, then we should be able to use the inner macro in the
 # expansion of the outer one.
-\> {^`+`; ^`-`; ^`*`} @7 {{^ foo}};
+\> 7 {^`+`; ^`-`; ^`*`} {{^ foo}};
 
-\> {^`define_in_expansion2`} @7 {
+\> 7 {^`define_in_expansion2`} {
     {
-        ^`\\>`; ^`{`; ^`^`; ^`\`+\``; ^`;`; ^`^`; ^`\`+\``; ^`}`; ^`@7`; ^`{`;
+        ^`\\>`; ^`7`; ^`{`; ^`^`; ^`\`+\``; ^`;`; ^`^`; ^`\`+\``; ^`}`; ^`{`;
             ^`{`; ^`^`; ^`bar`; ^`}`;
         ^`}`; ^`;`;
         ^`+`; ^`+`
@@ -144,9 +144,9 @@
 # not take effect until sometime later outside of the expansion.
 #
 
-\> {^`define_in_expansion3`} @7 {
+\> 7 {^`define_in_expansion3`} {
     {
-        ^`\\>`; ^`{`; ^`^`; ^`{`; ^`@7`; ^`}`; ^`;`; ^`^`; ^`\`-\``; ^`}`; ^`@3`; ^`{`;
+        ^`\\>`; ^`3`; ^`{`; ^`^`; ^`{`; ^`7`; ^`}`; ^`;`; ^`^`; ^`\`-\``; ^`}`; ^`{`;
             ^`{`; ^`^`; ^`foo`; ^`}`;
         ^`}`; ^`;`;
         ^`bar`; ^`-`
@@ -160,9 +160,9 @@
 
 # If we try to use the macro defined in the expansion while in a nested
 # expression, it won't work.
-\> {^`define_in_expansion4`} @7 {
+\> 7 {^`define_in_expansion4`} {
     {
-        ^`\\>`; ^`{`; ^`^`; ^`{`; ^`@7`; ^`}`; ^`;`; ^`^`; ^`\`*\``; ^`}`; ^`@3`; ^`{`;
+        ^`\\>`; ^`3`; ^`{`; ^`^`; ^`{`; ^`7`; ^`}`; ^`;`; ^`^`; ^`\`*\``; ^`}`; ^`{`;
             ^`{`; ^`^`; ^`foo`; ^`}`;
         ^`}`; ^`;`;
         ^`bar`; ^`*`
@@ -181,20 +181,20 @@
 # new production -- even inside nested expressions.
 #
 
-!expect_eq ((\>{^`nested`}@7{{^`foo`}}; {^}) nested) foo;
+!expect_eq ((\>7{^`nested`}{{^`foo`}}; {^}) nested) foo;
 
 ################################################################################
 # Adding a macro with very low precedence but a high-precedence first symbol.
 #
 
-\> {^`low_prec`} @1 {{^`foo`}};
+\> 1 {^`low_prec`} {{^`foo`}};
 !expect_eq (low_prec) foo;
 
 ################################################################################
 # Macro handler with mutable state.
 #
 
-\> {^`static`; ^{@7}} @3 {^toks
+\> 3 {^`static`; ^{7}} {^toks
     value_ref{^ ^};
     value{^ref
         value_ref{(^ref)};
@@ -243,7 +243,7 @@ subtract{^} {^lhs{^rhs
     ^lhs ^rhs
 }};
 
-\> {^{@7}; ^`infixr-`; ^{@6}} @6 {^toks
+\> 6 {^{7}; ^`infixr-`; ^{6}} {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -275,7 +275,7 @@ subtract{^} {^lhs{^rhs
 
 !expect_eq (3 infixr- 2 infixr- 1) 2;
 
-\> {^{@6}; ^`infixl-`; ^{@7}} @6 {^toks
+\> 6 {^{6}; ^`infixl-`; ^{7}} {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -319,8 +319,8 @@ subtract{^} {^lhs{^rhs
 # Precedence of macro expansions matches the precedence of the macro definition.
 #
 
-\> {^`multi`; ^`token`; ^`term`} @7 {{^`{`; ^`^`; ^`}`; ^`foo`}};
-\> {^`requires_term`; ^{@7}} @7 {^toks
+\> 7 {^`multi`; ^`token`; ^`term`} {{^`{`; ^`^`; ^`}`; ^`foo`}};
+\> 7 {^`requires_term`; ^{7}} {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -353,7 +353,7 @@ subtract{^} {^lhs{^rhs
 
 snd{^} {^x{^y ^y}};
 
-\> {^`snd_macro`; ^{@4}} @1 {^toks
+\> 1 {^`snd_macro`; ^{4}} {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -392,7 +392,7 @@ import macro_module;
 # A symbol with a prefix which is a keyword is still parsed as a symbol.
 #
 
-\> {^`kw_prefix`; ^{@7}} @7 {^toks
+\> 7 {^`kw_prefix`; ^{7}} {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -422,16 +422,16 @@ import macro_module;
 # Defining an ad-hoc non-terminal (e.g. to represent a list of symbols).
 #
 
-\> {^`\`sym\``} @symbols {^toks
+\> symbols {^`\`sym\``} {^toks
     {^out
         ^toks ^out;
         ^out `nil`
     }
 };
 
-\> {^`\`sym\``; ^{@symbols}} @symbols {^};
+\> symbols {^`\`sym\``; ^{symbols}} {^};
 
-\> {^`car`; ^`(`; ^{@symbols}; ^`)`} @7 {^toks
+\> 7 {^`car`; ^`(`; ^{symbols}; ^`)`} {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -467,7 +467,7 @@ import macro_module;
     }[]
 };
 
-\> {^`cdr`; ^`(`; ^{@symbols}; ^`)`} @symbols {^toks
+\> symbols {^`cdr`; ^`(`; ^{symbols}; ^`)`} {^toks
     {
         n_ref{^ ^};
         n n_ref;

@@ -1,4 +1,4 @@
 # This file is imported by macros.blt, to check that macros defined in a module
 # can be used in a file that imports that module.
 
-\> {^`defined_in_module` } @7 {{^`foo`}}
+\> 7 {^`defined_in_module` } {{^`foo`}}

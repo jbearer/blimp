@@ -547,10 +547,10 @@ static Status SymbolVisitor(
     return BLIMP_OK;
 }
 
-// Handler for `Stmt @prec Term`
+// Handler for `\> Term Term Term`
 static Status PrecedenceHandler(ParserContext *ctx, ParseTree *tree)
 {
-    Expr *production = SubExpr(tree, 1);
+    Expr *production = SubExpr(tree, 2);
     Expr *handler    = SubExpr(tree, 3);
 
     // The expressions for the production and the handler have just now been
@@ -561,7 +561,7 @@ static Status PrecedenceHandler(ParserContext *ctx, ParseTree *tree)
 
     // Get the precedence of the non-terminal for the macro we're defining (the
     // left-hand side of the production).
-    const Symbol *nt_sym = SubToken(tree, 2);
+    const Symbol *nt_sym = SubToken(tree, 1);
     NonTerminal nt;
     TRY(Grammar_GetNonTerminal(&ctx->blimp->grammar, nt_sym, &nt));
 
@@ -842,14 +842,14 @@ Status DefaultGrammar(Blimp *blimp, Grammar *grammar)
     }
 
     // Register symbolic names for all of the non-terminals.
-    TRY(RegisterNonTerminal(grammar, NT_Start,     "@0"));
-    TRY(RegisterNonTerminal(grammar, NT_Expr,      "@1"));
-    TRY(RegisterNonTerminal(grammar, NT_ExprNoMsg, "@2"));
-    TRY(RegisterNonTerminal(grammar, NT_Stmt,      "@3"));
-    TRY(RegisterNonTerminal(grammar, NT_StmtNoMsg, "@4"));
-    TRY(RegisterNonTerminal(grammar, NT_Semi,      "@5"));
-    TRY(RegisterNonTerminal(grammar, NT_Term,      "@6"));
-    TRY(RegisterNonTerminal(grammar, NT_TermNoMsg, "@7"));
+    TRY(RegisterNonTerminal(grammar, NT_Start,     "0"));
+    TRY(RegisterNonTerminal(grammar, NT_Expr,      "1"));
+    TRY(RegisterNonTerminal(grammar, NT_ExprNoMsg, "2"));
+    TRY(RegisterNonTerminal(grammar, NT_Stmt,      "3"));
+    TRY(RegisterNonTerminal(grammar, NT_StmtNoMsg, "4"));
+    TRY(RegisterNonTerminal(grammar, NT_Semi,      "5"));
+    TRY(RegisterNonTerminal(grammar, NT_Term,      "6"));
+    TRY(RegisterNonTerminal(grammar, NT_TermNoMsg, "7"));
 
     return BLIMP_OK;
 }

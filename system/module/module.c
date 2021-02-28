@@ -190,7 +190,7 @@ BlimpStatus BlimpModule_Init(Blimp *blimp, const char **path)
     {
         return Blimp_Reraise(blimp);
     }
-    if (Blimp_GetSymbol(blimp, "@7", &prec7) != BLIMP_OK) {
+    if (Blimp_GetSymbol(blimp, "7", &prec7) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
 
