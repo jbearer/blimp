@@ -156,6 +156,7 @@ static Status SymEvalObject(
         case VALUE_OBJECT: {
             if (obj->value.object != NULL) {
                 BlimpObject_Borrow(obj->value.object);
+                assert(Object_Type(obj->value.object) != OBJ_SYMBOL);
             }
 
             OBJI new_instr = {
@@ -875,7 +876,7 @@ static Status SymEvalInstructionAndPushResult(
                 // runtime, and hope that downstream optimizations are able to
                 // eliminate the ghost object completely.
                 TRY(Optimizer_EmitGhost(opt, ip->result_type, result));
-                SymbolicObject_CopyValue(obj, *result);
+                SymbolicObject_Copy(opt, obj, *result);
                 return BLIMP_OK;
             }
 
@@ -927,7 +928,7 @@ static Status SymEvalInstructionAndPushResult(
                 TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, result));
             }
 
-            SymbolicObject_CopyValue(obj, *result);
+            SymbolicObject_Copy(opt, obj, *result);
                 // Whatever method we used to evaluate the object, the new
                 // object has the same value as the old object.
             return BLIMP_OK;
@@ -945,8 +946,13 @@ static Status SymEvalInstructionAndPushResult(
             // capturing object. Record that information with the result.
             Ref *ref = DBMap_Resolve(&instr->scope->captures, instr->index);
             if (ref != NULL) {
-                (*result)->value_type = VALUE_OBJECT;
-                (*result)->value.object = ref->to;
+                if (Object_Type(ref->to) == OBJ_SYMBOL) {
+                    (*result)->value_type = VALUE_SYMBOL;
+                    (*result)->value.symbol = (const Symbol *)ref->to;
+                } else {
+                    (*result)->value_type = VALUE_OBJECT;
+                    (*result)->value.object = ref->to;
+                }
             }
 
             return BLIMP_OK;

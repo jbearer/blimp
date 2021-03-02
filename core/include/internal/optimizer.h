@@ -532,4 +532,7 @@ static inline SymbolicObject *Optimizer_Pop(Optimizer *opt)
         Optimizer_Blimp(opt), &opt->result_stack);
 }
 
+PRIVATE Status SymbolicObject_Copy(
+    Optimizer *opt, const SymbolicObject *src, SymbolicObject *dst);
+
 #endif

@@ -20,6 +20,41 @@ static inline Status SymbolicObject_New(Optimizer *opt, SymbolicObject **obj)
     return BLIMP_OK;
 }
 
+Status SymbolicObject_Copy(
+    Optimizer *opt, const SymbolicObject *src, SymbolicObject *dst)
+{
+    SymbolicObject_CopyValue(src, dst);
+        // Copy the symbolic representation of the object's value.
+
+    if (src->value_type == VALUE_LAMBDA) {
+        // If the object has a list of captures, make a deep copy of the
+        // captures list. Each object in `dst`s captures will have the same
+        // value_type and value as the corresponding object in `src`s captures,
+        // but they will be different objects, as the objects captured by `src`
+        // will not necessarily be on the stack if and when `dst` is evaluated.
+        dst->captures = NULL;
+        SymbolicObject *dst_captures_end = NULL;
+
+        for (SymbolicObject *src_capture = src->captures;
+             src_capture != NULL;
+             src_capture = src_capture->next)
+        {
+            SymbolicObject *dst_capture;
+            TRY(SymbolicObject_New(opt, &dst_capture));
+            TRY(SymbolicObject_Copy(opt, src_capture, dst_capture));
+
+            if (dst_captures_end == NULL) {
+                dst->captures = dst_capture;
+            } else {
+                dst_captures_end->next = dst_capture;
+            }
+            dst_captures_end = dst_capture;
+        }
+    }
+
+    return BLIMP_OK;
+}
+
 Status Optimizer_SymbolizeObject(
     Optimizer *opt, Object *obj, SymbolicObject **result)
 {
@@ -105,8 +140,8 @@ Status Optimizer_Begin(
 
     // For each message captured by `scope`, create a corresponding
     // SymbolicObject in the optimizer's message stack. The SymbolicObject will
-    // have value type `VALUE_OBJECT` to indicate that we know exactly which
-    // object it represents.
+    // have value type `VALUE_OBJECT` (or `VALUE_SYMBOL`) to indicate that we
+    // know exactly which object it represents.
     DeBruijnMap *inherited_messages = &scope->captures;
     for (size_t i = 0; i < DBMap_Size(inherited_messages); ++i) {
         SymbolicObject *obj;
@@ -121,7 +156,12 @@ Status Optimizer_Begin(
         Ref *ref = DBMap_Resolve(
             inherited_messages, DBMap_Size(inherited_messages) - i - 1);
         if (ref) {
-            obj->value.object = ref->to;
+            if (Object_Type(ref->to) == OBJ_SYMBOL) {
+                obj->value_type = VALUE_SYMBOL;
+                obj->value.symbol = (const Symbol *)ref->to;
+            } else {
+                obj->value.object = ref->to;
+            }
         }
 
         // Add the SymbolicObject to the symbolic stack of captured messages.
