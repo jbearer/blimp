@@ -139,10 +139,10 @@ Status Optimizer_Begin(
     }
 
     // For each message captured by `scope`, create a corresponding
-    // SymbolicObject in the optimizer's message stack. The SymbolicObject will
-    // have value type `VALUE_OBJECT` (or `VALUE_SYMBOL`) to indicate that we
-    // know exactly which object it represents.
+    // SymbolicObject in the optimizer's message stack.
     DeBruijnMap *inherited_messages = &scope->captures;
+    ScopedObject *owner = scope;
+        // The object which owns the current capture.
     for (size_t i = 0; i < DBMap_Size(inherited_messages); ++i) {
         SymbolicObject *obj;
         if (SymbolicObject_New(opt, &obj) != BLIMP_OK) {
@@ -150,17 +150,27 @@ Status Optimizer_Begin(
             return Reraise(blimp);
         }
 
-        obj->value_type = VALUE_OBJECT;
+        if (owner->seq <= opt->specialized) {
+            // If the capture is owned by an object which is an ancestor of the
+            // scope of specification, then we can assume the capture with this
+            // index will always have the same value when referenced from the
+            // optimized code, since the optimized code always runs in the scope
+            // of specialization or one of its descendants. Therefore, the
+            // corresponding SymbolicObject should have value type
+            // `VALUE_OBJECT` (or `VALUE_SYMBOL`) to indicate that we know
+            // exactly which object it represents.
+            obj->value_type = VALUE_OBJECT;
 
-        // Get the value of the object from `scope`s captured messages.
-        Ref *ref = DBMap_Resolve(
-            inherited_messages, DBMap_Size(inherited_messages) - i - 1);
-        if (ref) {
-            if (Object_Type(ref->to) == OBJ_SYMBOL) {
-                obj->value_type = VALUE_SYMBOL;
-                obj->value.symbol = (const Symbol *)ref->to;
-            } else {
-                obj->value.object = ref->to;
+            // Get the value of the object from `scope`s captured messages.
+            Ref *ref = DBMap_Resolve(
+                inherited_messages, DBMap_Size(inherited_messages) - i - 1);
+            if (ref) {
+                if (Object_Type(ref->to) == OBJ_SYMBOL) {
+                    obj->value_type = VALUE_SYMBOL;
+                    obj->value.symbol = (const Symbol *)ref->to;
+                } else {
+                    obj->value.object = ref->to;
+                }
             }
         }
 
@@ -169,6 +179,8 @@ Status Optimizer_Begin(
             Optimizer_End(opt, NULL);
             return Reraise(blimp);
         }
+
+        owner = owner->parent;
     }
 
     // Each lexical scope between `scope` and the object we're optimizing

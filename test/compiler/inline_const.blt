@@ -33,7 +33,10 @@
         } sym
     };
 
-    tests{^} {
+    expected_inner_capture_ref{^ ^};
+    expected_inner_capture expected_inner_capture_ref;
+
+    tests{^} {^inner_capture{
 
         # Simple inline function call.
         !expect_eq (const_identity foo) foo;
@@ -87,11 +90,15 @@
         # call cannot be inlined.
         !expect_eq foo (const_scope_arg[]);
 
+        # A reference to a capture in a more specific scope than the scope of
+        # specialization should not be optimized away.
+        !expect_eq ^inner_capture (expected_inner_capture[]);
+
         .
-    };
-    tests[];
+    }};
+    expected_inner_capture_ref inner_capture1; tests inner_capture1 [];
         # Run once to trigger specialization.
-    tests[];
+    expected_inner_capture_ref inner_capture2; tests inner_capture2 [];
         # Run again, now testing the specialized code.
     .
 } capture
