@@ -57,12 +57,17 @@ struct BlimpBytecode {
     size_t size;
         // The size in bytes of the prefix of `instructions` which contains
         // valid data.
+    size_t specialized_seq;
+        // Sequence number of the scope in which this code is specialized. The
+        // object with this sequence number is an ancestor of all objects which
+        // contain this code.
 
     Expr *expr;
         // The expression that generated this bytecode (for debugging only).
 };
 
-PRIVATE Status Bytecode_New(Blimp *blimp, Expr *expr, Bytecode **code);
+PRIVATE Status Bytecode_New(
+    Blimp *blimp, Expr *expr, size_t specialized_seq, Bytecode **code);
 PRIVATE Status Bytecode_Append(Bytecode *code, const Instruction *instr);
 PRIVATE void Bytecode_Delete(Bytecode *code, Instruction *instr);
 PRIVATE void Bytecode_RemoveNops(Bytecode *code);

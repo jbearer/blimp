@@ -425,11 +425,6 @@ typedef struct {
         // DeBruijn index.
     Bytecode *code;
         // Body of the block.
-    size_t specialized_seq;
-        // Sequence number of the scope in which this object's code is
-        // specialized. The object with this sequence number is an ancestor of
-        // this object (that is, this object itself, or its parent, or its
-        // parent's parent, etc.).
 } BlockObject;
 
 PRIVATE Status BlockObject_New(
@@ -437,27 +432,26 @@ PRIVATE Status BlockObject_New(
     ScopedObject *parent,
     const Symbol *msg_name,
     Bytecode *code,
-    size_t specialized,
     BlockObject **object);
 
 /**
- * \brief Determine if a block's code is already specialized in a given scope.
+ * \brief Determine if a procedure is already specialized in a given scope.
  *
- * Returns `true` if and only if `obj` is specialized in `scope` or a descendant
- * of `scope`.
+ * Returns `true` if and only if `code` is specialized in `scope` or a
+ * descendant of `scope`.
  *
- * \pre `scope` is an ancestor of `obj`.
+ * \pre `scope` is an ancestor of a block object containing `code`.
  */
-static inline bool BlockObject_IsSpecialized(
-    BlockObject *obj, ScopedObject *scope)
+static inline bool Bytecode_IsSpecialized(
+    const Bytecode *code, ScopedObject *scope)
 {
-    return scope->seq <= obj->specialized_seq;
-        // Since `scope` and the scope in which `obj` is specialized are both
-        // ancestors of `obj`, they must be related; that is, one is an ancestor
-        // of the other. Therefore, we can determine if `scope` is an ancestor
-        // of the specialization scope by comparing sequence numbers, using the
-        // property that an ancestor's sequence number is always less than its
-        // descendants'.
+    return scope->seq <= code->specialized_seq;
+        // Since `scope` and the scope in which `code` is specialized are both
+        // ancestors of some object containing `code`, they must be related;
+        // that is, one is an ancestor of the other. Therefore, we can determine
+        // if `scope` is an ancestor of the specialization scope by comparing
+        // sequence numbers, using the property that an ancestor's sequence
+        // number is always less than its descendants'.
 }
 
 /**

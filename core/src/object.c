@@ -2190,7 +2190,6 @@ Status BlockObject_New(
     ScopedObject *parent,
     const Symbol *msg_name,
     Bytecode *code,
-    size_t specialized,
     BlockObject **obj)
 {
     TRY(ScopedObject_New(blimp, OBJ_BLOCK, parent, (ScopedObject **)obj));
@@ -2198,9 +2197,6 @@ Status BlockObject_New(
     // Initialize derived fields.
     (*obj)->msg_name = msg_name;
     (*obj)->code = code;
-    (*obj)->specialized_seq =
-        specialized ? specialized : ((ScopedObject *)blimp->global)->seq;
-    assert((*obj)->specialized_seq <= ((ScopedObject *)*obj)->seq);
     ++code->refcount;
 
     HeapCheck(blimp);
@@ -2211,7 +2207,7 @@ Status BlockObject_Specialize(BlockObject *obj, ScopedObject *scope)
 {
     assert(scope->seq <= ((ScopedObject *)obj)->seq);
 
-    if (BlockObject_IsSpecialized(obj, scope)) {
+    if (Bytecode_IsSpecialized(obj->code, scope)) {
         return BLIMP_OK;
     }
 
@@ -2271,9 +2267,6 @@ Status BlockObject_Specialize(BlockObject *obj, ScopedObject *scope)
         // count.
         ++optimized->refcount;
         block->code = optimized;
-
-        block->specialized_seq = scope->seq;
-            // Record that the block has been specialized.
 
         if (curr == scope) {
             break;

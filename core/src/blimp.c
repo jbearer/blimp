@@ -182,7 +182,6 @@ Status BlimpObject_NewBlock(
         (ScopedObject *)parent,
         msg_name,
         bytecode,
-        0,
         (BlockObject **)obj);
 }
 

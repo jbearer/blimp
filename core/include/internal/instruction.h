@@ -138,7 +138,6 @@ typedef struct {
     const Symbol *msg_name;
     Bytecode *code;
     BlockFlags flags;
-    size_t specialized;
     size_t captures;
 } BLOCKI;
 
@@ -155,7 +154,6 @@ typedef struct {
     const Symbol *msg_name;
     Bytecode *code;
     BlockFlags flags;
-    size_t specialized;
     size_t captures;
 } CLOSEI;
 

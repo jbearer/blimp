@@ -133,7 +133,7 @@ Status Optimizer_Begin(
     opt->specialized = specialized;
     opt->ghost_objects = 0;
 
-    if (Bytecode_New(blimp, expr, &opt->code) != BLIMP_OK) {
+    if (Bytecode_New(blimp, expr, specialized, &opt->code) != BLIMP_OK) {
         Optimizer_End(opt, NULL);
         return Reraise(blimp);
     }
@@ -373,14 +373,12 @@ SymbolicObject *Optimizer_GetMessage(Optimizer *opt, size_t index)
     return DBMap_Resolve(&opt->messages, index);
 }
 
-void Optimizer_ReplaceSubroutine(
-    Optimizer *opt, Bytecode **to_replace, size_t *specialized)
+void Optimizer_ReplaceSubroutine(Optimizer *opt, Bytecode **to_replace)
 {
     if (*to_replace == opt->replace_subroutine) {
         BlimpBytecode_Free(*to_replace);
         *to_replace = opt->optimized_subroutine;
         ++(*to_replace)->refcount;
-        *specialized = opt->specialized;
     }
 }
 

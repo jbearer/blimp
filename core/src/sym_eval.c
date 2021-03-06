@@ -130,7 +130,6 @@ static Status SymEvalObject(
                     obj->value.lambda.msg_name,
                     obj->value.lambda.code,
                     obj->value.lambda.flags,
-                    obj->value.lambda.specialized,
                     num_captures,
                 };
                 ++new_instr.code->refcount;
@@ -142,7 +141,6 @@ static Status SymEvalObject(
                     obj->value.lambda.msg_name,
                     obj->value.lambda.code,
                     obj->value.lambda.flags,
-                    obj->value.lambda.specialized,
                     num_captures,
                 };
                 ++new_instr.code->refcount;
@@ -731,19 +729,18 @@ static Status SymEvalInstructionAndPushResult(
 
             // Replace the new block's code with a more optimized version if
             // one is available.
-            size_t specialized = instr->specialized;
             Bytecode *code = instr->code;
             ++code->refcount;
                 // We take a new reference to the code because it's going to
                 // be owned by the instruction we emit.
-            Optimizer_ReplaceSubroutine(opt, &code, &specialized);
+            Optimizer_ReplaceSubroutine(opt, &code);
 
             if (parent == NULL) {
                 // If the parent of the new object is supposed to be the scope
                 // from the runtime call stack, emit a BLOCKI instruction.
                 BLOCKI new_instr = {
                     {INSTR_BLOCKI, ip->result_type, sizeof(BLOCKI)},
-                    instr->msg_name, code, flags, specialized,
+                    instr->msg_name, code, flags,
                     instr->captures + num_captures
                 };
                 TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, result));
@@ -753,7 +750,7 @@ static Status SymEvalInstructionAndPushResult(
                 CLOSEI new_instr = {
                     {INSTR_CLOSEI, ip->result_type, sizeof(CLOSEI)},
                     ScopedObject_Borrow(parent), instr->msg_name, code,
-                    flags, specialized, instr->captures + num_captures
+                    flags, instr->captures + num_captures
                 };
                 TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, result));
             }
@@ -768,7 +765,6 @@ static Status SymEvalInstructionAndPushResult(
             (*result)->value.lambda.msg_name = instr->msg_name;
             (*result)->value.lambda.code = instr->code;
             (*result)->value.lambda.flags = flags;
-            (*result)->value.lambda.specialized = instr->specialized;
 
             return BLIMP_OK;
         }
@@ -789,8 +785,7 @@ static Status SymEvalInstructionAndPushResult(
             // Replace the bytecode procedure with an optimized version if one
             // is available.
             ++instr->code->refcount;
-            Optimizer_ReplaceSubroutine(
-                opt, &new_instr.code, &new_instr.specialized);
+            Optimizer_ReplaceSubroutine(opt, &new_instr.code);
 
             // Emit the new instruction.
             ScopedObject_Borrow(instr->scope);
@@ -805,7 +800,6 @@ static Status SymEvalInstructionAndPushResult(
             (*result)->value.lambda.msg_name = instr->msg_name;
             (*result)->value.lambda.code = instr->code;
             (*result)->value.lambda.flags = instr->flags;
-            (*result)->value.lambda.specialized = instr->specialized;
 
             return BLIMP_OK;
         }

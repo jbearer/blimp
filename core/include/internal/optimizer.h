@@ -155,7 +155,6 @@ typedef struct SymbolicObject {
             const Symbol *msg_name;
             Bytecode *code;
             BlockFlags flags;
-            size_t specialized;
             ScopedObject *scope;
         } lambda;
     } value;
@@ -454,19 +453,14 @@ PRIVATE SymbolicObject *Optimizer_GetMessage(Optimizer *opt, size_t index);
  *      call to Optimizer_Begin(), then after this function returns
  *      `*to_replace` is the value of `optimized_subroutine` which was passed to
  *      Optimizer_Begin(). Otherwise, `*to_replace` is unchanged.
- * \param[in,out] specialized
- *      The sequence number of the scope in which `*to_replace` is specialized.
- *      If `*to_replace` is updated by this function, then `*specialized` is
- *      also updated accordingly.
- *
+
  * The caller must own a reference to `*to_replace`. If `*to_replace` is updated
  * by this function, then reference counts are also updated accordingly. That
  * is, the caller's reference to the old value of `*to_replace` is released and
  * when this function returns the caller owns a reference to the new value of
  * `*to_replace`.
  */
-PRIVATE void Optimizer_ReplaceSubroutine(
-    Optimizer *opt, Bytecode **to_replace, size_t *specialized);
+PRIVATE void Optimizer_ReplaceSubroutine(Optimizer *opt, Bytecode **to_replace);
 
 /**
  * \brief Get the Blimp associated with an Optimizer.

@@ -26,7 +26,7 @@ static inline Status Emit_BLOCKI(
 {
     BLOCKI instr = {
         {INSTR_BLOCKI, result_type, sizeof(instr)},
-        msg_name, block_code, flags, 0, 0
+        msg_name, block_code, flags, 0
     };
 
     return Bytecode_Append(code, (Instruction *)&instr);
@@ -217,7 +217,7 @@ static Status CompileProcedure(
     Blimp *blimp, Expr *expr, size_t depth, Bytecode **optimized)
 {
     Bytecode *code;
-    TRY(Bytecode_New(blimp, expr, &code));
+    TRY(Bytecode_New(blimp, expr, 0, &code));
 
     for (Expr *stmt = expr; stmt != NULL; stmt = stmt->next) {
         SendFlags flags = SEND_DEFAULT;

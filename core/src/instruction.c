@@ -36,7 +36,8 @@ static void Instruction_Destroy(const Instruction *instr)
     }
 }
 
-Status Bytecode_New(Blimp *blimp, Expr *expr, Bytecode **code)
+Status Bytecode_New(
+    Blimp *blimp, Expr *expr, size_t specialized_seq, Bytecode **code)
 {
     TRY(Malloc(blimp, sizeof(Bytecode), code));
 
@@ -48,6 +49,7 @@ Status Bytecode_New(Blimp *blimp, Expr *expr, Bytecode **code)
     (*code)->size = 0;
     (*code)->capacity = 0;
     (*code)->refcount = 1;
+    (*code)->specialized_seq = specialized_seq;
     return BLIMP_OK;
 }
 

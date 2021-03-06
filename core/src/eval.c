@@ -257,6 +257,7 @@ static Status TryConstantElision(
     Blimp *blimp,
     Object **receiver_ptr,
     ScopedObject *scope,
+    const Bytecode *executing,
     Object **tmp_receiver)
 {
     Object *receiver = BlimpObject_Borrow(*receiver_ptr);
@@ -297,8 +298,7 @@ static Status TryConstantElision(
         if (blimp->options.constant_elision &&
             Object_Type((Object *)scope) == OBJ_BLOCK && is_const)
         {
-            if (BlockObject_IsSpecialized((BlockObject *)scope, owner))
-            {
+            if (Bytecode_IsSpecialized(executing, owner)) {
                 // If the code we're executing is already specialized in the
                 // scope where the symbol is defined, then we can simply update
                 // the instruction in place.
@@ -394,7 +394,6 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                             sp->scope,
                             instr->msg_name,
                             instr->code,
-                            instr->specialized,
                             &obj) != BLIMP_OK)
                     {
                         goto error;
@@ -457,7 +456,6 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                             instr->scope,
                             instr->msg_name,
                             instr->code,
-                            instr->specialized,
                             &obj) != BLIMP_OK)
                     {
                         goto error;
@@ -666,8 +664,12 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
 
                 Object *receiver;
                 if (TryConstantElision(
-                        blimp, &instr->receiver, sp->scope, &receiver)
-                    != BLIMP_OK)
+                        blimp,
+                        &instr->receiver,
+                        sp->scope,
+                        sp->executing,
+                        &receiver
+                    ) != BLIMP_OK)
                 {
                     goto error;
                 }
@@ -704,7 +706,11 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
 
                 Object *receiver;
                 if (TryConstantElision(
-                        blimp, &instr->receiver, instr->scope, &receiver)
+                        blimp,
+                        &instr->receiver,
+                        instr->scope,
+                        sp->executing,
+                        &receiver)
                     != BLIMP_OK)
                 {
                     goto error;
