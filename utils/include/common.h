@@ -16,6 +16,7 @@ typedef BlimpSymbol Symbol;
 typedef BlimpStream Stream;
 typedef BlimpExpr Expr;
 typedef BlimpBytecode Bytecode;
+typedef BlimpInstruction Instruction;
 typedef BlimpObject Object;
 
 #ifdef NDEBUG

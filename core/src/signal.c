@@ -23,9 +23,27 @@ static inline size_t CountTrailingZeros(sig_atomic_t word)
 static inline sig_atomic_t SigMask(size_t signum)
 {
     assert(signum + 1 < sizeof(sig_atomic_t)*CHAR_BIT);
-    return ((sig_atomic_t)1 << (signum + 1));
+    return ((size_t)1 << (signum + 1));
         // Offset by 1, since the first bit (the status bit) does not correspond
         // to any signal.
+}
+
+static inline size_t SigAtomicToUnsigned(sig_atomic_t x)
+{
+    if (sizeof(size_t) > sizeof(sig_atomic_t)) {
+        return (size_t)x & (((size_t)1 << (sizeof(sig_atomic_t)*CHAR_BIT)) - 1);
+            // Since we're casting `x` from a potentially signed type
+            // (sig_atomic_t) to a larger unsigned type (size_t) we may get a
+            // number of leading 1's if `x < 0`, due to sign extension. So we
+            // mask off all of the bits that don't fall within
+            // sizeof(sig_atomic_t).
+    } else {
+        assert(sizeof(size_t) == sizeof(sig_atomic_t));
+            // size_t cannot be smaller than sig_atomic_t.
+        return (size_t)x;
+            // Both types are the same size so we don't have to worry about
+            // sign-extended leading 1's.
+    }
 }
 
 void InitSignals(Blimp *blimp, Signals *signals)
@@ -39,10 +57,10 @@ void InitSignals(Blimp *blimp, Signals *signals)
         // simply return the error `BLIMP_INTERRUPTED`.
 }
 
-Status InternalHandleSignals(Signals *signals)
+Status InternalHandleSignals(Signals *signals, const Instruction *ip)
 {
     // Atomically take the entire set of pended signals.
-    sig_atomic_t pending = AtomicExchange(&signals->status, 1);
+    size_t pending = SigAtomicToUnsigned(AtomicExchange(&signals->status, 1));
         // Store 1 into `status` so that the enabled bit is set, but the set of
         // pending signals is now empty.
     pending >>= 1;
@@ -59,7 +77,8 @@ Status InternalHandleSignals(Signals *signals)
         SignalHandler *handler = &signals->handlers[signum];
         Status status;
         if (handler->callback) {
-            status = handler->callback(signals->blimp, signum, handler->arg);
+            status = handler->callback(
+                signals->blimp, signum, ip, handler->arg);
         } else {
             status = Error(signals->blimp, BLIMP_INTERRUPTED);
                 // The default handler simply returns `BLIMP_INTERRUPTED`.
@@ -86,13 +105,18 @@ Status InternalHandleSignals(Signals *signals)
 
 void EnableSignals(Signals *signals)
 {
-    signals->status = 1;
+    // Loop on CompareExchange until we successfully set the enabled bit in the
+    // status word.
+    sig_atomic_t status;
+    do {
+        status = signals->status;
+    } while (!AtomicCompareExchange(&signals->status, status, status|1));
 }
 
 Status DisableSignals(Signals *signals)
 {
     // Atomically take the entire set of pended signals.
-    sig_atomic_t pending = AtomicExchange(&signals->status, 0);
+    size_t pending = SigAtomicToUnsigned(AtomicExchange(&signals->status, 0));
         // Store 0 into `status` so that the enabled bit is cleared, and the set
         // of pending signals is now empty.
     pending >>= 1;
@@ -110,7 +134,7 @@ Status DisableSignals(Signals *signals)
         SignalHandler *handler = &signals->handlers[signum];
         if (handler->callback) {
             if (handler->callback(
-                    signals->blimp, signum, handler->arg) != BLIMP_OK)
+                    signals->blimp, signum, NULL, handler->arg) != BLIMP_OK)
             {
                 return Reraise(signals->blimp);
                     // Unlike in HandleSignals(), we do not re-pend the
@@ -157,12 +181,29 @@ BlimpSignalError Blimp_RaiseSignal(Blimp *blimp, size_t signum)
 
     // As long as signals are enabled, try to set the bit corresponding to
     // `signum` in the status word using a compare-and-swap.
-    sig_atomic_t status;
+    size_t status;
     do {
-        status = blimp->signals.status;
+        status = SigAtomicToUnsigned(blimp->signals.status);
         if (!(status & 1)) {
             return BLIMP_SIGNAL_DISABLED;
         }
+    } while (!AtomicCompareExchange(
+        &blimp->signals.status, status, status|SigMask(signum)));
+
+    return BLIMP_SIGNAL_OK;
+}
+
+BlimpSignalError Blimp_PendSignal(Blimp *blimp, size_t signum)
+{
+    if (signum > BLIMP_MAX_SIGNAL) {
+        return BLIMP_SIGNAL_INVALID;
+    }
+
+    // Loop on CompareExchange until we successfully set the bit corresponding
+    // to `signum` in the status word.
+    size_t status;
+    do {
+        status = SigAtomicToUnsigned(blimp->signals.status);
     } while (!AtomicCompareExchange(
         &blimp->signals.status, status, status|SigMask(signum)));
 

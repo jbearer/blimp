@@ -13,7 +13,7 @@ typedef enum {
     RESULT_INHERIT,
 } ResultType;
 
-typedef struct {
+struct BlimpInstruction {
     enum {
         INSTR_SYMI,     // Symbol immediate
         INSTR_BLOCKI,   // Block immediate
@@ -31,7 +31,7 @@ typedef struct {
 
     ResultType result_type;
     size_t size;
-} Instruction;
+};
 
 ////////////////////////////////////////////////////////////////////////////////
 // Bytecode programs

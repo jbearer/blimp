@@ -69,8 +69,8 @@ PRIVATE void ClearAndDisableSignals(Signals *signals);
  * Since this function executes signal handlers, it must be called when the
  * interpreter is in a consistent state (same as HandleSignals()).
  */
-PRIVATE Status InternalHandleSignals(Signals *signals);
-static inline Status HandleSignals(Signals *signals)
+PRIVATE Status InternalHandleSignals(Signals *signals, const Instruction *ip);
+static inline Status HandleSignals(Signals *signals, const Instruction *ip)
 {
     // In the common case, there are no signals pending. We can do this check
     // early to avoid doing an expensive atomic exchange, which we need to do if
@@ -82,7 +82,7 @@ static inline Status HandleSignals(Signals *signals)
         return BLIMP_OK;
     }
 
-    return InternalHandleSignals(signals);
+    return InternalHandleSignals(signals, ip);
 }
 
 #endif

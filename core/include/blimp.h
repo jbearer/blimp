@@ -2,6 +2,7 @@
 #define BLIMP_H
 
 #include <limits.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -406,6 +407,16 @@ typedef struct BlimpStackTrace BlimpStackTrace;
 BlimpStatus Blimp_SaveStackTrace(Blimp *blimp, BlimpStackTrace **trace);
 
 /**
+ * \brief Get the depth of the current call stack.
+ *
+ * This can be significantly more efficient than obtaining a stack trace with
+ * Blimp_SaveStackTrace() and then computing the depth of the trace, because it
+ * does not require allocating or copying any data from the call stack to save
+ * a trace.
+ */
+size_t Blimp_StackDepth(Blimp *blimp);
+
+/**
  * \brief Copy a saved stack trace.
  *
  * If successful, `*to` points to a BlimpStackTrace which is equivalent to but
@@ -422,6 +433,11 @@ BlimpStatus Blimp_CopyStackTrace(
  * \brief Free memory allocated to a stack trace.
  */
 void Blimp_FreeStackTrace(Blimp *blimp, BlimpStackTrace *trace);
+
+/**
+ * \brief Get the total number of frames in a stack trace.
+ */
+size_t BlimpStackTrace_Size(const BlimpStackTrace *trace);
 
 /**
  * \brief Move one level higher up a stack trace.
@@ -453,6 +469,20 @@ bool BlimpStackTrace_Down(BlimpStackTrace *trace);
  */
 void BlimpStackTrace_GetRange(
     const BlimpStackTrace *trace, BlimpSourceRange *range);
+
+/**
+ * \brief
+ *      Get the procedure corresponding to the current frame.
+ */
+const struct BlimpBytecode *BlimpStackTrace_GetProcedure(
+    const BlimpStackTrace *trace);
+
+/**
+ * \brief
+ *      Get the return address from the current frame.
+ */
+const struct BlimpInstruction *BlimpStackTrace_GetReturnAddress(
+    const BlimpStackTrace *trace);
 
 /**
  * \brief Pretty-print a stack trace.
@@ -938,6 +968,43 @@ BlimpStatus Blimp_DefineMacro(
  */
 
 /**
+ * \brief A single bytecode instruction.
+ */
+typedef struct BlimpInstruction BlimpInstruction;
+
+/**
+ * \brief Get the instruction following `instr` in a procedure.
+ *
+ * If `instr` is not the last instruction in its procedure, the instruction
+ * following it is returned. Otherwise, NULL is returned. Note that, even if the
+ * return value is non-NULL, it does not necessarily represent the instruction
+ * that will be executed after `instr`. For example, `instr` could result in a
+ * call to a different procedure, whose instructions would be executed before
+ * `BlimpInstruction_Next(instr)`.
+ */
+const BlimpInstruction *BlimpInstruction_Next(const BlimpInstruction *instr);
+
+/**
+ * \brief Print a bytecode instruction.
+ *
+ * \param file
+ *      A file stream, which must be open for writing, to which to write the
+ *      instruction.
+ * \param instr
+ *      The instruction to write.
+ */
+void BlimpInstruction_Print(FILE *file, const BlimpInstruction *instr);
+
+/**
+ * \brief Print a bytecode instruction as if it were the current instruction.
+ *
+ * This fucntion prints `instr` exactly like BlimpInstruction_Print(), except
+ * that it indicates that `instr` is the current instruction with a "=>"
+ * pointer.
+ */
+void BlimpInstruction_PrintCurrent(FILE *file, const BlimpInstruction *instr);
+
+/**
  * \brief A sequence of bytecode instructions.
  *
  * BlimpBytecode objects can be shared (internally, for example, a single
@@ -996,6 +1063,15 @@ BlimpBytecode *Blimp_GlobalBytecode(Blimp *blimp);
  */
 void BlimpBytecode_Print(
     FILE *file, const BlimpBytecode *code, bool recursive);
+
+/**
+ * \brief Print a sequence of bytecode, showing the instruction pointer.
+ */
+void BlimpBytecode_PrintWithIP(
+    FILE *file,
+    const BlimpBytecode *code,
+    const BlimpInstruction *ip,
+    bool recursive);
 
 /**
  * @}
@@ -1216,6 +1292,15 @@ BlimpStatus BlimpObject_ParseBlock(
  */
 BlimpStatus BlimpObject_ParseExtension(
     const BlimpObject *obj, BlimpMethod *method, void **state);
+
+/**
+ * \brief Set the state associated with an extension object.
+ *
+ * \par Errors
+ *  * `BLIMP_MUST_BE_EXTENSION`:
+ *      `obj` was not an extension object.
+ */
+BlimpStatus BlimpObject_SetExtensionState(BlimpObject *obj, void *state);
 
 /**
  * \brief Retrieve the type-specific properties of a symbol object.
@@ -1571,7 +1656,7 @@ BlimpObject *Blimp_CurrentScope(Blimp *blimp);
     // access to 4-byte or 8-byte words.
 
 typedef BlimpStatus(*BlimpSignalCallback)(
-    Blimp *blimp, size_t signum, void *arg);
+    Blimp *blimp, size_t signum, const BlimpInstruction *ip, void *arg);
 
 typedef enum {
     BLIMP_SIGNAL_OK,
@@ -1589,8 +1674,9 @@ typedef enum {
  * function `callback` will be called at the next time the interpreter reaches a
  * safe interruption point.
  *
- * The callback function receives the interpreter, the signal identifier, and
- * the arbitrary additional parameter `arg` as inputs.
+ * The callback function receives the interpreter, the signal identifier, the
+ * interpreter's current instruction pointer, and the arbitrary additional
+ * parameter `arg` as inputs.
  *
  * If the callback function returns `BLIMP_OK`, then the interpreter will
  * continue execution normally (possibly invoking handlers for other pending
@@ -1609,8 +1695,9 @@ BlimpSignalError Blimp_HandleSignal(
  *
  * If Blimp_RaiseSignal() returns `BLIMP_OK`, then the interpreter will stop and
  * invoke the handler for the signal identified by `signum` at the next point
- * where it is safe to do so. If no handler is registered for `signum`, the
- * default action is to exit the interpreter with the error `BLIMP_INTERRUPTED`.
+ * where it is safe to do so. The handler will be invoked within a short and
+ * bounded period of time. If no handler is registered for `signum`, the default
+ * action is to exit the interpreter with the error `BLIMP_INTERRUPTED`.
  *
  * This function is both thread-safe and signal-safe, meaning it can be used to
  * asynchronously interrupt a running interpreter from another thread or from a
@@ -1624,6 +1711,25 @@ BlimpSignalError Blimp_HandleSignal(
  *      running.
  */
 BlimpSignalError Blimp_RaiseSignal(Blimp *blimp, size_t signum);
+
+/**
+ * \brief Generate a signal at the next opportunity.
+ *
+ * If signals are enabled, the handler for the signal identified by `signum`
+ * will be exectued at the next point where it is safe to do so, within a short
+ * and bounded period of time. In this case, Blimp_PendSignal() acts exactly
+ * like Blimp_RaiseSignal().
+ *
+ * If signals are disabled, Blimp_PendSignal() will succeed (unlike
+ * Blimp_RaiseSignal()) and the appropriate signal handler will be executed once
+ * signals are re-enabled, which may happen after an arbitrarily long time or
+ * not at all.
+ *
+ * \par Errors
+ *  * `BLIMP_SIGNAL_INVALID`:
+ *      `signum` is greater than `BLIMP_MAX_SIGNAL`.
+ */
+BlimpSignalError Blimp_PendSignal(Blimp *blimp, size_t signum);
 
 /**
  * @}

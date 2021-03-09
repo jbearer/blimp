@@ -356,7 +356,7 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
 
     bool ret = false;
     while (true) {
-        if (HandleSignals(&blimp->signals) != BLIMP_OK) {
+        if (HandleSignals(&blimp->signals, ip) != BLIMP_OK) {
             return Reraise(blimp);
         }
 

@@ -116,6 +116,11 @@ Status Blimp_SaveStackTrace(Blimp *blimp, StackTrace **trace)
     return Blimp_CopyStackTrace(blimp, &blimp->stack.trace, trace);
 }
 
+size_t Blimp_StackDepth(Blimp *blimp)
+{
+    return blimp->stack.trace.next - blimp->stack.trace.frames;
+}
+
 Status Blimp_CopyStackTrace(
     Blimp *blimp, const StackTrace *from, StackTrace **to)
 {
@@ -141,6 +146,11 @@ void Blimp_FreeStackTrace(Blimp *blimp, StackTrace *trace)
     Free(blimp, &trace);
 }
 
+size_t BlimpStackTrace_Size(const BlimpStackTrace *trace)
+{
+    return trace->end - trace->frames;
+}
+
 bool BlimpStackTrace_Up(StackTrace *trace)
 {
     if (trace->next > trace->frames) {
@@ -162,6 +172,16 @@ bool BlimpStackTrace_Down(StackTrace *trace)
 void BlimpStackTrace_GetRange(const StackTrace *trace, SourceRange *range)
 {
     *range = StackTrace_CurrentFrame(trace)->range;
+}
+
+const BlimpBytecode *BlimpStackTrace_GetProcedure(const StackTrace *trace)
+{
+    return StackTrace_CurrentFrame(trace)->executing;
+}
+
+const Instruction *BlimpStackTrace_GetReturnAddress(const StackTrace *trace)
+{
+    return StackTrace_CurrentFrame(trace)->return_address;
 }
 
 void BlimpStackTrace_Print(FILE *file, const StackTrace *trace, size_t limit)

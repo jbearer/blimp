@@ -297,6 +297,16 @@ Status BlimpObject_ParseExtension(
     return BLIMP_OK;
 }
 
+Status BlimpObject_SetExtensionState(Object *obj, void *state)
+{
+    if (Object_Type(obj) != OBJ_EXTENSION) {
+        return Error(Object_Blimp(obj), BLIMP_MUST_BE_EXTENSION);
+    }
+
+    ((ExtensionObject *)obj)->state = state;
+    return BLIMP_OK;
+}
+
 Status BlimpObject_ParseSymbol(const Object *obj, const Symbol **sym)
 {
     if (Object_Type(obj) != OBJ_SYMBOL) {

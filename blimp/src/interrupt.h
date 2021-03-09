@@ -1,7 +1,10 @@
 #ifndef BLIMP_INTERRUPT_H
 #define BLIMP_INTERRUPT_H
 
+#include <stdbool.h>
+
 typedef void(*InterruptHandler)(void *);
-void OnInterrupt(InterruptHandler handler, void *arg);
+bool PushInterruptHandler(InterruptHandler handler, void *arg);
+void PopInterruptHandler(void);
 
 #endif

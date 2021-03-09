@@ -7,6 +7,9 @@
 
 #include <blimp.h>
 
+#include "debug.h"
+
 BlimpStatus InitCommands(Blimp *blimp);
+BlimpStatus InitDebuggerCommands(Blimp *blimp, Debugger *db);
 
 #endif

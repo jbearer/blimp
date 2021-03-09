@@ -3,6 +3,7 @@
 
 #include <blimp.h>
 #include "command.h"
+#include "debug.h"
 
 static inline BlimpStatus VoidReturn(Blimp *blimp, BlimpObject **result)
 {
@@ -36,8 +37,10 @@ typedef struct {
         Blimp *blimp,
         BlimpObject *scope,
         BlimpObject **args,
+        void *arg,
         BlimpObject **result);
     size_t nargs;
+    void *arg;
 } Command;
 
 typedef struct {
@@ -75,7 +78,7 @@ static BlimpStatus CommandCall_Receive(
         // If we have enough arguments to call the command, do that and return
         // the result.
         BlimpStatus status = call->command->run(
-            blimp, scope, call->args, result);
+            blimp, scope, call->args, call->command->arg, result);
 
         // Once we have called the command, we can release our references to its
         // arguments.
@@ -131,7 +134,7 @@ static BlimpStatus CommandServer_Receive(
             if (command->nargs == 0) {
                 // If the command does not require arguments, invoke the handler
                 // directly.
-                return command->run(blimp, context, NULL, result);
+                return command->run(blimp, context, NULL, command->arg, result);
             }
 
             // Otherwise, create a CommandCall to collect the proper number of
@@ -165,24 +168,70 @@ static BlimpStatus CommandServer_Receive(
 static BlimpStatus CommandServer_New(
     Blimp *blimp, const Command *commands, BlimpObject **server)
 {
+    // Figure out how many commands there are.
+    size_t num_commands = 0;
+    for (const Command *command = commands; command->name; ++command) {
+        ++num_commands;
+    }
+
+    // Allocate our own copy of `commands`, so we can expand it later if needed.
+    // Allocate space for a terminating null Command.
+    Command *commands_copy = malloc((num_commands + 1)*sizeof(Command));
+    if (commands_copy == NULL) {
+        return Blimp_Error(blimp, BLIMP_OUT_OF_MEMORY);
+    }
+    memcpy(commands_copy, commands, (num_commands + 1)*sizeof(Command));
+
     return BlimpObject_NewExtension(
         blimp,
         Blimp_GlobalObject(blimp),
-        (void *)commands,
+        (void *)commands_copy,
         CommandServer_Receive,
-        NULL,
+        free,
         server);
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// ?inspect
-//
+static BlimpStatus CommandServer_AddCommands(
+    Blimp *blimp, BlimpObject *server, const Command *new_commands)
+{
+    const Command *old_commands;
+    if (BlimpObject_ParseExtension(server, NULL, (void **)&old_commands)
+            != BLIMP_OK)
+    {
+        return Blimp_Reraise(blimp);
+    }
 
-// Given a symbol object representing a numerical memory address, return the
-// Object at that address. The address is trusted, no memory checking is
-// performed.
-static BlimpStatus ParseAddress(
-    Blimp *blimp, BlimpObject *addr, BlimpObject **obj)
+    // Figure out the total number of commands.
+    size_t num_old_commands = 0;
+    for (const Command *command = old_commands; command->name; ++command) {
+        ++num_old_commands;
+    }
+    size_t num_new_commands = 0;
+    for (const Command *command = new_commands; command->name; ++command) {
+        ++num_new_commands;
+    }
+
+    // Allocate space for the new commands, plus a terminating null Command.
+    Command *commands = realloc(
+        (void *)old_commands,
+        (num_old_commands+num_new_commands+1)*sizeof(Command)
+    );
+    if (commands == NULL) {
+        return Blimp_Error(blimp, BLIMP_OUT_OF_MEMORY);
+    }
+    memcpy(
+        commands + num_old_commands,
+        new_commands,
+        (num_new_commands+1)*sizeof(Command)
+    );
+
+    return BlimpObject_SetExtensionState(server, commands);
+}
+
+// Given a symbol object representing a numerical memory address, return an
+// untyped pointer to that address. The address is trusted, no memory checking
+// is performed.
+static BlimpStatus ParseAddress(Blimp *blimp, BlimpObject *addr, void **p)
 {
     const BlimpSymbol *address_sym;
     if (BlimpObject_ParseSymbol(addr, &address_sym) != BLIMP_OK) {
@@ -190,20 +239,38 @@ static BlimpStatus ParseAddress(
     }
 
     char *address_end;
-    *obj = (BlimpObject *)strtol(
+    *p = (void *)strtol(
         BlimpSymbol_GetName(address_sym), &address_end, 0);
     if (*address_end) {
         return Blimp_ErrorMsg(blimp, BLIMP_ERROR, "expecting an address");
     }
 
-    return BLIMP_OK;;
+    return BLIMP_OK;
 }
 
+// Given a symbol object representing a numerical memory address, return the
+// Object at that address. The address is trusted, no memory checking is
+// performed.
+static BlimpStatus ParseObjectAddress(
+    Blimp *blimp, BlimpObject *addr, BlimpObject **obj)
+{
+    return ParseAddress(blimp, addr, (void **)obj);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// ?inspect
+//
+
 static BlimpStatus InspectUnreachable(
-    Blimp *blimp, BlimpObject *scope, BlimpObject **args, BlimpObject **result)
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject **args,
+    void *arg,
+    BlimpObject **result)
 {
     (void)scope;
     (void)args;
+    (void)arg;
 
     Blimp_DumpUnreachable(stdout, blimp);
     return VoidReturn(blimp, result);
@@ -246,12 +313,17 @@ static void PrintObjectInfo(BlimpObject *obj)
 }
 
 static BlimpStatus InspectObject(
-    Blimp *blimp, BlimpObject *scope, BlimpObject **args, BlimpObject **result)
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject **args,
+    void *arg,
+    BlimpObject **result)
 {
     (void)scope;
+    (void)arg;
 
     BlimpObject *obj = NULL;
-    if (ParseAddress(blimp, args[0], &obj) != BLIMP_OK) {
+    if (ParseObjectAddress(blimp, args[0], &obj) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
 
@@ -261,9 +333,14 @@ static BlimpStatus InspectObject(
 }
 
 static BlimpStatus InspectExpr(
-    Blimp *blimp, BlimpObject *scope, BlimpObject **args, BlimpObject **result)
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject **args,
+    void *arg,
+    BlimpObject **result)
 {
     (void)scope;
+    (void)arg;
 
     PrintObjectInfo(args[0]);
     return VoidReturn(blimp, result);
@@ -307,12 +384,17 @@ static void PrintOwningObjects(Blimp *blimp, BlimpObject *obj, void *arg)
 }
 
 static BlimpStatus InspectOwners(
-    Blimp *blimp, BlimpObject *scope, BlimpObject **args, BlimpObject **result)
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject **args,
+    void *arg,
+    BlimpObject **result)
 {
     (void)scope;
+    (void)arg;
 
     BlimpObject *obj = NULL;
-    if (ParseAddress(blimp, args[0], &obj) != BLIMP_OK) {
+    if (ParseObjectAddress(blimp, args[0], &obj) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
 
@@ -362,12 +444,17 @@ static void PrintClumpMember(Blimp *blimp, BlimpObject *obj, void *arg)
 }
 
 static BlimpStatus InspectClump(
-    Blimp *blimp, BlimpObject *scope, BlimpObject **args, BlimpObject **result)
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject **args,
+    void *arg,
+    BlimpObject **result)
 {
     (void)scope;
+    (void)arg;
 
     BlimpObject *obj = NULL;
-    if (ParseAddress(blimp, args[0], &obj) != BLIMP_OK) {
+    if (ParseObjectAddress(blimp, args[0], &obj) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
 
@@ -402,12 +489,17 @@ static void PrintOwnersOfClump(Blimp *blimp, BlimpObject *obj, void *arg)
 }
 
 static BlimpStatus InspectClumpOwners(
-    Blimp *blimp, BlimpObject *scope, BlimpObject **args, BlimpObject **result)
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject **args,
+    void *arg,
+    BlimpObject **result)
 {
     (void)scope;
+    (void)arg;
 
     BlimpObject *obj = NULL;
-    if (ParseAddress(blimp, args[0], &obj) != BLIMP_OK) {
+    if (ParseObjectAddress(blimp, args[0], &obj) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
 
@@ -419,10 +511,15 @@ static BlimpStatus InspectClumpOwners(
 }
 
 static BlimpStatus InspectBlimp(
-    Blimp *blimp, BlimpObject *scope, BlimpObject **args, BlimpObject **result)
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject **args,
+    void *arg,
+    BlimpObject **result)
 {
     (void)scope;
     (void)args;
+    (void)arg;
 
     printf("Global object: %p\n", Blimp_GlobalObject(blimp));
 
@@ -430,12 +527,17 @@ static BlimpStatus InspectBlimp(
 }
 
 static BlimpStatus InspectCode(
-    Blimp *blimp, BlimpObject *scope, BlimpObject **args, BlimpObject **result)
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject **args,
+    void *arg,
+    BlimpObject **result)
 {
     (void)scope;
+    (void)arg;
 
     BlimpBytecode *code = NULL;
-    if (ParseAddress(blimp, args[0], (BlimpObject **)&code) != BLIMP_OK) {
+    if (ParseAddress(blimp, args[0], (void **)&code) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
 
@@ -444,8 +546,14 @@ static BlimpStatus InspectCode(
 }
 
 static BlimpStatus InspectSymbol(
-    Blimp *blimp, BlimpObject *scope, BlimpObject **args, BlimpObject **result)
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject **args,
+    void *arg,
+    BlimpObject **result)
 {
+    (void)arg;
+
     const BlimpSymbol *sym;
     if (BlimpObject_ParseSymbol(args[0], &sym) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
@@ -464,10 +572,15 @@ static BlimpStatus InspectSymbol(
 }
 
 static BlimpStatus InspectGrammar(
-    Blimp *blimp, BlimpObject *scope, BlimpObject **args, BlimpObject **result)
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject **args,
+    void *arg,
+    BlimpObject **result)
 {
     (void)scope;
     (void)args;
+    (void)arg;
 
     Blimp_DumpGrammarVitals(stdout, blimp);
     return VoidReturn(blimp, result);
@@ -475,49 +588,282 @@ static BlimpStatus InspectGrammar(
 
 static const Command inspect_commands[] = {
     {"unreachable", "print information about unreachable heap objects",
-        InspectUnreachable, 0},
+        InspectUnreachable, 0, NULL},
     {"object", "print information about the internal state of an object",
-        InspectObject, 1},
+        InspectObject, 1, NULL},
     {"expr", "print information about the result of evaluating an expression",
-        InspectExpr, 1},
+        InspectExpr, 1, NULL},
     {"owners", "print the owners of an object",
-        InspectOwners, 1},
+        InspectOwners, 1, NULL},
     {"clump", "print the clump containing an object",
-        InspectClump, 1},
+        InspectClump, 1, NULL},
     {"clump_owners", "print the owners of a clump",
-        InspectClumpOwners, 1},
+        InspectClumpOwners, 1, NULL},
     {"blimp", "print information about the bl:mp interpreter",
-        InspectBlimp, 0},
+        InspectBlimp, 0, NULL},
     {"code", "print a section of bytecode located at a given address",
-        InspectCode, 1},
+        InspectCode, 1, NULL},
     {"symbol", "print information about the value of a symbol",
-        InspectSymbol, 1},
+        InspectSymbol, 1, NULL},
     {"grammar", "print information about the current grammar",
-        InspectGrammar, 0},
+        InspectGrammar, 0, NULL},
     {0}
 };
 
 static BlimpStatus Inspect(
-    Blimp *blimp, BlimpObject *scope, BlimpObject **args, BlimpObject **result)
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject **args,
+    void *arg,
+    BlimpObject **result)
 {
     (void)args;
     (void)scope;
+    (void)arg;
 
     return CommandServer_New(blimp, inspect_commands, result);
 }
 
+////////////////////////////////////////////////////////////////////////////////
+// ?db
+//
+
+static BlimpStatus DbAttach(
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject **args,
+    void *arg,
+    BlimpObject **result)
+{
+    (void)scope;
+    (void)args;
+
+    Debugger *db = (Debugger *)arg;
+
+    if (Debugger_Attach(db, blimp) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    return VoidReturn(blimp, result);
+}
+
+static BlimpStatus DbDetach(
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject **args,
+    void *arg,
+    BlimpObject **result)
+{
+    (void)scope;
+    (void)args;
+
+    Debugger *db = (Debugger *)arg;
+    Debugger_Detach(db);
+    return VoidReturn(blimp, result);
+}
+
+static BlimpStatus DbBreak(
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject **args,
+    void *arg,
+    BlimpObject **result)
+{
+    (void)scope;
+
+    Debugger *db = (Debugger *)arg;
+
+    const BlimpInstruction *bp;
+    if (ParseAddress(blimp, args[0], (void **)&bp) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    if (Debugger_Break(db, bp, 1, NULL, false) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    return VoidReturn(blimp, result);
+}
+
+static BlimpStatus DbTBreak(
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject **args,
+    void *arg,
+    BlimpObject **result)
+{
+    (void)scope;
+
+    Debugger *db = (Debugger *)arg;
+
+    const BlimpInstruction *bp;
+    if (ParseAddress(blimp, args[0], (void **)&bp) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    if (Debugger_Break(db, bp, 1, NULL, true) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    return VoidReturn(blimp, result);
+}
+
+static BlimpStatus DbStepI(
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject **args,
+    void *arg,
+    BlimpObject **result)
+{
+    (void)scope;
+    (void)args;
+
+    Debugger *db = (Debugger *)arg;
+
+    if (Debugger_StepI(db) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    return VoidReturn(blimp, result);
+}
+
+static BlimpStatus DbNextI(
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject **args,
+    void *arg,
+    BlimpObject **result)
+{
+    (void)scope;
+    (void)args;
+
+    Debugger *db = (Debugger *)arg;
+
+    if (Debugger_NextI(db) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    return VoidReturn(blimp, result);
+}
+
+
+static BlimpStatus DbFinish(
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject **args,
+    void *arg,
+    BlimpObject **result)
+{
+    (void)scope;
+    (void)args;
+
+    Debugger *db = (Debugger *)arg;
+
+    if (Debugger_Finish(db) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    return VoidReturn(blimp, result);
+}
+
+static BlimpStatus DbContinue(
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject **args,
+    void *arg,
+    BlimpObject **result)
+{
+    (void)scope;
+    (void)args;
+
+    Debugger *db = (Debugger *)arg;
+
+    if (Debugger_Continue(db) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    return VoidReturn(blimp, result);
+}
+
+static BlimpStatus DbBt(
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject **args,
+    void *arg,
+    BlimpObject **result)
+{
+    (void)scope;
+    (void)args;
+
+    Debugger *db = (Debugger *)arg;
+
+    if (Debugger_Bt(db) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    return VoidReturn(blimp, result);
+}
+
+static BlimpStatus DbList(
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject **args,
+    void *arg,
+    BlimpObject **result)
+{
+    (void)scope;
+    (void)args;
+
+    Debugger *db = (Debugger *)arg;
+
+    if (Debugger_List(db) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    return VoidReturn(blimp, result);
+}
+
+static BlimpStatus Db(
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject **args,
+    void *arg,
+    BlimpObject **result)
+{
+    (void)args;
+    (void)scope;
+    (void)arg;
+
+    Debugger *db = (Debugger *)arg;
+
+    const Command commands[] = {
+        {"attach", "attach to the current bl:mp process", DbAttach, 0, db},
+        {"detach", "detach from the currently attached process", DbDetach, 0, db},
+        {"break", "set a breakpoint", DbBreak, 1, db},
+        {"tbreak", "set a temporary breakpoint", DbTBreak, 1, db},
+        {"stepi", "step into the next instruction", DbStepI, 0, db},
+        {"nexti", "step over the next instruction", DbNextI, 0, db},
+        {"finish", "step out of the current procedure", DbFinish, 0, db},
+        {"continue", "continue program execution", DbContinue, 0, db},
+        {"bt", "print a stack trace", DbBt, 0, db},
+        {"list", "print the current procedure", DbList, 0, db},
+        {0},
+    };
+
+    return CommandServer_New(blimp, commands, result);
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 // Top-level commands
 //
 
-static const Command commands[] = {
-    {"inspect", "inspect interpreter state", Inspect, 0},
-    {0}
-};
-
 BlimpStatus InitCommands(Blimp *blimp)
 {
+    static const Command commands[] = {
+        {"inspect", "inspect interpreter state", Inspect, 0, NULL},
+        {0}
+    };
+
     const BlimpSymbol *command_symbol;
     if (Blimp_GetSymbol(blimp, "?", &command_symbol) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
@@ -536,4 +882,26 @@ BlimpStatus InitCommands(Blimp *blimp)
 
     BlimpObject_Release(server);
     return BLIMP_OK;
+}
+
+BlimpStatus InitDebuggerCommands(Blimp *blimp, Debugger *db)
+{
+    const Command commands[] = {
+        {"db", "debugger commands", Db, 0, db},
+        {0},
+    };
+
+    const BlimpSymbol *command_symbol;
+    if (Blimp_GetSymbol(blimp, "?", &command_symbol) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    BlimpObject *server;
+    if (BlimpObject_Get(Blimp_GlobalObject(blimp), command_symbol, &server)
+            != BLIMP_OK)
+    {
+        return Blimp_Reraise(blimp);
+    }
+
+    return CommandServer_AddCommands(blimp, server, commands);
 }

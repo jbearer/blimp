@@ -186,132 +186,139 @@ void Bytecode_Truncate(Bytecode *code, size_t offset)
 #define PRINT_INSTR(file, mnemonic, fmt, ...) \
     fprintf(file, "%-8s" fmt "\n", #mnemonic, ##__VA_ARGS__)
 
+static void PrintInstruction(
+    FILE *file, const BlimpInstruction *ip, bool current)
+{
+    // Print a single-character prefix indicating the result type.
+    char result_type;
+    switch (ip->result_type) {
+        case RESULT_INHERIT:
+            result_type = 'r';
+            break;
+        case RESULT_IGNORE:
+            result_type = 'v';
+            break;
+        default:
+            result_type = ' ';
+            break;
+    }
+    fprintf(file, " %s %p        %c ", current ? "=>" : "  ", ip, result_type);
+
+    switch (ip->type) {
+        case INSTR_BLOCKI: {
+            BLOCKI *instr = (BLOCKI *)ip;
+            PRINT_INSTR(file, BLOCKI, "%s, %p, %#x, %zu",
+                instr->msg_name->name,
+                instr->code,
+                instr->flags,
+                instr->captures);
+            break;
+        }
+
+        case INSTR_CLOSEI: {
+            CLOSEI *instr = (CLOSEI *)ip;
+            PRINT_INSTR(file, CLOSEI, "%p, %s, %p, %#x, %zu",
+                instr->scope,
+                instr->msg_name->name,
+                instr->code,
+                instr->flags,
+                instr->captures);
+            break;
+        }
+
+        case INSTR_SYMI: {
+            SYMI *instr = (SYMI *)ip;
+            PRINT_INSTR(file, SYMI, "%s", instr->sym->name);
+            break;
+        }
+
+        case INSTR_OBJI: {
+            OBJI *instr = (OBJI *)ip;
+            PRINT_INSTR(file, OBJI, "%p", instr->object);
+            break;
+        }
+
+        case INSTR_MSG: {
+            MSG *instr = (MSG *)ip;
+            PRINT_INSTR(file, MSG, "%zu", instr->index);
+            break;
+        }
+
+        case INSTR_MSGOF: {
+            MSGOF *instr = (MSGOF *)ip;
+            PRINT_INSTR(file, MSGOF, "%p, %zu", instr->scope, instr->index);
+            break;
+        }
+
+        case INSTR_SEND: {
+            SEND *instr = (SEND *)ip;
+            PRINT_INSTR(file, SEND, "%#x", instr->flags);
+            break;
+        }
+
+        case INSTR_CALL: {
+            CALL *instr = (CALL *)ip;
+            PRINT_INSTR(file, CALL, "%p, %#x", instr->scope, instr->flags);
+            break;
+        }
+
+        case INSTR_SENDTO: {
+            SENDTO *instr = (SENDTO *)ip;
+            if (Object_Type(instr->receiver) == OBJ_SYMBOL) {
+                PRINT_INSTR(
+                    file, SENDTO, "%s, %#x",
+                    ((const Symbol *)instr->receiver)->name, instr->flags);
+            } else {
+                PRINT_INSTR(
+                    file, SENDTO, "%p, %#x", instr->receiver, instr->flags);
+            }
+            break;
+        }
+
+        case INSTR_CALLTO: {
+            CALLTO *instr = (CALLTO *)ip;
+            if (Object_Type(instr->receiver) == OBJ_SYMBOL) {
+                PRINT_INSTR(
+                    file, CALLTO, "%p, %s, %#x",
+                    instr->scope,
+                    ((const Symbol *)instr->receiver)->name,
+                    instr->flags);
+            } else {
+                PRINT_INSTR(
+                    file, CALLTO, "%p, %p, %#x",
+                    instr->scope, instr->receiver, instr->flags);
+            }
+            break;
+        }
+
+        case INSTR_RET: {
+            PRINT_INSTR(file, RET, "");
+            break;
+        }
+
+        case INSTR_NOP: {
+            PRINT_INSTR(file, NOP, "%zu", ip->size);
+            break;
+        }
+
+        default: {
+            PRINT_INSTR(file, ???, "");
+            break;
+        }
+    }
+}
+
 static void PrintProcedure(
-    FILE *file, const BlimpBytecode *code, bool recursive)
+    FILE *file,
+    const BlimpBytecode *code,
+    const Instruction *current,
+    bool recursive)
 {
     for (const Instruction *ip = Bytecode_Begin(code);
          ip != Bytecode_End(code);
          ip = Instruction_Next(ip))
     {
-        // Print a single-character prefix indicating the result type.
-        char result_type;
-        switch (ip->result_type) {
-            case RESULT_INHERIT:
-                result_type = 'r';
-                break;
-            case RESULT_IGNORE:
-                result_type = 'v';
-                break;
-            default:
-                result_type = ' ';
-                break;
-        }
-        fprintf(file, "    %c ", result_type);
-
-        switch (ip->type) {
-            case INSTR_BLOCKI: {
-                BLOCKI *instr = (BLOCKI *)ip;
-                PRINT_INSTR(file, BLOCKI, "%s, %p, %#x, %zu, %zu",
-                    instr->msg_name->name,
-                    instr->code,
-                    instr->flags,
-                    instr->specialized,
-                    instr->captures);
-                break;
-            }
-
-            case INSTR_CLOSEI: {
-                CLOSEI *instr = (CLOSEI *)ip;
-                PRINT_INSTR(file, CLOSEI, "%p, %s, %p, %#x, %zu, %zu",
-                    instr->scope,
-                    instr->msg_name->name,
-                    instr->code,
-                    instr->flags,
-                    instr->specialized,
-                    instr->captures);
-                break;
-            }
-
-            case INSTR_SYMI: {
-                SYMI *instr = (SYMI *)ip;
-                PRINT_INSTR(file, SYMI, "%s", instr->sym->name);
-                break;
-            }
-
-            case INSTR_OBJI: {
-                OBJI *instr = (OBJI *)ip;
-                PRINT_INSTR(file, OBJI, "%p", instr->object);
-                break;
-            }
-
-            case INSTR_MSG: {
-                MSG *instr = (MSG *)ip;
-                PRINT_INSTR(file, MSG, "%zu", instr->index);
-                break;
-            }
-
-            case INSTR_MSGOF: {
-                MSGOF *instr = (MSGOF *)ip;
-                PRINT_INSTR(file, MSGOF, "%p, %zu", instr->scope, instr->index);
-                break;
-            }
-
-            case INSTR_SEND: {
-                SEND *instr = (SEND *)ip;
-                PRINT_INSTR(file, SEND, "%#x", instr->flags);
-                break;
-            }
-
-            case INSTR_CALL: {
-                CALL *instr = (CALL *)ip;
-                PRINT_INSTR(file, CALL, "%p, %#x", instr->scope, instr->flags);
-                break;
-            }
-
-            case INSTR_SENDTO: {
-                SENDTO *instr = (SENDTO *)ip;
-                if (Object_Type(instr->receiver) == OBJ_SYMBOL) {
-                    PRINT_INSTR(
-                        file, SENDTO, "%s, %#x",
-                        ((const Symbol *)instr->receiver)->name, instr->flags);
-                } else {
-                    PRINT_INSTR(
-                        file, SENDTO, "%p, %#x", instr->receiver, instr->flags);
-                }
-                break;
-            }
-
-            case INSTR_CALLTO: {
-                CALLTO *instr = (CALLTO *)ip;
-                if (Object_Type(instr->receiver) == OBJ_SYMBOL) {
-                    PRINT_INSTR(
-                        file, CALLTO, "%p, %s, %#x",
-                        instr->scope,
-                        ((const Symbol *)instr->receiver)->name,
-                        instr->flags);
-                } else {
-                    PRINT_INSTR(
-                        file, CALLTO, "%p, %p, %#x",
-                        instr->scope, instr->receiver, instr->flags);
-                }
-                break;
-            }
-
-            case INSTR_RET: {
-                PRINT_INSTR(file, RET, "");
-                break;
-            }
-
-            case INSTR_NOP: {
-                PRINT_INSTR(file, NOP, "%zu", ip->size);
-                break;
-            }
-
-            default: {
-                PRINT_INSTR(file, ???, "");
-                break;
-            }
-        }
+        PrintInstruction(file, ip, ip == current);
 
         if (ip->type == INSTR_RET) {
             break;
@@ -370,7 +377,7 @@ static void PrintProcedure(
                         } else {
                             fprintf(file, "  %p <%p>\n", block->code, block);
                         }
-                        PrintProcedure(file, block->code, true);
+                        PrintProcedure(file, block->code, NULL, true);
                     }
 
                     break;
@@ -382,8 +389,56 @@ static void PrintProcedure(
     }
 }
 
+void BlimpInstruction_Print(FILE *file, const Instruction *instr)
+{
+    PrintInstruction(file, instr, false);
+}
+
+void BlimpInstruction_PrintCurrent(FILE *file, const Instruction *instr)
+{
+    PrintInstruction(file, instr, true);
+}
+
 void BlimpBytecode_Print(FILE *file, const BlimpBytecode *code, bool recursive)
 {
+    BlimpBytecode_PrintWithIP(file, code, NULL, recursive);
+}
+
+void BlimpBytecode_PrintWithIP(
+    FILE *file,
+    const BlimpBytecode *code,
+    const Instruction *ip,
+    bool recursive)
+{
     fprintf(file, "  %p\n", code);
-    PrintProcedure(file, code, recursive);
+    PrintProcedure(file, code, ip, recursive);
+}
+
+static bool BlimpInstruction_Returns(const Instruction *instr)
+{
+    switch (instr->type) {
+        case INSTR_SEND:
+            return ((SEND *)instr)->flags & SEND_TAIL;
+        case INSTR_SENDTO:
+            return ((SENDTO *)instr)->flags & SEND_TAIL;
+        case INSTR_CALL:
+            return ((CALL *)instr)->flags & SEND_TAIL;
+        case INSTR_CALLTO:
+            return ((CALLTO *)instr)->flags & SEND_TAIL;
+        case INSTR_RET:
+            return true;
+        default:
+            return false;
+    }
+}
+
+const Instruction *BlimpInstruction_Next(const Instruction *instr)
+{
+    if (BlimpInstruction_Returns(instr)) {
+        // If the instruction would cause a return, it is the last instruction
+        // in it's procedure and has no next instruction.
+        return NULL;
+    } else {
+        return Instruction_Next(instr);
+    }
 }

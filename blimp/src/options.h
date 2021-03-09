@@ -23,6 +23,7 @@ typedef struct {
     bool no_history_limit;
 
     bool implicit_prelude;
+    bool debug;
 } Options;
 
 void DefaultOptions(Options *options);
