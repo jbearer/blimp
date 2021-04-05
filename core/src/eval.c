@@ -1,6 +1,28 @@
 #include "internal/blimp.h"
 #include "internal/eval.h"
 
+static inline Status LoopDetected(
+    Blimp *blimp, const Instruction *ip, const Symbol *sym)
+{
+    // If we're trying to send to a symbol that points to itself, we have a
+    // guaranteed infinite loop.
+    if (blimp->options.loop_errors) {
+        // If runtime loop checking is enabled, report the infinite loop as an
+        // error.
+        return Blimp_RuntimeErrorMsg(
+            blimp, BLIMP_INFINITE_LOOP,
+            "loop detected: %s -> %s", sym->name, sym->name);
+    } else {
+        // If runtime loop checking is disabled, then we adhere strictly to the
+        // standard and continue executing the infinite loop. However, this
+        // means we will not be returning to the main interpreter loop in
+        // ExecuteFrom(), so any pended signals will not be handled in a short
+        // and bounded period of time unless we handle signals now, in this
+        // inner loop.
+        return HandleSignals(&blimp->signals, ip);
+    }
+}
+
 // Execute a SEND. If the SEND results in a jump to another procedure (for
 // example, a send to a block object causes execution to jump to that object's
 // message handler) then the runtime is prepared to execute that procedure, and
@@ -38,6 +60,10 @@ static Status ExecuteSend(
 
         Object *value;
         if (ScopedObject_Get(scope, sym, &value) == BLIMP_OK) {
+            if (value == (Object *)sym) {
+                TRY(LoopDetected(blimp, *jump_to, sym));
+            }
+
             receiver = BlimpObject_Borrow(value);
                 // If `sym` has a value in this scope, then we simply forward
                 // the same message to that value.
@@ -258,6 +284,7 @@ static Status TryConstantElision(
     Object **receiver_ptr,
     ScopedObject *scope,
     const Bytecode *executing,
+    const Instruction *ip,
     Object **tmp_receiver)
 {
     Object *receiver = BlimpObject_Borrow(*receiver_ptr);
@@ -274,6 +301,8 @@ static Status TryConstantElision(
     // dereferenced receiver for the execution of this send.
     ScopedObject *owner;
         // Scope owning the receiver symbol.
+    Object *value;
+        // The value of the receiver symbol in the owner scope.
     bool is_const = true;
         // Whether all the symbols we have dereferenced so far are
         // constant.
@@ -288,10 +317,15 @@ static Status TryConstantElision(
         ScopedObject_Lookup(
             scope,
             (const Symbol *)receiver,
-            &receiver,
+            &value,
             &owner,
             &receiver_is_const)
     ) {
+        if (receiver == value) {
+            TRY(LoopDetected(blimp, ip, (const Symbol *)receiver));
+        }
+        receiver = value;
+
         is_const &= receiver_is_const;
 
         BlimpObject_Borrow(receiver);
@@ -363,6 +397,8 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
         bool use_result =
             ip->result_type == RESULT_USE ||
             (ip->result_type == RESULT_INHERIT && sp->use_result);
+
+        assert(Bytecode_Contains(sp->executing, ip));
 
         switch (ip->type) {
             case INSTR_SYMI: {
@@ -668,6 +704,7 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                         &instr->receiver,
                         sp->scope,
                         sp->executing,
+                        ip,
                         &receiver
                     ) != BLIMP_OK)
                 {
@@ -710,6 +747,7 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                         &instr->receiver,
                         instr->scope,
                         sp->executing,
+                        ip,
                         &receiver)
                     != BLIMP_OK)
                 {
@@ -877,7 +915,7 @@ PRIVATE Status Send(
     BlimpObject_Borrow(receiver);
     BlimpObject_Borrow(message);
 
-    const Instruction *jump_to;
+    const Instruction *jump_to = NULL;
     if (ExecuteSend(
             blimp,
             scope,

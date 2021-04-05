@@ -256,6 +256,23 @@ typedef struct {
      * This option is disabled by default.
      */
     bool inlining;
+
+    /**
+     * \brief Treat infinite loops as errors.
+     *
+     * When enabled, the interpreter may return an error if it detects that a
+     * computation will result in evaluating an infinite loop. This differs from
+     * the standard behavior, where the interpreter would simply execute the
+     * loop forever, never returning.
+     *
+     * Note that not all infinite loops can be easily detected, so the
+     * interpreter is conservative: it will only report those loops which it can
+     * detect efficiently, and it will never report an infinite loop where there
+     * isn't one.
+     *
+     * This option is disabled by default.
+     */
+    bool loop_errors;
 } BlimpOptions;
 
 extern const BlimpOptions DEFAULT_BLIMP_OPTIONS;
@@ -354,6 +371,7 @@ typedef enum BlimpErrorCode {
     BLIMP_MUST_BE_SYMBOL,
     BLIMP_INVALID_OBJECT_TYPE,
     BLIMP_STACK_OVERFLOW,
+    BLIMP_INFINITE_LOOP,
     BLIMP_ILLEGAL_SCOPE,
     BLIMP_OPTIMIZED_AWAY,
 

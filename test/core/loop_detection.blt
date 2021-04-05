@@ -1,0 +1,7 @@
+#: --skip-racket -floop-errors
+
+loop{^} loop;
+
+!expect_error {
+    loop[]
+}

@@ -110,4 +110,10 @@ static inline Instruction *Bytecode_Get(Bytecode *code, size_t offset)
     return (Instruction *)((char *)code->instructions + offset);
 }
 
+static inline bool Bytecode_Contains(
+    const Bytecode *code, const Instruction *instr)
+{
+    return Bytecode_Begin(code) <= instr && instr < Bytecode_End(code);
+}
+
 #endif

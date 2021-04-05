@@ -13,6 +13,7 @@ const BlimpOptions DEFAULT_BLIMP_OPTIONS = {
     .tail_call_elimination  = true,
     .constant_elision       = false,
     .inlining               = false,
+    .loop_errors            = false,
 };
 
 const char *BLIMP_OPTIONS_USAGE =
@@ -228,6 +229,21 @@ const char *BLIMP_OPTIONS_USAGE =
     "        is first determined to be a constant.\n"
     "\n"
     "        This option is disabled by default.\n"
+    "\n"
+    "    [no-]loop-errors\n"
+    "        Treat infinite loops as errors.\n"
+    "\n"
+    "        When enabled, the interpreter may return an error if it detects\n"
+    "        that a computation will result in evaluating an infinite loop.\n"
+    "        This differs from the standard behavior, where the interpreter\n"
+    "        would simply execute the loop forever, never returning.\n"
+    "  \n"
+    "        Note that not all infinite loops can be easily detected, so the\n"
+    "        interpreter is conservative: it will only report those loops\n"
+    "        which it can detect efficiently, and it will never report an\n"
+    "       infinite loop where there isn't one.\n"
+    "  \n"
+    "       This option is disabled by default.\n"
 ;
 
 static const char *ParseUInt(const char *value, size_t *result)
@@ -355,6 +371,9 @@ const char *Blimp_ParseOption(const char *str, BlimpOptions *options)
         return NULL;
     } else if (strncmp("inlining", option, option_len) == 0) {
         options->inlining = !negate;
+        return NULL;
+    } else if (strncmp("loop-errors", option, option_len) == 0) {
+        options->loop_errors = !negate;
         return NULL;
     } else {
         return "unknown option";
