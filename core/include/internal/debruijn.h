@@ -52,6 +52,21 @@ PRIVATE void DBMap_Destroy(DeBruijnMap *map);
 PRIVATE Status DBMap_Push(DeBruijnMap *map, void *identifier);
 
 /**
+ * \brief Set the identifier associated with a given nested scope.
+ *
+ * \pre `identifier < DBMap_Size(map)
+ */
+PRIVATE void DBMap_Set(DeBruijnMap *map, size_t index, void *identifier);
+
+/**
+ * \brief Ensure `map` is at least as large as the given size.
+ *
+ * New nested scopes will be added as needed, and they will be associated with
+ * the given identifier.
+ */
+PRIVATE Status DBMap_Fill(DeBruijnMap *map, size_t size, void *identifier);
+
+/**
  * \brief Remove the identifier for the innermost scope currently on the stack.
  *
  * \pre `map` must not be empty.

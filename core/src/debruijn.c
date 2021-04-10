@@ -27,6 +27,30 @@ Status DBMap_Push(DeBruijnMap *map, void *value)
     return BLIMP_OK;
 }
 
+void DBMap_Set(DeBruijnMap *map, size_t index, void *identifier)
+{
+    assert(index < map->size);
+    map->entries[map->size - index - 1] = identifier;
+}
+
+Status DBMap_Fill(DeBruijnMap *map, size_t size, void *identifier)
+{
+    if (map->size < size) {
+        if (map->capacity < size) {
+            TRY(Realloc(map->blimp, size*sizeof(void *), &map->entries));
+            map->capacity = size;
+        }
+
+        for (size_t i = map->size; i < size; ++i) {
+            map->entries[i] = identifier;
+        }
+
+        map->size = size;
+    }
+
+    return BLIMP_OK;
+}
+
 Status DBMap_Shift(DeBruijnMap *map, void *value)
 {
     // Increase the capacity if necessary.

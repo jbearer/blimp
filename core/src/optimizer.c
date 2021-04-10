@@ -143,6 +143,12 @@ Status Optimizer_Begin(
     DeBruijnMap *inherited_messages = &scope->captures;
     ScopedObject *owner = scope;
         // The object which owns the current capture.
+    if (DBMap_Fill(&opt->messages, DBMap_Size(inherited_messages), NULL)
+            != BLIMP_OK)
+    {
+        Optimizer_End(opt, NULL);
+        return Reraise(blimp);
+    }
     for (size_t i = 0; i < DBMap_Size(inherited_messages); ++i) {
         SymbolicObject *obj;
         if (SymbolicObject_New(opt, &obj) != BLIMP_OK) {
@@ -162,8 +168,7 @@ Status Optimizer_Begin(
             obj->value_type = VALUE_OBJECT;
 
             // Get the value of the object from `scope`s captured messages.
-            Ref *ref = DBMap_Resolve(
-                inherited_messages, DBMap_Size(inherited_messages) - i - 1);
+            Ref *ref = DBMap_Resolve(inherited_messages, i);
             if (ref) {
                 if (Object_Type(ref->to) == OBJ_SYMBOL) {
                     obj->value_type = VALUE_SYMBOL;
@@ -175,10 +180,7 @@ Status Optimizer_Begin(
         }
 
         // Add the SymbolicObject to the symbolic stack of captured messages.
-        if (DBMap_Push(&opt->messages, obj) != BLIMP_OK) {
-            Optimizer_End(opt, NULL);
-            return Reraise(blimp);
-        }
+        DBMap_Set(&opt->messages, i, obj);
 
         owner = owner->parent;
     }
