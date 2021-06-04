@@ -136,6 +136,11 @@ Status BlimpExpr_Resolve(Blimp *blimp, Expr *expr)
     return BLIMP_OK;
 }
 
+bool BlimpExpr_HasSourceRange(const Expr *expr)
+{
+    return expr->range.start.file != NULL;
+}
+
 void BlimpExpr_SetSourceRange(Expr *expr, const SourceRange *range)
 {
     expr->range = *range;

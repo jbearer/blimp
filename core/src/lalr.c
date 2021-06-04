@@ -2893,7 +2893,9 @@ static Status ParseStream(
                     Vector_Destroy(&fragment.sub_trees);
                     goto error;
                 }
-                BlimpExpr_SetSourceRange(fragment.parsed, ctx.range);
+                if (!BlimpExpr_HasSourceRange(fragment.parsed)) {
+                    BlimpExpr_SetSourceRange(fragment.parsed, ctx.range);
+                }
 
                 // Push the new expression onto the output stack, in place of
                 // sub-trees taht we removed.

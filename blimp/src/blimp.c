@@ -492,7 +492,7 @@ int main(int argc, char *const *argv)
             case FLAG_IMPORT_PATH:
                 options.import_path = realloc(
                     options.import_path,
-                    (options.import_path_len + 1)*sizeof(char *)
+                    ++options.import_path_len * sizeof(char *)
                 );
                 if (options.import_path == NULL) {
                     perror("could not allocate import path");

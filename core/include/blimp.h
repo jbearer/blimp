@@ -782,6 +782,7 @@ BlimpStatus BlimpExpr_NewBlock(
 BlimpStatus BlimpExpr_NewSend(
     Blimp *blimp, BlimpExpr *receiver, BlimpExpr *message, BlimpExpr **expr);
 
+bool BlimpExpr_HasSourceRange(const BlimpExpr *expr);
 void BlimpExpr_SetSourceRange(BlimpExpr *expr, const BlimpSourceRange *range);
 
 BlimpStatus BlimpExpr_ParseSymbol(BlimpExpr *expr, const BlimpSymbol **sym);
