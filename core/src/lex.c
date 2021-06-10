@@ -81,7 +81,7 @@
 // Tokens
 //
 
-static bool IsOperatorChar(int c)
+bool IsOperatorChar(int c)
 {
     switch (c) {
         case '~':
@@ -112,28 +112,13 @@ static bool IsOperatorChar(int c)
     }
 }
 
-static bool IsIdentifierChar(int c)
+bool IsIdentifierChar(int c)
 {
     return c == '_'
         || ('a' <= c && c <= 'z')
         || ('A' <= c && c <= 'Z')
         || ('0' <= c && c <= '9');
 }
-
-typedef Status(*TokenHandler)(
-    Blimp *blimp, const char *match, size_t length, char **new_match);
-
-// A TrieNode is a state in the token-matching state machine.
-typedef struct TrieNode {
-    Terminal terminal;
-        // The token type matched by this state, or TOK_INVALID if this is not
-        // an accepting state.
-    TokenHandler handler;
-        // Optional function to post-process a matched token string.
-    struct TrieNode *children[NUM_CHARS];
-        // States to transition to indexed by the next character we see. If a
-        // character `c` is not expessed, then `children[c]` is `NULL`.
-} TrieNode;
 
 // Static, isolated state machines matching identifier symbols (IdentifierChar+)
 // and operator symbols (OperatorChar+). These are not part of the overall
@@ -143,10 +128,10 @@ typedef struct TrieNode {
 //
 // Call InitStaticTokens() to ensure these are initialized before trying to use
 // them.
-static TrieNode tok_identifier;
-static TrieNode tok_operator;
+TrieNode tok_identifier;
+TrieNode tok_operator;
 
-static void InitStaticTokens(void)
+void InitStaticTokens(void)
 {
     static bool initialized = false;
 
@@ -363,28 +348,6 @@ void TokenTrie_Destroy(TokenTrie *trie)
     (void)trie;
 }
 
-static Status HandleToken(
-    Blimp *blimp,
-    TokenHandler handler,
-    const char *string,
-    size_t length,
-    const Symbol **sym)
-{
-    if (handler == NULL) {
-        // If there is no handler, just use the given string as-is.
-        return Blimp_GetSymbolWithLength(blimp, string, length, sym);
-    }
-
-    // If there is a handler, call it to get a new, processed, name.
-    char *name;
-    TRY(handler(blimp, string, length, &name));
-
-    Status ret = Blimp_GetSymbol(blimp, name, sym);
-
-    free(name);
-    return ret;
-}
-
 Status TokenTrie_GetToken(const TokenTrie *trie, const char *string, Token *tok)
 {
     // Follow `string` all the way through `trie` and see if we end up in an
@@ -456,6 +419,17 @@ Status TokenTrie_InsertToken(TokenTrie *trie, const char *string, Token *tok)
         trie->blimp, (*node)->handler, string, strlen(string), &tok->symbol));
 
     return BLIMP_OK;
+}
+
+const char *StringOfTokenType(TokenType t)
+{
+    switch (t) {
+        case TOK_MSG_NAME:  return "^symbol";
+        case TOK_MSG_THIS:  return "^";
+        case TOK_SYMBOL:    return "symbol";
+        case TOK_EOF:       return "end of input";
+        default:            return "invalid token";
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -620,7 +594,7 @@ static Status StringStream_New(
     return BLIMP_OK;
 }
 
-static Status Stream_Next(Stream *stream, int *c)
+Status Stream_Next(Stream *stream, int *c)
 {
     TRY(stream->Next(stream, c));
     if (*c == EOF) {
@@ -631,7 +605,7 @@ static Status Stream_Next(Stream *stream, int *c)
     return BLIMP_OK;
 }
 
-static SourceLoc Stream_Location(Stream *stream)
+SourceLoc Stream_Location(Stream *stream)
 {
     return stream->Location(stream);
 }
@@ -645,25 +619,6 @@ void Stream_Delete(Stream *stream)
 // Lexer
 //
 
-const char *StringOfTokenType(TokenType t)
-{
-    switch (t) {
-        case TOK_MSG_NAME:  return "^symbol";
-        case TOK_MSG_THIS:  return "^";
-        case TOK_SYMBOL:    return "symbol";
-        case TOK_EOF:       return "end of input";
-        default:            return "invalid token";
-    }
-}
-
-BlimpErrorCode UnexpectedTokenError(TokenType t)
-{
-    switch (t) {
-        case TOK_EOF: return BLIMP_UNEXPECTED_EOF;
-        default:      return BLIMP_UNEXPECTED_TOKEN;
-    }
-}
-
 void Lexer_Init(Lexer *lex, Blimp *blimp, Stream *input)
 {
     lex->blimp = blimp;
@@ -672,9 +627,8 @@ void Lexer_Init(Lexer *lex, Blimp *blimp, Stream *input)
     Vector_Init(blimp, &lex->look_ahead_chars, sizeof(char), NULL);
     Vector_Init(blimp, &lex->look_ahead_locs, sizeof(SourceLoc), NULL);
     lex->look_ahead_end = 0;
+    lex->peeked_len = 0;
     lex->eof = false;
-
-    lex->peek.type = TOK_INVALID;
     lex->tokens = &blimp->tokens;
 }
 
@@ -684,257 +638,25 @@ void Lexer_Destroy(Lexer *lex)
     Vector_Destroy(&lex->look_ahead_locs);
 }
 
-static Status Lexer_LookAhead(Lexer *lex, int *c)
-{
-    if (lex->look_ahead_end < Vector_Length(&lex->look_ahead_chars)) {
-        // If there is a character in the look-ahead buffer which has not yet
-        // been processed as part of the current token, return it and increment
-        // the look-ahead pointer.
-        *c = *(char *)Vector_Index(
-            &lex->look_ahead_chars, lex->look_ahead_end++);
-        return BLIMP_OK;
-    }
-    if (lex->eof) {
-        // If there are no extra characters in the look-ahead buffer and the
-        // input stream as at end-of-file, return EOF_CHAR.
-        *c = EOF_CHAR;
-        return BLIMP_OK;
-    }
-
-    // Otherwise, get a character from the input stream.
-    SourceLoc loc = Stream_Location(lex->input);
-    TRY(Stream_Next(lex->input, c));
-    if (*c == EOF_CHAR) {
-        lex->eof = true;
-            // Remember that the stream has reached end-of-file so we don't try
-            // to read more from it.
-        return BLIMP_OK;
-    }
-
-    char truncated = (char)*c;
-        // If the character is not EOF_CHAR, then it is a valid `char`.
-
-    // Add the new character to the look-ahead buffer so we remember it in case
-    // we have to backtrack.
-    TRY(Vector_PushBack(&lex->look_ahead_chars, &truncated));
-    TRY(Vector_PushBack(&lex->look_ahead_locs, &loc));
-    ++lex->look_ahead_end;
-
-    return BLIMP_OK;
-}
-
-static Status Lexer_Consume(
-    Lexer *lex,
-    size_t length,
+Status HandleToken(
+    Blimp *blimp,
     TokenHandler handler,
-    const Symbol **sym,
-    SourceRange *range)
+    const char *string,
+    size_t length,
+    const Symbol **sym)
 {
-    if (length > lex->look_ahead_end) {
-        length = lex->look_ahead_end;
-            // Since we don't add the EOF character to the look-ahead buffer,
-            // `length` can exceed the number of buffered characters if the
-            // matched token includes EOF. We will ignore the EOF character in
-            // the matched symbol, since it is not a real character anyways.
+    if (handler == NULL) {
+        // If there is no handler, just use the given string as-is.
+        return Blimp_GetSymbolWithLength(blimp, string, length, sym);
     }
 
-    assert(lex->look_ahead_end <= Vector_Length(&lex->look_ahead_chars));
-    assert(Vector_Length(&lex->look_ahead_chars) ==
-           Vector_Length(&lex->look_ahead_locs));
+    // If there is a handler, call it to get a new, processed, name.
+    char *name;
+    TRY(handler(blimp, string, length, &name));
 
-    // Get the symbol corresponding to the prefix of `look_ahead_chars` with the
-    // length we're consuming.
-    TRY(HandleToken(
-        lex->blimp, handler, Vector_Data(&lex->look_ahead_chars), length, sym));
+    Status ret = Blimp_GetSymbol(blimp, name, sym);
 
-    if (lex->look_ahead_end == 0) {
-        // If nothing is buffered, get the source location from the input
-        // stream.
-        assert(length == 0);
-        range->start = Stream_Location(lex->input);
-        range->end = range->start;
-    } else {
-        // Otherwise, the source range comes from the buffered locations.
-        range->start = *(SourceLoc *)Vector_Index(&lex->look_ahead_locs, 0);
-        if (length == 0) {
-            range->end = range->start;
-        } else {
-            range->end = *(SourceLoc *)Vector_Index(
-                &lex->look_ahead_locs, length-1);
-        }
-    }
-
-    // Drop the characters and corresponding locations that we consumed.
-    Vector_Shift(&lex->look_ahead_chars, length);
-    Vector_Shift(&lex->look_ahead_locs, length);
-    lex->look_ahead_end = 0;
-
-    return BLIMP_OK;
-}
-
-static inline void Lexer_Backtrack(Lexer *lex)
-{
-    lex->look_ahead_end = 0;
-}
-
-static inline size_t Lexer_LookAheadLength(const Lexer *lex)
-{
-    return lex->look_ahead_end;
-}
-
-static inline SourceRange Lexer_LookAheadRange(const Lexer *lex)
-{
-    if (lex->look_ahead_end == 0) {
-        // If nothing is buffered, get the source location from the input
-        // stream.
-        return (SourceRange) {
-            .start = Stream_Location(lex->input),
-            .end   = Stream_Location(lex->input),
-        };
-    } else {
-        // Otherwise, the source range comes from the buffered locations.
-        return (SourceRange) {
-            .start = *(SourceLoc *)Vector_Index(&lex->look_ahead_locs, 0),
-            .end   = *(SourceLoc *)Vector_Index(
-                            &lex->look_ahead_locs, lex->look_ahead_end-1),
-        };
-    }
-}
-
-static inline const char *Lexer_LookAheadChars(const Lexer *lex)
-{
-    return Vector_Data(&lex->look_ahead_chars);
-}
-
-// A matcher encapsulates a path through a TokenTrie. It can be used to traverse
-// a trie and extract a single result at the end.
-typedef struct {
-    TrieNode *curr;
-    size_t curr_len;
-    TrieNode *match;
-    size_t match_len;
-} Matcher;
-
-static inline void Matcher_Init(Matcher *m, TrieNode *root)
-{
-    m->curr = root;
-    m->curr_len = 1;
-        // The first character of input determines what root node to use, so by
-        // the time we have a root, we have already seen at least 1 character.
-    m->match = NULL;
-    m->match_len = 0;
-}
-
-// Advance the Matcher one character further down the trie. Returns `true` if
-// the Matcher might accept more characters.
-static inline bool Matcher_Next(Matcher *m, int c)
-{
-    if (m->curr == NULL) {
-        return false;
-    }
-
-    if (m->curr->terminal != TOK_INVALID) {
-        // If we are currently in an accepting state, record the possible match.
-        m->match = m->curr;
-        m->match_len = m->curr_len;
-    }
-
-    ++m->curr_len;
-    m->curr = m->curr->children[c];
-    return m->curr != NULL;
-}
-
-static inline size_t Matcher_MatchLength(const Matcher *m)
-{
-    return m->match_len;
-        // Returns 0 if there is no match.
-}
-
-static inline Terminal Matcher_MatchTerminal(const Matcher *m)
-{
-    return m->match->terminal;
-}
-
-static inline TokenHandler Matcher_MatchHandler(const Matcher *m)
-{
-    return m->match->handler;
-}
-
-Status Lexer_Peek(Lexer *lex, Token *tok)
-{
-    InitStaticTokens();
-
-    if (lex->peek.type != TOK_INVALID) {
-        // If we already have a peeked token buffered, just return that.
-        *tok = lex->peek;
-        return BLIMP_OK;
-    }
-
-    // No peeked token available, read a new token from the stream. We will keep
-    // lexing and ignoring new tokens until we get to a non-whitespace token.
-    do {
-        int c;
-        Matcher tok_match;
-        Matcher sym_match;
-
-        // Get the first character in the input, which gives us a root trie
-        // node.
-        TRY(Lexer_LookAhead(lex, &c));
-        Matcher_Init(&tok_match, lex->tokens->nodes[c]);
-
-        // If the first character is an identifier or operator character, then
-        // we could match a non-empty prefix of the input with a symbol token.
-        // We will proceed with both matching strategies (`tok_match` and
-        // `sym_match`) in parallel, and use whichever one ends up being longer
-        // if they both match.
-        if (IsIdentifierChar(c)) {
-            Matcher_Init(&sym_match, &tok_identifier);
-        } else if (IsOperatorChar(c)) {
-            Matcher_Init(&sym_match, &tok_operator);
-        } else {
-            Matcher_Init(&sym_match, NULL);
-        }
-
-        // Continue reading input until neither matcher can advance further.
-        do {
-            TRY(Lexer_LookAhead(lex, &c));
-        } while (Matcher_Next(&tok_match, c) | Matcher_Next(&sym_match, c));
-
-        // Take the longest match.
-        Matcher *match = &tok_match;
-        if (Matcher_MatchLength(&sym_match) > Matcher_MatchLength(&tok_match)) {
-            match = &sym_match;
-        }
-
-        if (Matcher_MatchLength(match) == 0) {
-            Lexer_Backtrack(lex);
-            return ErrorFrom(lex->blimp, Lexer_LookAheadRange(lex),
-                BLIMP_INVALID_CHARACTER,
-                "invalid characters '%.*s'",
-                (int)Lexer_LookAheadLength(lex),
-                Lexer_LookAheadChars(lex)
-            );
-        }
-
-        // Consume the characters we matched.
-        tok->type = Matcher_MatchTerminal(match);
-        TRY(Lexer_Consume(
-            lex,
-            Matcher_MatchLength(match),
-            Matcher_MatchHandler(match),
-            &tok->symbol,
-            &tok->range
-        ));
-    } while (tok->type == TOK_WHITESPACE);
-
-    lex->peek = *tok;
-    return BLIMP_OK;
-}
-
-Status Lexer_Next(Lexer *lex, Token *tok)
-{
-    Status ret = Lexer_Peek(lex, tok);
-    lex->peek.type = TOK_INVALID;
+    free(name);
     return ret;
 }
 

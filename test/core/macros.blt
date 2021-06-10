@@ -77,6 +77,18 @@
 !expect_eq my_keyword21 {^} bar;
 
 ################################################################################
+# Macros do not take effect until everything we have parsed has lower precedence
+# than the first token of the macro. And, new tokens introduced by the macro are
+# not lexed until the macro takes effect.
+#
+
+(
+    \> 3 {^ {7} `when_will_we_lex_this_token`} {{^`foo`}};
+    !expect_eq ({^} when_will_we_lex_this_token) `when_will_we_lex_this_token`
+);
+!expect_eq ({^} when_will_we_lex_this_token) `foo`;
+
+################################################################################
 # Defining a macro in the production tree for another macro.
 #
 
@@ -113,7 +125,7 @@
     }
 };
 
-!expect_eq define_in_expansion defined_in_expansion;
+!expect_eq define_in_expansion `defined_in_expansion`;
     # The use of `defined_in_expansion` in the expansion of
     # `define_in_expansion` does not itself get expanded to `foo`, because macro
     # expansions are not piped through the lexer, since they are already
@@ -159,7 +171,8 @@
 !expect_eq (bar-) foo;
 
 # If we try to use the macro defined in the expansion while in a nested
-# expression, it won't work.
+# expression, it won't expand, but neither will the newly defined token be
+# lexed, so we can use it as a normal symbol.
 \> 7 {^`define_in_expansion4`} {
     {
         ^`\\>`; ^`3`; ^`{`; ^`^`; ^`{`; ^`7`; ^`}`; ^`;`; ^`^`; ^`\`*\``; ^`}`; ^`{`;
@@ -168,13 +181,25 @@
         ^`bar`; ^`*`
     }
 };
+{
+    define_in_expansion4;
+    !expect_eq (bar*) bar;
+        # Here, bar* simply parses as a send `bar` `*`. Since `bar` is an
+        # undefined symbol, a reference to `bar` is passed to `*`, which is also
+        # an undefined symbol, so the result is a reference to `*` passed to the
+        # reference to `bar`, which sets `bar` to the reference to `*` and
+        # returns`bar`.
+    # Check that `bar` now contains a reference to `*`.
+    bar {foo};
+    !expect_eq (* []) foo;
 
-!expect_error {
-    !eval `{
-        define_in_expansion4;
-        bar*
-    }`
-};
+    !expect_eq * *
+}[];
+# Outside of the nested expression, we can still use * as a symbol as long as it
+# is not preceded by a term, since we only expect it as a token when preceded by
+# a term.
+!expect_eq * *;
+!expect_eq (bar*) foo;
 
 ################################################################################
 # Macros can be used as soon as the parser state is lower precedence than the
@@ -520,5 +545,63 @@ import macro_module;
 !expect_eq car(foo bar) foo;
 !expect_eq car(cdr(foo bar)) bar;
 !expect_eq car(cdr(foo bar baz)) bar;
+
+################################################################################
+# In a state where we expect only a symbol, any token should parse as a symbol,
+# even if it would normally parse as a special token.
+#
+
+\> 7 {^`token_or_symbol`} {{^`foo`}};
+
+\> 7 {^`'` `\`sym\``} {^toks
+    {
+        n_ref{^ ^};
+        n n_ref;
+        n_ref 0;
+
+        sym{^ ^};
+        ^toks {^tok
+            {
+                0{^{{
+                    n_ref 1
+                }}};
+                1{^{{
+                    sym{(^tok)};
+                    n_ref 2
+                }}};
+                n[] []
+            }[]
+        };
+
+        !expect_eq (sym[]) `token_or_symbol`;
+            # `token_or_symbol` did not get macro-expanded to `foo` because it
+            # was parsed as a symbol.
+
+        {^(sym[])}
+    }[]
+};
+
+!expect_eq token_or_symbol `foo`;
+!expect_eq 'token_or_symbol `foo`;
+    # TODO this should expand to `token_or_symbol`, not `foo`, but currently
+    # `token_or_symbol` gets expanded when used in the definition of the '
+    # macro. We can fix this by allowing parse trees to specify their non-
+    # terminal, e.g. {^(sym[]); symbol} or {^(sym[]); 7}, and parsing them as
+    # that non-terminal instead of as the start symbol.
+#!expect_eq ' + `+`;
+    # TODO this should work with this token, which is given a special meaning in
+    # a macro definition above.
+
+################################################################################
+# In a state where we are only expecting a specific token, any other input
+# should result in a parse error.
+#
+
+\> 7 {^`special_token1` `special_token2`} {{^ foo}};
+
+!expect_eq special_token1 special_token2 foo;
+!expect_error {
+    !eval `special_token1 foo`
+};
 
 .

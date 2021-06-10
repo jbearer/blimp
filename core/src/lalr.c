@@ -372,6 +372,34 @@
 // Whenever O changes, we check if `max(O) < P`. If it is, we regenerate the
 // parse table from the new grammar and switch to the new parse table.
 //
+////////////////////////////////////////////////////////////////////////////////
+// Dynamic and Context-Sensitive Lexing
+//
+// We allow dynamically added grammar rules to define new kinds of terminals,
+// which means the lexer also needs to be dynamic. It is easy to add new tokens
+// to the TokenTrie data structure used by the lexer (defined in lex.c). But
+// there is a problem: these tokens are added to the trie immediately, even if
+// we do not update the state machine used for parsing for some time, due to the
+// precedence of the added rules.
+//
+// To fix this, the lexer is aware of the current state of the parser, and will
+// only emit tokens which are expected in the current parser state (that is,
+// tokens which lead to a shift or accept action after performing any necessary
+// reductions).
+//
+// This behavior has an additional benefit for bl:mp, where the goal is to
+// create a friendly language for implementing DSLs. One can define tokens and
+// keywords which are meaningful in a particular DSL, and still use those same
+// keywords as identifiers outside of the DSL, because the lexer will not treat
+// them as special tokens if the parser state is not expecting those tokens.
+//
+// The algorithm for determining whether a token is expected in a particular
+// state is conceptually simple: just run the state machine until it finishes
+// reducing and reaches a shift, accept, or error action. However, the
+// performance challenges that come with doing this many times for each token we
+// parse make things somewhat more complicated. The optimizations are discussed
+// in detail in Matcher_Accept, which implements the algorithm.
+//
 
 #include "hash_map.h"
 #include "hash_set.h"
@@ -2583,6 +2611,400 @@ void Grammar_DumpVitals(FILE *file, const Grammar *grammar)
     StateMachine_Destroy(&table);
 }
 
+
+////////////////////////////////////////////////////////////////////////////////
+// Lexing
+//
+
+static Status Lexer_LookAhead(Lexer *lex, int *c)
+{
+    if (lex->look_ahead_end < Vector_Length(&lex->look_ahead_chars)) {
+        // If there is a character in the look-ahead buffer which has not yet
+        // been processed as part of the current token, return it and increment
+        // the look-ahead pointer.
+        *c = *(char *)Vector_Index(
+            &lex->look_ahead_chars, lex->look_ahead_end++);
+        return BLIMP_OK;
+    }
+    if (lex->eof) {
+        // If there are no extra characters in the look-ahead buffer and the
+        // input stream as at end-of-file, return EOF_CHAR.
+        *c = EOF_CHAR;
+        return BLIMP_OK;
+    }
+
+    // Otherwise, get a character from the input stream.
+    SourceLoc loc = Stream_Location(lex->input);
+    TRY(Stream_Next(lex->input, c));
+    if (*c == EOF_CHAR) {
+        lex->eof = true;
+            // Remember that the stream has reached end-of-file so we don't try
+            // to read more from it.
+        return BLIMP_OK;
+    }
+
+    char truncated = (char)*c;
+        // If the character is not EOF_CHAR, then it is a valid `char`.
+
+    // Add the new character to the look-ahead buffer so we remember it in case
+    // we have to backtrack.
+    TRY(Vector_PushBack(&lex->look_ahead_chars, &truncated));
+    TRY(Vector_PushBack(&lex->look_ahead_locs, &loc));
+    ++lex->look_ahead_end;
+
+    return BLIMP_OK;
+}
+
+static Status Lexer_Consume(
+    Lexer *lex,
+    size_t length,
+    TokenHandler handler,
+    const Symbol **sym,
+    SourceRange *range,
+    bool peek)
+{
+    if (length > lex->look_ahead_end) {
+        length = lex->look_ahead_end;
+            // Since we don't add the EOF character to the look-ahead buffer,
+            // `length` can exceed the number of buffered characters if the
+            // matched token includes EOF. We will ignore the EOF character in
+            // the matched symbol, since it is not a real character anyways.
+    }
+
+    assert(lex->look_ahead_end <= Vector_Length(&lex->look_ahead_chars));
+    assert(Vector_Length(&lex->look_ahead_chars) ==
+           Vector_Length(&lex->look_ahead_locs));
+
+    // Get the symbol corresponding to the prefix of `look_ahead_chars` with the
+    // length we're consuming.
+    TRY(HandleToken(
+        lex->blimp, handler, Vector_Data(&lex->look_ahead_chars), length, sym));
+
+    if (lex->look_ahead_end == 0) {
+        // If nothing is buffered, get the source location from the input
+        // stream.
+        assert(length == 0);
+        range->start = Stream_Location(lex->input);
+        range->end = range->start;
+    } else {
+        // Otherwise, the source range comes from the buffered locations.
+        range->start = *(SourceLoc *)Vector_Index(&lex->look_ahead_locs, 0);
+        if (length == 0) {
+            range->end = range->start;
+        } else {
+            range->end = *(SourceLoc *)Vector_Index(
+                &lex->look_ahead_locs, length-1);
+        }
+    }
+
+    if (peek) {
+        lex->peeked_len = length;
+    } else {
+        // Drop the characters and corresponding locations that we consumed.
+        Vector_Shift(&lex->look_ahead_chars, length);
+        Vector_Shift(&lex->look_ahead_locs, length);
+        lex->peeked_len = 0;
+    }
+    lex->look_ahead_end = 0;
+
+    return BLIMP_OK;
+}
+
+static inline void Lexer_Backtrack(Lexer *lex)
+{
+    lex->look_ahead_end = 0;
+}
+
+static inline size_t Lexer_LookAheadLength(const Lexer *lex)
+{
+    return lex->look_ahead_end;
+}
+
+static inline SourceRange Lexer_LookAheadRange(const Lexer *lex)
+{
+    if (lex->look_ahead_end == 0) {
+        // If nothing is buffered, get the source location from the input
+        // stream.
+        return (SourceRange) {
+            .start = Stream_Location(lex->input),
+            .end   = Stream_Location(lex->input),
+        };
+    } else {
+        // Otherwise, the source range comes from the buffered locations.
+        return (SourceRange) {
+            .start = *(SourceLoc *)Vector_Index(&lex->look_ahead_locs, 0),
+            .end   = *(SourceLoc *)Vector_Index(
+                            &lex->look_ahead_locs, lex->look_ahead_end-1),
+        };
+    }
+}
+
+static inline const char *Lexer_LookAheadChars(const Lexer *lex)
+{
+    return Vector_Data(&lex->look_ahead_chars);
+}
+
+// A matcher encapsulates a path through a TokenTrie. It can be used to traverse
+// a trie and extract a single result at the end.
+typedef struct {
+    TrieNode *curr;
+    size_t curr_len;
+    TrieNode *match;
+    size_t match_len;
+    const StateMachine *machine;
+    const Vector/*<size_t>*/ *stack;
+} Matcher;
+
+static inline void Matcher_Init(
+    Matcher *m,
+    TrieNode *root,
+    const StateMachine *machine,
+    const Vector/*<size_t>*/ *stack)
+{
+    m->curr = root;
+    m->curr_len = 1;
+        // The first character of input determines what root node to use, so by
+        // the time we have a root, we have already seen at least 1 character.
+    m->match = NULL;
+    m->match_len = 0;
+    m->machine = machine;
+    m->stack = stack;
+}
+
+// Is the matcher currently in an accepting state?
+static bool Matcher_Accept(const Matcher *m)
+{
+    if (m->curr->terminal == TOK_INVALID) {
+        return false;
+    }
+    if (m->curr->terminal == TOK_WHITESPACE) {
+        return true;
+    }
+    if (StateMachine_IsPseudoTerminal(m->machine, m->curr->terminal)) {
+        return false;
+    }
+
+    // If we have a valid, non-whitespace token, we will accept it if the parser
+    // is in a state where it can shift that token, after possibly performing
+    // some reductions. To check this, we simply run the state machine forward
+    // with the current token as input until we get to an action which is not a
+    // REDUCE. SHIFT and ACCEPT actions indicate that we should accept the
+    // token, while an ERROR action indicates that we are not expecting this
+    // token in the current parser state (for example, maybe the token is only
+    // meaningful in a particular DSL, and we are not currently parsing that
+    // DSL).
+    //
+    // Normally, running the state machine involves mutating the stack of
+    // states, as we pop states from the stack when we consume parse trees for
+    // reudctions and push new states onto the stack when we reduce a new parse
+    // tree. However, this function should not mutate the parser state, as we
+    // are only trying to decide if we can accept a hypothetical token. We might
+    // not be able to, or we might be able to but decide not to when we later
+    // find a longer token. Even if we do accept the token, we will run the
+    // state machine for real once we decide to accept the token.
+    //
+    // The obvious solution is to make a copy of the parser stack and run the
+    // state machine normally, mutating the copy. However, copying the stack
+    // many times for each token we shift is prohibitively expensive. And we
+    // don't even need to work on the whole stack; normally, we just need a
+    // small section near the top as we only perform a few reductions before
+    // shifting.
+    //
+    // Instead, we use a clever algorithm which does not mutate the stack. The
+    // algorithm is based on the following observation: the stack never grows
+    // after a reduction, and we will never again observe a state which was
+    // added to the stack during a reduction. This is because each reduction
+    // consumes at least one state from the stack before pushing exactly one new
+    // state on. The next reduction will therefore consume the new state before
+    // we ever have a chance to observe it. Therefore, instead of shrinking and
+    // growing the stack, we simply keep a pointer to the current, conceptual
+    // "top" of the stack, which points somewhere inside of the real, immutable
+    // stack. Everything below the pointer is consistent between the
+    // hypothetical stack and the real stack, because even the normal, mutating
+    // algorithm would not have written in that area yet. Each reduction leaves
+    // the pointer alone or moves it farther down the stack, so the pointer is
+    // always pointing at consistent data.
+    //
+    // Start the machine from the state which is currently on top of the stack.
+    const size_t *sp = Vector_RIndex(m->stack, 0);
+    const State *state = StateMachine_GetState(m->machine, *sp);
+    while (true) {
+        Action action = state->actions[m->curr->terminal];
+        switch (Action_Type(action)) {
+            case SHIFT:
+            case ACCEPT:
+                return true;
+            case ERROR:
+                return (bool)Action_Data(action);
+                    // If the error represents a conflict in the grammar, we
+                    // return `true` indicating to go ahead with the parse and
+                    // produce this error. We only ignore tokens which are not
+                    // expected at all in this parser state; unexpected token
+                    // errors have a data field of 0.
+            case REDUCE:
+                break;
+        }
+
+        const Production *production = (const Production *)Action_Data(action);
+
+        // Here, we would pop from the stack states corresponding to each of the
+        // consumed parse tree fragments. In the immutable version of the
+        // algorithm, we simply decrement the stack pointer to represent the new
+        // top of the hypothetical stack.
+        //
+        // Before this decrement, `sp` might be pointing to an inconsistent
+        // state, because we did a hypothetical push at the end of the last
+        // reduction without updating the real stack. But everything below `sp`
+        // is still consistent, and this operation will decrement `sp` by at
+        // least 1, moving it back into the consistent region.
+        assert(production->num_symbols > 0);
+        sp -= production->num_symbols;
+
+        // Popping the states corresponding to the consumed fragments leaves us
+        // in the state we were in before we transitioned based on all of those
+        // sub-trees. Now we once again transition out of that state, this time
+        // on the non-terminal that the reduction just produced.
+        const State *tmp_state = StateMachine_GetState(m->machine, *sp);
+        assert(tmp_state->gotos[production->non_terminal] != (size_t)-1);
+        state = StateMachine_GetState(
+            m->machine, tmp_state->gotos[production->non_terminal]);
+        ++sp;
+            // Instead of actually pushing the new state onto the stack, which
+            // would corrupt the real stack, we just increment the stack pointer
+            // to reflect the fact that we have pushed onto the hypothetical
+            // stack. This means that the top of the hypothetical stack might
+            // not be `*sp`, since `sp` points into the real stack. But we will
+            // never read `*sp`, because the next reduction will decrement `sp`
+            // before reading it.
+    }
+}
+
+// Advance the Matcher one character further down the trie. Returns `true` if
+// the Matcher might accept more characters.
+static inline bool Matcher_Next(Matcher *m, int c)
+{
+    if (m->curr == NULL) {
+        return false;
+    }
+
+    if (Matcher_Accept(m)) {
+        // If we are currently in an accepting state (including tokens which we
+        // will accept internally but then skip, such as whitespace), record the
+        // possible match.
+        m->match = m->curr;
+        m->match_len = m->curr_len;
+    }
+
+    ++m->curr_len;
+    m->curr = m->curr->children[c];
+    return m->curr != NULL;
+}
+
+static inline size_t Matcher_MatchLength(const Matcher *m)
+{
+    return m->match_len;
+        // Returns 0 if there is no match.
+}
+
+static inline Terminal Matcher_MatchTerminal(const Matcher *m)
+{
+    return m->match->terminal;
+}
+
+static inline TokenHandler Matcher_MatchHandler(const Matcher *m)
+{
+    return m->match->handler;
+}
+
+static Status Lexer_Lex(
+    Lexer *lex,
+    Token *tok,
+    const StateMachine *m,
+    const Vector *stack,
+    bool peek)
+{
+    InitStaticTokens();
+
+    // No peeked token available, read a new token from the stream. We will keep
+    // lexing and ignoring new tokens until we get to a non-whitespace token.
+    do {
+        int c;
+        Matcher tok_match;
+        Matcher sym_match;
+
+        // Get the first character in the input, which gives us a root trie
+        // node.
+        TRY(Lexer_LookAhead(lex, &c));
+        Matcher_Init(&tok_match, lex->tokens->nodes[c], m, stack);
+
+        // If the first character is an identifier or operator character, then
+        // we could match a non-empty prefix of the input with a symbol token.
+        // We will proceed with both matching strategies (`tok_match` and
+        // `sym_match`) in parallel, and use whichever one ends up being longer
+        // if they both match.
+        if (IsIdentifierChar(c)) {
+            Matcher_Init(&sym_match, &tok_identifier, m, stack);
+        } else if (IsOperatorChar(c)) {
+            Matcher_Init(&sym_match, &tok_operator, m, stack);
+        } else {
+            Matcher_Init(&sym_match, NULL, m, stack);
+        }
+
+        // Continue reading input until neither matcher can advance further.
+        do {
+            TRY(Lexer_LookAhead(lex, &c));
+        } while (Matcher_Next(&tok_match, c) | Matcher_Next(&sym_match, c));
+
+        // Take the longest match.
+        Matcher *match = &tok_match;
+        if (Matcher_MatchLength(&sym_match) > Matcher_MatchLength(&tok_match)) {
+            match = &sym_match;
+        }
+
+        if (Matcher_MatchLength(match) == 0) {
+            int length = Lexer_LookAheadLength(lex);
+            SourceRange range = Lexer_LookAheadRange(lex);
+
+            Status err;
+            if (length == 0) {
+                err = ErrorFrom(lex->blimp, range,
+                    BLIMP_UNEXPECTED_EOF, "unexpected end of input");
+            } else {
+                err = ErrorFrom(lex->blimp, Lexer_LookAheadRange(lex),
+                    BLIMP_INVALID_CHARACTER,
+                    "invalid characters '%.*s'",
+                    (int)Lexer_LookAheadLength(lex),
+                    Lexer_LookAheadChars(lex)
+                );
+            }
+
+            Lexer_Backtrack(lex);
+            return err;
+        }
+
+        // Consume the characters we matched.
+        tok->type = Matcher_MatchTerminal(match);
+        TRY(Lexer_Consume(
+            lex,
+            Matcher_MatchLength(match),
+            Matcher_MatchHandler(match),
+            &tok->symbol,
+            &tok->range,
+            peek && tok->type != TOK_WHITESPACE
+        ));
+    } while (tok->type == TOK_WHITESPACE);
+
+    return BLIMP_OK;
+}
+
+static inline void Lexer_Commit(Lexer *lex)
+{
+    // Drop the characters and corresponding locations that we consumed.
+    Vector_Shift(&lex->look_ahead_chars, lex->peeked_len);
+    Vector_Shift(&lex->look_ahead_locs, lex->peeked_len);
+    lex->peeked_len = 0;
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Parsing
 //
@@ -2633,7 +3055,10 @@ typedef struct {
     } type;
 
     union {
-        Lexer *lexer;
+        struct {
+            Lexer *lexer;
+            Token cache;
+        } lexer;
         struct {
             const Vector/*<ParseTree>*/ *trees;
             size_t offset;
@@ -2644,7 +3069,8 @@ typedef struct {
 static void ParseTreeStream_InitLexer(ParseTreeStream *stream, Lexer *lexer)
 {
     stream->type = STREAM_LEXER;
-    stream->lexer = lexer;
+    stream->lexer.lexer = lexer;
+    stream->lexer.cache.type = TOK_INVALID;
 }
 
 static void ParseTreeStream_InitVector(
@@ -2655,11 +3081,11 @@ static void ParseTreeStream_InitVector(
     stream->vector.offset = 0;
 }
 
-static Blimp *ParseTreeStream_GetBlimp(ParseTreeStream *stream)
+static inline Blimp *ParseTreeStream_GetBlimp(ParseTreeStream *stream)
 {
     switch (stream->type) {
         case STREAM_LEXER:
-            return stream->lexer->blimp;
+            return stream->lexer.lexer->blimp;
         case STREAM_VECTOR:
             return Vector_GetBlimp(stream->vector.trees);
         default:
@@ -2667,18 +3093,52 @@ static Blimp *ParseTreeStream_GetBlimp(ParseTreeStream *stream)
     }
 }
 
-static Status ParseTreeStream_Peek(ParseTreeStream *stream, ParseTree *tree)
+static inline void ParseTreeStream_Invalidate(ParseTreeStream *stream)
+{
+    switch (stream->type) {
+        case STREAM_LEXER:
+            stream->lexer.cache.type = TOK_INVALID;
+            break;
+        case STREAM_VECTOR:
+            break;
+        default:
+            abort();
+    }
+}
+
+static Status ParseTreeStream_Peek(
+    ParseTreeStream *stream,
+    ParseTree *tree,
+    const StateMachine *m,
+    const Vector/*<size_t>*/ *stack)
 {
     Blimp *blimp = ParseTreeStream_GetBlimp(stream);
 
     switch (stream->type) {
         case STREAM_LEXER: {
-            // User the Lexer interface to peek a Token.
             Token tok;
-            TRY(Lexer_Peek(stream->lexer, &tok));
+            if (stream->lexer.cache.type != TOK_INVALID) {
+                // If we have a cached token, just use it.
+                tok = stream->lexer.cache;
+            } else {
+                // If there is no cached token, then either we have just shifted
+                // and are now peeking at the next token, or the state machine
+                // has changed since the last shift due to a macro being
+                // defined, which may in turn have changed the set of expected
+                // tokens, so we need to re-lex.
+                //
+                // In the latter case, the characters that we lexed using the
+                // previous state machine are still in the lexer's buffer, since
+                // we have not consumed them yet (this happens when we shift) so
+                // calling back into the lexer will simply lex those same
+                // characters a second time, with a different subset of expected
+                // tokens.
+                TRY(Lexer_Lex(stream->lexer.lexer, &tok, m, stack, true));
+                stream->lexer.cache = tok;
+            }
 
-            // Convert that Token to a ParseTree with a Terminal symbol and an
-            // EXPR_SYMBOL `parsed` expression.
+            // Convert the peeked Token to a ParseTree with a Terminal symbol
+            // and an EXPR_SYMBOL `parsed` expression.
             TRY(BlimpExpr_NewSymbol(blimp, tok.symbol, &tree->parsed));
             BlimpExpr_SetSourceRange(tree->parsed, &tok.range);
             tree->symbol = (GrammarSymbol){
@@ -2722,12 +3182,26 @@ static Status ParseTreeStream_Peek(ParseTreeStream *stream, ParseTree *tree)
     }
 }
 
-static Status ParseTreeStream_Next(ParseTreeStream *stream)
+static Status ParseTreeStream_Next(
+    ParseTreeStream *stream,
+    const StateMachine *m,
+    const Vector/*<size_t>*/ *stack)
 {
     switch (stream->type) {
         case STREAM_LEXER: {
-            Token tok;
-            return Lexer_Next(stream->lexer, &tok);
+            if (stream->lexer.cache.type != TOK_INVALID) {
+                // If we peeked a token, just commit to it, removing those
+                // characters from the lexer's look-ahead buffer. No need to go
+                // back through the lexing process since we already know what
+                // token will be lexed.
+                Lexer_Commit(stream->lexer.lexer);
+                stream->lexer.cache.type = TOK_INVALID;
+                return BLIMP_OK;
+            } else {
+                // Otherwise, lex a new token, but do not cache it.
+                Token tok;
+                return Lexer_Lex(stream->lexer.lexer, &tok, m, stack, false);
+            }
         }
 
         case STREAM_VECTOR:
@@ -2786,7 +3260,7 @@ static Status ParseStream(
             &m, *(size_t *)Vector_RIndex(&stack, 0));
 
         ParseTree tree;
-        if (ParseTreeStream_Peek(stream, &tree) != BLIMP_OK) {
+        if (ParseTreeStream_Peek(stream, &tree, &m, &stack) != BLIMP_OK) {
             goto error;
         }
 
@@ -2805,7 +3279,7 @@ static Status ParseStream(
 
         switch (Action_Type(action)) {
             case SHIFT: {
-                CHECK(ParseTreeStream_Next(stream));
+                CHECK(ParseTreeStream_Next(stream, &m, &stack));
                     // Consume the tree we peeked.
 
                 // Push the tree onto the parse tree stack.
@@ -2899,6 +3373,7 @@ static Status ParseStream(
 
                 // Push the new expression onto the output stack, in place of
                 // sub-trees taht we removed.
+                assert(production->num_symbols > 0);
                 CHECK(Vector_PushBack(&output, &fragment));
                     // CHECK not TRY, because we just removed at least one
                     // element from the vector, so this should not cause an
@@ -2938,6 +3413,7 @@ static Status ParseStream(
                     if (MakeParseTable(grammar, &m) != BLIMP_OK) {
                         goto error;
                     }
+                    ParseTreeStream_Invalidate(stream);
                 }
 
                 break;

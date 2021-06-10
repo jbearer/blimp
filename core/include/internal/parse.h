@@ -8,6 +8,8 @@
 // Lexer
 //
 
+PRIVATE Status Stream_Next(Stream *stream, int *c);
+PRIVATE SourceLoc Stream_Location(Stream *stream);
 PRIVATE void Stream_Delete(Stream *stream);
 
 typedef enum {
@@ -30,7 +32,6 @@ typedef struct {
 } Token;
 
 PRIVATE const char *StringOfTokenType(TokenType t);
-PRIVATE BlimpErrorCode UnexpectedTokenError(TokenType t);
 
 #define EOF_CHAR ((int)UCHAR_MAX + 1)
     // The EOF macro may be -1 (or some other negative value). It's convenient
@@ -42,14 +43,33 @@ PRIVATE BlimpErrorCode UnexpectedTokenError(TokenType t);
 #define NUM_CHARS (EOF_CHAR + 1)
     // One for each valid `char`, plus EOF_CHAR.
 
+typedef Status(*TokenHandler)(
+    Blimp *blimp, const char *match, size_t length, char **new_match);
+
+// A TrieNode is a state in the token-matching state machine.
+typedef struct TrieNode {
+    TokenType terminal;
+        // The token type matched by this state, or TOK_INVALID if this is not
+        // an accepting state.
+    TokenHandler handler;
+        // Optional function to post-process a matched token string.
+    struct TrieNode *children[NUM_CHARS];
+        // States to transition to indexed by the next character we see. If a
+        // character `c` is not expessed, then `children[c]` is `NULL`.
+} TrieNode;
+
 typedef struct {
     Blimp *blimp;
     size_t num_terminals;
-    struct TrieNode *nodes[NUM_CHARS];
+    TrieNode *nodes[NUM_CHARS];
 } TokenTrie;
+
+PRIVATE extern TrieNode tok_identifier;
+PRIVATE extern TrieNode tok_operator;
 
 PRIVATE Status TokenTrie_Init(Blimp *blimp, TokenTrie *trie);
 PRIVATE void TokenTrie_Destroy(TokenTrie *trie);
+PRIVATE void InitStaticTokens(void);
 
 /**
  * \brief Get a Token with an existing TokenType that matches `string`.
@@ -74,6 +94,16 @@ PRIVATE Status TokenTrie_GetToken(
 PRIVATE Status TokenTrie_InsertToken(
     TokenTrie *tokens, const char *string, Token *tok);
 
+PRIVATE Status HandleToken(
+    Blimp *blimp,
+    TokenHandler handler,
+    const char *string,
+    size_t length,
+    const Symbol **sym);
+
+PRIVATE bool IsOperatorChar(int c);
+PRIVATE bool IsIdentifierChar(int c);
+
 typedef struct {
     Blimp *blimp;
     Stream *input;
@@ -87,17 +117,18 @@ typedef struct {
         // The number of characters in `look_ahead_chars` which have been
         // tentatively committed to the current token. This can be reset to 0 if
         // the lexer needs to backtrack without emitting a token.
+    size_t peeked_len;
+        // The length of the last token peeked. This represents a prefix of
+        // `look_ahead_chars`, and will be at most `look_ahead_end`. It is used
+        // by Lexer_Commit to consume the last peeked token.
     bool eof;
         // Whether the input stream has reached the end of input.
 
-    Token peek;
     TokenTrie *tokens;
 } Lexer;
 
 PRIVATE void Lexer_Init(Lexer *lex, Blimp *blimp, Stream *input);
 PRIVATE void Lexer_Destroy(Lexer *lex);
-PRIVATE Status Lexer_Peek(Lexer *lex, Token *tok);
-PRIVATE Status Lexer_Next(Lexer *lex, Token *tok);
 
 ////////////////////////////////////////////////////////////////////////////////
 // Parser
