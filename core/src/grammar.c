@@ -682,20 +682,14 @@ static Status SymbolVisitor(
 // Handler for `\> Term Term Term`
 static Status PrecedenceHandler(ParserContext *ctx, ParseTree *tree)
 {
-    Expr *production = SubExpr(tree, 2);
-    Expr *handler    = SubExpr(tree, 3);
+    Expr *production = SubExpr(tree, 1);
+    Expr *handler    = SubExpr(tree, 2);
 
     // The expressions for the production and the handler have just now been
     // parsed; they have not been analyzed yet. Since we are going to evaluate
     // them now, at parse time, we need to resolve them.
     TRY(BlimpExpr_Resolve(ctx->blimp, production));
     TRY(BlimpExpr_Resolve(ctx->blimp, handler));
-
-    // Get the precedence of the non-terminal for the macro we're defining (the
-    // left-hand side of the production).
-    const Symbol *nt_sym = SubToken(tree, 1);
-    NonTerminal nt;
-    TRY(Grammar_GetNonTerminal(&ctx->blimp->grammar, nt_sym, &nt));
 
     // Evaluate the production expression to get an Object which is a stream of
     // symbols (the right-hand side of the production).
@@ -722,12 +716,15 @@ static Status PrecedenceHandler(ParserContext *ctx, ParseTree *tree)
         return Reraise(ctx->blimp);
     }
 
-    if (Blimp_Send(
+    // Send the visitor to the production parse tree and get the return value,
+    // which is the non-terminal of the production.
+    const Symbol *nt_sym;
+    if (Blimp_SendAndParseSymbol(
             ctx->blimp,
             (Object *)ctx->blimp->global,
             production_obj,
             symbol_visitor,
-            NULL)
+            &nt_sym)
         != BLIMP_OK)
     {
         Vector_Destroy(&symbols);
@@ -763,6 +760,8 @@ static Status PrecedenceHandler(ParserContext *ctx, ParseTree *tree)
     handler_arg->non_terminal_symbol = nt_sym;
 
     // Add a new production which will be handled by `handler_obj`.
+    NonTerminal nt;
+    TRY(Grammar_GetNonTerminal(&ctx->blimp->grammar, nt_sym, &nt));
     if (Grammar_AddRule(
             &ctx->blimp->grammar,
             nt,
@@ -929,10 +928,10 @@ Status DefaultGrammar(Blimp *blimp, Grammar *grammar)
         SendHandler, NULL));
     TRY(ADD_GRAMMAR_RULE(grammar, StmtNoMsg, (NT(StmtNoMsg), NT(Term)),
         SendHandler, NULL));
-    //      \> Term Term Term
-    TRY(ADD_GRAMMAR_RULE(grammar, Stmt, (T(MACRO), NT(Term), NT(Term), NT(Term)),
+    //      \> Term Term
+    TRY(ADD_GRAMMAR_RULE(grammar, Stmt, (T(MACRO), NT(Term), NT(Term)),
         PrecedenceHandler, NULL));
-    TRY(ADD_GRAMMAR_RULE(grammar, StmtNoMsg, (T(MACRO), NT(Term), NT(Term), NT(Term)),
+    TRY(ADD_GRAMMAR_RULE(grammar, StmtNoMsg, (T(MACRO), NT(Term), NT(Term)),
         PrecedenceHandler, NULL));
     //      \ term
     TRY(ADD_GRAMMAR_RULE(grammar, Stmt, (NT(Term)),
