@@ -435,7 +435,7 @@ typedef struct {
     GrammarSymbol symbols[];
 } Production;
 
-// For each non-terminal `N` in a grammar, we also get a conceptual pseduo-
+// For each non-terminal `N` in a grammar, we also get a conceptual pseudo-
 // terminal `pt(N)` and a production `N -> pt(N)`. This effectively defines an
 // injection from non-terminals to terminals. Whenever the parser shifts a
 // pseudo-terminal `pt(N)`, it will immediately reduce it to `N` and proceed
@@ -450,7 +450,7 @@ typedef struct {
 // terminals can be added at any time, pseudo-terminals are only constant for a
 // particular snapshot of a grammar, and thus they are associated with a state
 // machine built from a grammar, not with the grammar itself. Similarly, the
-// pseduo-productions `N -> pt(N)` are not stored with the rest of the grammar
+// pseudo-productions `N -> pt(N)` are not stored with the rest of the grammar
 // productions. They are generated and processed on the fly during the state
 // machine generation process, after it processes normal productions.
 
@@ -464,13 +464,22 @@ static Status PseudoHandler(ParserContext *ctx, ParseTree *tree)
 {
     (void)ctx;
 
-    tree->parsed = BlimpExpr_Borrow(SubExpr(tree, 0));
+    // Make a copy of the nested parse tree represented by the pseudo-terminal.
+    ParseTree sub_tree;
+    TRY(ParseTree_Copy(Vector_Index(&tree->sub_trees, 0), &sub_tree));
+
+    // Completely replace the output tree with the copied sub-tree.
+    ParseTree_Destroy(tree);
+    *tree = sub_tree;
+
     return BLIMP_OK;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // Grammar API
 //
+
+#define START_SYMBOL ((NonTerminal)0)
 
 static bool Terminal_Eq(const Terminal *t1, const Terminal *t2, void *arg)
 {
@@ -604,6 +613,9 @@ static bool GrammarListener_ShouldUpdate(
     }
 }
 
+static Status Grammar_AddNonTerminal(
+    Grammar *grammar, NonTerminal nt, const char *name);
+
 Status Grammar_Init(Blimp *blimp, Grammar *grammar, Terminal eof)
 {
     Vector_Init(
@@ -637,6 +649,17 @@ Status Grammar_Init(Blimp *blimp, Grammar *grammar, Terminal eof)
 
     grammar->num_terminals = 0;
     if (Grammar_AddTerminal(grammar, NUM_BUILT_IN_TOKENS - 1) != BLIMP_OK) {
+        Grammar_Destroy(grammar);
+        return Reraise(blimp);
+    }
+
+    // Add the built-in start non-terminal to the grammar, so that any
+    // non-terminals later added by the user will have higher precedence.
+    // However, we do not want to add this non-terminal to the `non_terminals`
+    // hash map, because it should not be nameable by the user, as it is
+    // internal only. Therefore, we will call Grammar_AddNonTerminal directly
+    // instead of calling Grammar_GetNonTerminal.
+    if (Grammar_AddNonTerminal(grammar, START_SYMBOL, "Start") != BLIMP_OK) {
         Grammar_Destroy(grammar);
         return Reraise(blimp);
     }
@@ -886,6 +909,14 @@ Status Grammar_GetNonTerminal(
     return BLIMP_OK;
 }
 
+Status Grammar_GetNonTerminalSymbol(
+    Grammar *grammar, NonTerminal non_terminal, const Symbol **sym)
+{
+    const char *name = *(const char **)Vector_Index(
+        &grammar->non_terminal_strings, non_terminal);
+    return Blimp_GetSymbol(Grammar_GetBlimp(grammar), name, sym);
+}
+
 void Grammar_SetTerminalString(
     Grammar *grammar, Terminal terminal, const char *string)
 {
@@ -895,26 +926,6 @@ void Grammar_SetTerminalString(
         free(*p);
         *p = copy;
     }
-}
-
-void Grammar_SetNonTerminalString(
-    Grammar *grammar, NonTerminal non_terminal, const char *string)
-{
-    char *copy = strdup(string);
-    if (copy != NULL) {
-        char **p = Vector_Index(
-            &grammar->non_terminal_strings, non_terminal);
-        free(*p);
-        *p = copy;
-    }
-}
-
-Status Grammar_SetNonTerminalSymbol(
-    Grammar *grammar, NonTerminal non_terminal, const Symbol *sym)
-{
-    TRY(HashMap_Update(&grammar->non_terminals, &sym, &non_terminal));
-    Grammar_SetNonTerminalString(grammar, non_terminal, sym->name);
-    return BLIMP_OK;
 }
 
 static Status Grammar_FirstSets(
@@ -1154,8 +1165,12 @@ typedef enum {
         // If there is a reduce-reduce conflict, the grammar is not even LR(1).
 } LALR_Conflict;
 
+typedef struct StateMachine StateMachine;
+static inline size_t StateMachine_NumTerminals(const StateMachine *m);
+static inline size_t StateMachine_NumNonTerminals(const StateMachine *m);
+
 static inline Status InitActions(
-    Blimp *blimp, Action **actions, const Grammar *grammar)
+    Blimp *blimp, Action **actions, const StateMachine *m)
 {
     // Calloc will initialize the array to zeroes. Since a 0 Action is
     // NO_ACTION, this means that every action which is not explicitly assigned
@@ -1163,10 +1178,7 @@ static inline Status InitActions(
     // encountered.
     TRY(Calloc(
         blimp,
-        Grammar_NumTerminals(grammar) + Grammar_NumNonTerminals(grammar),
-            // Each state in the parse table has one Action for each terminal,
-            // plus one action for a pseudo-terminal corresponding to each non-
-            // terminal.
+        StateMachine_NumTerminals(m),
         sizeof(Action),
         actions));
 
@@ -1213,9 +1225,9 @@ static inline void SetAction(
 }
 
 static inline Status InitGotos(
-    Blimp *blimp, size_t **gotos, const Grammar *grammar)
+    Blimp *blimp, size_t **gotos, const StateMachine *m)
 {
-    size_t num_gotos = Grammar_NumNonTerminals(grammar);
+    size_t num_gotos = StateMachine_NumNonTerminals(m);
         // Each state in the parse table has one Goto for each non-terminal.
     TRY(Malloc(blimp, num_gotos*sizeof(size_t), gotos));
     memset(*gotos, -1, num_gotos*sizeof(size_t));
@@ -1439,7 +1451,6 @@ static inline bool State_Next(
     return true;
 }
 
-typedef struct StateMachine StateMachine;
 static Terminal StateMachine_PseudoTerminal(
     const StateMachine *m, NonTerminal nt);
 
@@ -1507,8 +1518,8 @@ static Status State_AddClosureOfItem(
         .is_terminal = true,
         .terminal = StateMachine_PseudoTerminal(m, sym->non_terminal),
     };
-    Item pseduo_item = {pseudo_production, 0};
-    if (Vector_PushBack(&state->closure, &pseduo_item) != BLIMP_OK) {
+    Item pseudo_item = {pseudo_production, 0};
+    if (Vector_PushBack(&state->closure, &pseudo_item) != BLIMP_OK) {
         Free(blimp, &pseudo_production);
         return Reraise(blimp);
     }
@@ -1529,10 +1540,10 @@ static Status State_Init(
     TRY(Malloc(blimp, sizeof(OrderedSet), &state->kernel));
     OrderedSet_Move(kernel, state->kernel);
 
-    if (InitActions(blimp, &state->actions, grammar) != BLIMP_OK) {
+    if (InitActions(blimp, &state->actions, m) != BLIMP_OK) {
         goto err_actions;
     }
-    if (InitGotos(blimp, &state->gotos, grammar) != BLIMP_OK) {
+    if (InitGotos(blimp, &state->gotos, m) != BLIMP_OK) {
         goto err_gotos;
     }
 
@@ -1819,6 +1830,8 @@ struct StateMachine {
         // kernel.
     const Grammar *grammar;
     size_t first_pseudo_terminal;
+    size_t num_non_terminals;
+    Production *start_production;
 };
 
 static inline State *StateMachine_Begin(const StateMachine *m)
@@ -1840,6 +1853,7 @@ static void StateMachine_Destroy(StateMachine *m)
 {
     Vector_Destroy(&m->states);
     HashMap_Destroy(&m->index);
+    free(m->start_production);
 }
 
 static inline size_t StateMachine_NumStates(const StateMachine *m)
@@ -1854,12 +1868,15 @@ static inline State *StateMachine_GetState(const StateMachine *m, size_t i)
 
 static inline size_t StateMachine_NumTerminals(const StateMachine *m)
 {
-    return m->first_pseudo_terminal + Grammar_NumNonTerminals(m->grammar);
+    return m->first_pseudo_terminal + m->num_non_terminals;
+        // We have one terminal for each terminal in the grammar at the time we
+        // built the machine (up to `first_pseudo_terminal`), plus one
+        // pseudo-terminal corresponding to each non-terminal.
 }
 
 static inline size_t StateMachine_NumNonTerminals(const StateMachine *m)
 {
-    return Grammar_NumNonTerminals(m->grammar);
+    return m->num_non_terminals;
 }
 
 static inline Terminal StateMachine_PseudoTerminal(
@@ -1913,7 +1930,8 @@ static Status StateMachine_NewState(
     return BLIMP_OK;
 }
 
-static Status MakeStateMachine(const Grammar *grammar, StateMachine *m)
+static Status MakeStateMachine(
+    const Grammar *grammar, NonTerminal start, StateMachine *m)
 {
     Blimp *blimp = Grammar_GetBlimp(grammar);
 
@@ -1930,6 +1948,7 @@ static Status MakeStateMachine(const Grammar *grammar, StateMachine *m)
         blimp, &m->states, sizeof(State), (Destructor)State_Destroy);
     m->grammar = grammar;
     m->first_pseudo_terminal = Grammar_NumTerminals(grammar);
+    m->num_non_terminals = Grammar_NumNonTerminals(grammar);
 
     // `transitions` is a set of transitions to states we have not yet added, in
     // precedence order. By processing transitions and creating new states in
@@ -1939,12 +1958,26 @@ static Status MakeStateMachine(const Grammar *grammar, StateMachine *m)
     OrderedSet_Init(
         blimp, &transitions, sizeof(Transition), (CmpFunc)Transition_Cmp);
 
-    // Create the starting state from the grammar's initial production.
+    // Create a production S -> start for the initial state.
+    TRY(Malloc(
+        blimp,
+        sizeof(Production) + 1*sizeof(GrammarSymbol),
+        &m->start_production));
+    m->start_production->non_terminal = START_SYMBOL;
+    m->start_production->handler = PseudoHandler;
+    m->start_production->index = 0;
+    m->start_production->num_symbols = 1;
+    m->start_production->symbols[0] = (GrammarSymbol) {
+        .is_terminal = false,
+        .non_terminal = start,
+    };
+
+    // Create the starting state from the initial production.
     OrderedSet initial_kernel;
     OrderedSet_Init(
         blimp, &initial_kernel, sizeof(Item), (CmpFunc)Item_Cmp);
     if (OrderedSet_Insert(
-            &initial_kernel, &(Item){Grammar_GetProduction(grammar, 0), 0})
+            &initial_kernel, &(Item){m->start_production, 0})
         != BLIMP_OK)
     {
         goto error;
@@ -2419,11 +2452,12 @@ static void DumpExtendedGrammar(
 // Parse table
 //
 
-static Status MakeParseTable(const Grammar *grammar, StateMachine *table)
+static Status MakeParseTable(
+    const Grammar *grammar, NonTerminal start, StateMachine *table)
 {
     Blimp *blimp = Grammar_GetBlimp(grammar);
 
-    TRY(MakeStateMachine(grammar, table));
+    TRY(MakeStateMachine(grammar, start, table));
 
     ExtendedGrammar extended_grammar;
     if (MakeExtendedGrammar(grammar, table, &extended_grammar) != BLIMP_OK) {
@@ -2597,7 +2631,7 @@ void Grammar_DumpVitals(FILE *file, const Grammar *grammar)
     StateMachine table;
     ExtendedGrammar extended;
 
-    if (MakeStateMachine(grammar, &table) == BLIMP_OK &&
+    if (MakeStateMachine(grammar, START_SYMBOL + 1, &table) == BLIMP_OK &&
         MakeExtendedGrammar(grammar, &table, &extended) == BLIMP_OK)
     {
         DumpExtendedGrammar(file, grammar, &table, &extended);
@@ -2605,7 +2639,7 @@ void Grammar_DumpVitals(FILE *file, const Grammar *grammar)
     ExtendedGrammar_Destroy(&extended);
     StateMachine_Destroy(&table);
 
-    if (MakeParseTable(grammar, &table) == BLIMP_OK) {
+    if (MakeParseTable(grammar, START_SYMBOL + 1, &table) == BLIMP_OK) {
         DumpParseTable(file, grammar, &table);
     }
     StateMachine_Destroy(&table);
@@ -3216,13 +3250,14 @@ static Status ParseTreeStream_Next(
 static Status ParseStream(
     ParseTreeStream *stream,
     Grammar *grammar,
+    NonTerminal start,
     void *parser_state,
     ParseTree *result)
 {
     Blimp *blimp = ParseTreeStream_GetBlimp(stream);
 
     StateMachine m;
-    TRY(MakeParseTable(grammar, &m));
+    TRY(MakeParseTable(grammar, start, &m));
 
     // `stack` is a stack of parser state indices which is modified by SHIFT and
     // REDUCE actions.
@@ -3312,7 +3347,7 @@ static Status ParseStream(
                     &output_precedences);
                 if (GrammarListener_ShouldUpdate(&listener, max_precedence)) {
                     StateMachine_Destroy(&m);
-                    if (MakeParseTable(grammar, &m) != BLIMP_OK) {
+                    if (MakeParseTable(grammar, start, &m) != BLIMP_OK) {
                         goto error;
                     }
                 }
@@ -3410,7 +3445,7 @@ static Status ParseStream(
                     &output_precedences);
                 if (GrammarListener_ShouldUpdate(&listener, max_precedence)) {
                     StateMachine_Destroy(&m);
-                    if (MakeParseTable(grammar, &m) != BLIMP_OK) {
+                    if (MakeParseTable(grammar, start, &m) != BLIMP_OK) {
                         goto error;
                     }
                     ParseTreeStream_Invalidate(stream);
@@ -3517,13 +3552,17 @@ error:
 }
 
 Status Parse(
-    Lexer *lex, Grammar *grammar, void *parser_state, Expr **expr)
+    Lexer *lex,
+    Grammar *grammar,
+    NonTerminal target,
+    void *parser_state,
+    Expr **expr)
 {
     ParseTreeStream stream;
     ParseTreeStream_InitLexer(&stream, lex);
 
     ParseTree tree;
-    TRY(ParseStream(&stream, grammar, parser_state, &tree));
+    TRY(ParseStream(&stream, grammar, target, parser_state, &tree));
 
     *expr = BlimpExpr_Borrow(tree.parsed);
     ParseTree_Destroy(&tree);
@@ -3534,10 +3573,11 @@ Status Parse(
 Status Reparse(
     const Vector/*<ParseTree>*/ *input,
     Grammar *grammar,
+    NonTerminal target,
     void *parser_state,
     ParseTree *parsed)
 {
     ParseTreeStream stream;
     ParseTreeStream_InitVector(&stream, input);
-    return ParseStream(&stream, grammar, parser_state, parsed);
+    return ParseStream(&stream, grammar, target, parser_state, parsed);
 }

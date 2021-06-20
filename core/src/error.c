@@ -170,6 +170,7 @@ static const char *GenericErrorCodeMessage(BlimpErrorCode code)
         case BLIMP_UNEXPECTED_EOF:    return "unexpected end of input";
         case BLIMP_INVALID_MESSAGE_NAME: return "invalid message name or index";
         case BLIMP_AMBIGUOUS_PARSE:   return "ambiguous grammar rule";
+        case BLIMP_INVALID_PARSE_TREE:return "invalid parse tree";
         case BLIMP_NO_SUCH_SYMBOL:    return "no such symbol";
         case BLIMP_NO_SUCH_METHOD:    return "no such method";
         case BLIMP_MUST_BE_BLOCK:     return "expected block";

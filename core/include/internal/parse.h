@@ -137,12 +137,6 @@ PRIVATE void Lexer_Destroy(Lexer *lex);
 typedef TokenType Terminal;
 
 typedef size_t NonTerminal;
-#define START_SYMBOL ((NonTerminal)0)
-
-static inline NonTerminal PrecedenceNonTerminal(size_t precedence)
-{
-    return START_SYMBOL + 1 + precedence;
-}
 
 typedef struct {
     bool is_terminal;
@@ -201,6 +195,8 @@ PRIVATE void Grammar_Destroy(Grammar *grammar);
 PRIVATE Status Grammar_AddTerminal(Grammar *grammar, Terminal terminal);
 PRIVATE Status Grammar_GetNonTerminal(
     Grammar *grammar, const Symbol *sym, NonTerminal *non_terminal);
+PRIVATE Status Grammar_GetNonTerminalSymbol(
+    Grammar *grammar, NonTerminal non_terminal, const Symbol **sym);
 PRIVATE Status Grammar_AddRule(
     Grammar *grammar,
     NonTerminal non_terminal,
@@ -210,17 +206,18 @@ PRIVATE Status Grammar_AddRule(
     void *handler_arg);
 PRIVATE void Grammar_SetTerminalString(
     Grammar *grammar, Terminal terminal, const char *string);
-PRIVATE void Grammar_SetNonTerminalString(
-    Grammar *grammar, NonTerminal non_terminal, const char *string);
-PRIVATE Status Grammar_SetNonTerminalSymbol(
-    Grammar *grammar, NonTerminal non_terminal, const Symbol *sym);
 PRIVATE void Grammar_DumpVitals(FILE *file, const Grammar *grammar);
 
 PRIVATE Status Parse(
-    Lexer *lex, Grammar *grammar, void *parser_state, Expr **expr);
+    Lexer *lex,
+    Grammar *grammar,
+    NonTerminal target,
+    void *parser_state,
+    Expr **expr);
 PRIVATE Status Reparse(
     const Vector/*<ParseTree>*/ *input,
     Grammar *grammar,
+    NonTerminal target,
     void *parser_state,
     ParseTree *parsed);
 

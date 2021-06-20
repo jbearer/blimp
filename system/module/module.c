@@ -178,7 +178,7 @@ BlimpStatus BlimpModule_Init(Blimp *blimp, const char **path)
     //    like `import_source`, except the module named by the path must be an
     //    extension module, not a source module.
 
-    const BlimpSymbol *import, *import_source, *import_extension, *prec7;
+    const BlimpSymbol *import, *import_source, *import_extension, *prec3, *prec7;
     if (Blimp_GetSymbol(blimp, "import", &import) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
@@ -188,6 +188,9 @@ BlimpStatus BlimpModule_Init(Blimp *blimp, const char **path)
     if (Blimp_GetSymbol(blimp, "import_extension", &import_extension)
             != BLIMP_OK)
     {
+        return Blimp_Reraise(blimp);
+    }
+    if (Blimp_GetSymbol(blimp, "3", &prec3) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
     if (Blimp_GetSymbol(blimp, "7", &prec7) != BLIMP_OK) {
@@ -258,7 +261,7 @@ BlimpStatus BlimpModule_Init(Blimp *blimp, const char **path)
         {.is_terminal=false,.symbol=prec7},
     };
     if (Blimp_DefineMacro(
-            blimp, 3, macro_symbols, 2, ImportHandler, (void *)path)
+            blimp, prec3, macro_symbols, 2, ImportHandler, (void *)path)
         != BLIMP_OK)
     {
         return Blimp_Reraise(blimp);

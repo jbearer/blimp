@@ -69,18 +69,6 @@
 // Now, after parsing a top-level statement, the output consists only of two
 // non-terminals `Stmt Semi`, both of which have lower precedence than most
 // non-terminals that we would find in a newly added rule.
-//
-// Here are our non-terminals in order of ascending precedence:
-typedef enum {
-    NT_Start,
-    NT_Expr,
-    NT_ExprNoMsg,
-    NT_Stmt,
-    NT_StmtNoMsg,
-    NT_Semi,
-    NT_Term,
-    NT_TermNoMsg,
-} BuiltInNonTerminal;
 
 PRIVATE Status DefaultGrammar(Blimp *blimp, Grammar *grammar);
 

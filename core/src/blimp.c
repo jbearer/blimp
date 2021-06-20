@@ -130,7 +130,19 @@ Status Blimp_Parse(Blimp *blimp, Stream *input, Expr **output)
     Lexer lex;
     Lexer_Init(&lex, blimp, input);
 
-    Status ret = Parse(&lex, &blimp->grammar, NULL, output);
+    // Get the expression non-terminal;
+    const Symbol *nt_symbol;
+    if (Blimp_GetSymbol(blimp, "1", &nt_symbol) != BLIMP_OK) {
+        Lexer_Destroy(&lex);
+        return Reraise(blimp);
+    }
+    NonTerminal nt;
+    if (Grammar_GetNonTerminal(&blimp->grammar, nt_symbol, &nt) != BLIMP_OK) {
+        Lexer_Destroy(&lex);
+        return Reraise(blimp);
+    }
+
+    Status ret = Parse(&lex, &blimp->grammar, nt, NULL, output);
     Lexer_Destroy(&lex);
     Stream_Delete(input);
     TRY(ret);

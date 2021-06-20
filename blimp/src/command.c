@@ -346,6 +346,66 @@ static BlimpStatus InspectExpr(
     return VoidReturn(blimp, result);
 }
 
+static BlimpStatus PrintParseTree(
+    Blimp *blimp, BlimpObject *context, BlimpObject *tree);
+
+static Status ParseTreePrinter(
+    Blimp *blimp,
+    BlimpObject *context,
+    BlimpObject *receiver,
+    BlimpObject *message,
+    BlimpObject **result)
+{
+    (void)receiver;
+
+    TRY(PrintParseTree(blimp, context, message));
+    printf(" ");
+
+    return VoidReturn(blimp, result);
+}
+
+static BlimpStatus PrintParseTree(
+    Blimp *blimp, BlimpObject *context, BlimpObject *tree)
+{
+    const BlimpSymbol *sym;
+    if (BlimpObject_ParseSymbol(tree, &sym) == BLIMP_OK) {
+        printf("%s", BlimpSymbol_GetName(sym));
+        return BLIMP_OK;
+    }
+
+    BlimpObject *printer;
+    TRY(BlimpObject_NewExtension(
+        blimp, context, NULL, ParseTreePrinter, NULL, &printer));
+
+    printf("(");
+    const BlimpSymbol *nt;
+    if (Blimp_SendAndParseSymbol(blimp, context, tree, printer, &nt)
+            == BLIMP_OK)
+    {
+        printf("; %s", BlimpSymbol_GetName(nt));
+    }
+    printf(")");
+
+    BlimpObject_Release(printer);
+    return BLIMP_OK;
+}
+
+static BlimpStatus InspectParseTree(
+    Blimp *blimp,
+    BlimpObject *scope,
+    BlimpObject **args,
+    void *arg,
+    BlimpObject **result)
+{
+    (void)arg;
+
+    PrintParseTree(blimp, scope, args[0]);
+    printf("\n");
+
+    *result = BlimpObject_Borrow(args[0]);
+    return BLIMP_OK;
+}
+
 typedef struct {
     BlimpObject *target;
     bool matched;
@@ -593,6 +653,8 @@ static const Command inspect_commands[] = {
         InspectObject, 1, NULL},
     {"expr", "print information about the result of evaluating an expression",
         InspectExpr, 1, NULL},
+    {"parse_tree", "pretty-print an object, interpreting it as a parse tree",
+        InspectParseTree, 1, NULL},
     {"owners", "print the owners of an object",
         InspectOwners, 1, NULL},
     {"clump", "print the clump containing an object",
@@ -673,7 +735,7 @@ static BlimpStatus DbBreak(
 
     Debugger *db = (Debugger *)arg;
 
-    const BlimpInstruction *bp;
+    const BlimpInstruction *bp = NULL;
     if (ParseAddress(blimp, args[0], (void **)&bp) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
@@ -696,7 +758,7 @@ static BlimpStatus DbTBreak(
 
     Debugger *db = (Debugger *)arg;
 
-    const BlimpInstruction *bp;
+    const BlimpInstruction *bp = NULL;
     if (ParseAddress(blimp, args[0], (void **)&bp) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }

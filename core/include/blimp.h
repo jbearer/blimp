@@ -362,6 +362,7 @@ typedef enum BlimpErrorCode {
     BLIMP_UNEXPECTED_EOF,
     BLIMP_INVALID_MESSAGE_NAME,
     BLIMP_AMBIGUOUS_PARSE,
+    BLIMP_INVALID_PARSE_TREE,
 
     // Runtime errors
     BLIMP_NO_SUCH_SYMBOL,
@@ -951,8 +952,8 @@ typedef struct {
  *
  * \param[in] blimp
  *      The interpreter.
- * \param[in] precedence
- *      The precedence of expressions produced by this macro.
+ * \param[in] non_terminal
+ *      The non-terminal produced by this macro.
  * \param[in] symbols
  *      A sequence of grammar symbols which will trigger this macro when the
  *      parser encounters a sequence of input expressions which match those
@@ -966,7 +967,7 @@ typedef struct {
  */
 BlimpStatus Blimp_DefineMacro(
     Blimp *blimp,
-    size_t precedence,
+    const BlimpSymbol *non_terminal,
     BlimpGrammarSymbol *symbols,
     size_t num_symbols,
     BlimpMacroHandler handler,

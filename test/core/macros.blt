@@ -13,7 +13,7 @@
 
 # Define the macro.
 \> 7 {^ my_keyword} {^toks
-    {^ foo}
+    {^ foo; 7}
 };
 
 # Once the macro has been parsed, `my_keyword` parses to `foo`.
@@ -50,30 +50,30 @@
             }[]
         };
 
-        {^ `\\>`; ^ 7; ^ (macro[]); ^ (handler[]) }
+        {^ `\\>`; ^ 7; ^ (macro[]); ^ (handler[]); 3 }
     }[]
 };
 
 # Define a new macro at precedence 7 using the @@term alias.
-{^ `my_keyword2`} @@term {{^ bar}};
+{^ `my_keyword2`} @@term {{^ bar; 7}};
 !expect_eq my_keyword2 bar;
 
 # Do it again, make sure the handler is idempotent.
-{^ `my_keyword3`} @@term {{^ baz}};
+{^ `my_keyword3`} @@term {{^ baz; 7}};
 !expect_eq my_keyword3 baz;
 
 # Old macros should still work.
 !expect_eq my_keyword foo;
 
 # Just straight-up define @term to 7
-{^ `@term`} @@term {{^ 7}};
+{^ `@term`} @@term {{^ 7; 7}};
 
 # Define a new macro at precedence 7 using the @term alias.
-\> @term {^ `my_keyword20`} {{^ foo}};
+\> @term {^ `my_keyword20`} {{^ foo; 7}};
 !expect_eq my_keyword20 foo;
 
 # Define a macro with a 7-level parameter using the @term alias.
-\> @term {^ `my_keyword21`; ^{@term}} {{^ bar}};
+\> @term {^ `my_keyword21`; ^{@term}} {{^ bar; 7}};
 !expect_eq my_keyword21 {^} bar;
 
 ################################################################################
@@ -83,7 +83,7 @@
 #
 
 (
-    \> 3 {^ {7} `when_will_we_lex_this_token`} {{^`foo`}};
+    \> 3 {^ {7} `when_will_we_lex_this_token`} {{^`foo`; 7}};
     !expect_eq ({^} when_will_we_lex_this_token) `when_will_we_lex_this_token`
 );
 !expect_eq ({^} when_will_we_lex_this_token) `foo`;
@@ -93,10 +93,10 @@
 #
 
 \> 7 {
-    \> 7 {^ `my_keyword4`} {{^`foo`}};
+    \> 7 {^ `my_keyword4`} {{^`foo`;7}};
     ^ `my_keyword5`
 } {
-    {^ `my_keyword4`}
+    {^ `my_keyword4`;7}
 };
 
 !expect_eq my_keyword4 foo;
@@ -106,8 +106,8 @@
 #
 
 \> 7 {^ `my_keyword6`} {
-    \> 7 {^`my_keyword7`} {{^`bar`}};
-    {^`my_keyword7`}
+    \> 7 {^`my_keyword7`} {{^`bar`;7}};
+    {^`my_keyword7`;7}
 };
 
 !expect_eq my_keyword6 bar;
@@ -119,9 +119,10 @@
 \> 7 {^`define_in_expansion`} {
     {
         ^`\\>`; ^`7`; ^`{`; ^`^`; ^`defined_in_expansion`; ^`}`; ^`{`;
-            ^`{`; ^`^`; ^`foo`; ^`}`;
+            ^`{`; ^`^`; ^`foo`; ^`;`; ^`7`; ^`}`;
         ^`}`; ^`;`;
-        ^`defined_in_expansion`
+        ^`defined_in_expansion`;
+        1
     }
 };
 
@@ -137,14 +138,15 @@
 # If we do the same thing, but now use a token that already exists for the macro
 # within the macro, then we should be able to use the inner macro in the
 # expansion of the outer one.
-\> 7 {^`+`; ^`-`; ^`*`} {{^ foo}};
+\> 7 {^`+`; ^`-`; ^`*`} {{^ foo;7}};
 
 \> 7 {^`define_in_expansion2`} {
     {
         ^`\\>`; ^`7`; ^`{`; ^`^`; ^`\`+\``; ^`;`; ^`^`; ^`\`+\``; ^`}`; ^`{`;
-            ^`{`; ^`^`; ^`bar`; ^`}`;
+            ^`{`; ^`^`; ^`bar`; ^`;`; ^`7`; ^`}`;
         ^`}`; ^`;`;
-        ^`+`; ^`+`
+        ^`+`; ^`+`;
+        1
     }
 };
 
@@ -159,9 +161,10 @@
 \> 7 {^`define_in_expansion3`} {
     {
         ^`\\>`; ^`3`; ^`{`; ^`^`; ^`{`; ^`7`; ^`}`; ^`;`; ^`^`; ^`\`-\``; ^`}`; ^`{`;
-            ^`{`; ^`^`; ^`foo`; ^`}`;
+            ^`{`; ^`^`; ^`foo`; ^`;`; ^`7`; ^`}`;
         ^`}`; ^`;`;
-        ^`bar`; ^`-`
+        ^`bar`; ^`-`;
+        1
     }
 };
 
@@ -176,9 +179,10 @@
 \> 7 {^`define_in_expansion4`} {
     {
         ^`\\>`; ^`3`; ^`{`; ^`^`; ^`{`; ^`7`; ^`}`; ^`;`; ^`^`; ^`\`*\``; ^`}`; ^`{`;
-            ^`{`; ^`^`; ^`foo`; ^`}`;
+            ^`{`; ^`^`; ^`foo`; ^`;`; ^`7`; ^`}`;
         ^`}`; ^`;`;
-        ^`bar`; ^`*`
+        ^`bar`; ^`*`;
+        1
     }
 };
 {
@@ -206,13 +210,13 @@
 # new production -- even inside nested expressions.
 #
 
-!expect_eq ((\>7{^`nested`}{{^`foo`}}; {^}) nested) foo;
+!expect_eq ((\>7{^`nested`}{{^`foo`;7}}; {^}) nested) foo;
 
 ################################################################################
 # Adding a macro with very low precedence but a high-precedence first symbol.
 #
 
-\> 1 {^`low_prec`} {{^`foo`}};
+\> 1 {^`low_prec`} {{^`foo`;7}};
 !expect_eq (low_prec) foo;
 
 ################################################################################
@@ -231,7 +235,7 @@
             value_ref[] {(^tok)}
         };
 
-        {^ ^old_value}
+        {^ ^old_value; 1}
     } (value[])
 };
 
@@ -294,10 +298,12 @@ subtract{^} {^lhs{^rhs
             }[]
         };
 
-        {^`subtract`; ^(lhs[]); ^(rhs[])}
+        {^`subtract` `(` (lhs[]) `)``(` (rhs[]) `)`; 3}
     }[]
 };
 
+!expect_eq (3 infixr- 2) 1;
+!expect_eq ((3 infixr- 2) infixr- 1) 0;
 !expect_eq (3 infixr- 2 infixr- 1) 2;
 
 \> 6 {^{6}; ^`infixl-`; ^{7}} {^toks
@@ -326,7 +332,7 @@ subtract{^} {^lhs{^rhs
             }[]
         };
 
-        {^`subtract`; ^(lhs[]); ^(rhs[])}
+        {^`subtract` `(` (lhs[]) `)` `(` (rhs[]) `)`; 1}
     }[]
 };
 
@@ -344,7 +350,7 @@ subtract{^} {^lhs{^rhs
 # Precedence of macro expansions matches the precedence of the macro definition.
 #
 
-\> 7 {^`multi`; ^`token`; ^`term`} {{^`{`; ^`^`; ^`}`; ^`foo`}};
+\> 7 {^`multi`; ^`token`; ^`term`} {{^`{`; ^`^`; ^`}`; ^`foo`; 1}};
 \> 7 {^`requires_term`; ^{7}} {^toks
     {
         n_ref{^ ^};
@@ -366,44 +372,11 @@ subtract{^} {^lhs{^rhs
             }[]
         };
 
-        {^(arg[])}
+        {^(arg[]); 1}
     }[]
 };
 
 !expect_eq requires_term multi token term foo;
-
-################################################################################
-# Macro parameters used in a handler have term precedence.
-#
-
-snd{^} {^x{^y ^y}};
-
-\> 1 {^`snd_macro`; ^{4}} {^toks
-    {
-        n_ref{^ ^};
-        n n_ref;
-        n_ref 0;
-
-        arg{^ ^};
-        ^toks {^tok
-            {
-                0{^{{
-                    n_ref 1
-                }}};
-                1{^{{
-                    arg{(^tok)};
-                    n_ref 2
-                }}};
-
-                n[] []
-            }[]
-        };
-
-        {^`snd`; ^(arg[])}
-    }[]
-};
-
-!expect_eq ((snd_macro {^} {bar}) foo) foo;
 
 ################################################################################
 # Macros defined in a module can be used in an importing module.
@@ -437,7 +410,7 @@ import macro_module;
             }[]
         };
 
-        {^(arg[])}
+        {^(arg[]); 1}
     }[]
 };
 
@@ -450,11 +423,37 @@ import macro_module;
 \> symbols {^`\`sym\``} {^toks
     {^out
         ^toks ^out;
-        ^out `nil`
+        ^out `nil`;
+        3
     }
 };
 
-\> symbols {^`\`sym\``; ^{symbols}} {^};
+\> symbols {^`\`sym\``; ^{symbols}} {^toks
+    {
+        n_ref{^ ^};
+        n n_ref;
+        n_ref 0;
+
+        sym{^ ^};
+        syms{^ ^};
+        ^toks {^tok
+            {
+                0{^{{
+                    sym{(^tok)};
+                    n_ref 1
+                }}};
+                1{^{{
+                    syms{(^tok)};
+                    n_ref 2
+                }}};
+
+                n[] []
+            }[]
+        };
+
+        {^(sym[]) {(syms[]) ^; 6}; 3}
+    }[]
+};
 
 \> 7 {^`car`; ^`(`; ^{symbols}; ^`)`} {^toks
     {
@@ -485,10 +484,11 @@ import macro_module;
 
         fst{^ ^};
         syms {^sym
-            fst{(^sym)}
+            # ^sym looks like (((symbol ; 7) ; 6) ; 3)
+            ^sym {^6 ^6{^7 ^7{^sym fst{(^sym)}}}}
         };
 
-        {^(fst[])}
+        {^(fst[]); 1}
     }[]
 };
 
@@ -519,6 +519,10 @@ import macro_module;
             }[]
         };
 
+        fst_ref{^ ^};
+        fst fst_ref;
+        fst_ref true;
+
         {^out
             fst_ref{^ ^};
             fst fst_ref;
@@ -536,22 +540,72 @@ import macro_module;
 
                     fst[] []
                 }[]
-            }
+            };
+            6
         }
     }[]
 };
 
 !expect_eq car(foo) foo;
 !expect_eq car(foo bar) foo;
+!expect_eq car(foo bar baz) foo;
 !expect_eq car(cdr(foo bar)) bar;
 !expect_eq car(cdr(foo bar baz)) bar;
+!expect_eq car(cdr(cdr(foo bar baz))) baz;
+
+# We should be able to return an ad-hoc non-terminal expression from a macro
+# definition by specifying the ad-hoc non-terminal for which the expression
+# parses.
+\> symbols {^`cdrcdr` `(` `\`sym\`` `,` {symbols} `)`} {^toks
+    {
+        n_ref{^ ^};
+        n n_ref;
+        n_ref 0;
+
+        nt{^ ^};
+        syms{^ ^};
+        ^toks {^tok
+            {
+                0{^{{
+                    n_ref 1
+                }}};
+                1{^{{
+                    n_ref 2
+                }}};
+                2{^{{
+                    nt{(^tok)};
+                    n_ref 3
+                }}};
+                3{^{{
+                    n_ref 4
+                }}};
+                4{^{{
+                    syms {(^tok)};
+                    n_ref 5
+                }}};
+                5{^{{
+                    n_ref 6
+                }}};
+
+                n[] []
+            }[]
+        };
+
+        {^`cdr` `(` `cdr` `(` (syms[]) `)``)`; nt[]}
+            # Does not work if the non-terminal is in the expression tree, like
+            # `1`.
+    }[]
+};
+
+!expect_eq car(cdrcdr(symbols, foo bar baz)) baz;
+!expect_error { !eval `car(cdrcdr(1, foo bar baz))` };
 
 ################################################################################
 # In a state where we expect only a symbol, any token should parse as a symbol,
 # even if it would normally parse as a special token.
 #
 
-\> 7 {^`token_or_symbol`} {{^`foo`}};
+\> 7 {^`token_or_symbol`} {{^`foo`;7}};
 
 \> 7 {^`'` `\`sym\``} {^toks
     {
@@ -573,35 +627,44 @@ import macro_module;
             }[]
         };
 
-        !expect_eq (sym[]) `token_or_symbol`;
-            # `token_or_symbol` did not get macro-expanded to `foo` because it
-            # was parsed as a symbol.
-
-        {^(sym[])}
+        (sym[])
     }[]
 };
 
 !expect_eq token_or_symbol `foo`;
-!expect_eq 'token_or_symbol `foo`;
-    # TODO this should expand to `token_or_symbol`, not `foo`, but currently
-    # `token_or_symbol` gets expanded when used in the definition of the '
-    # macro. We can fix this by allowing parse trees to specify their non-
-    # terminal, e.g. {^(sym[]); symbol} or {^(sym[]); 7}, and parsing them as
-    # that non-terminal instead of as the start symbol.
-#!expect_eq ' + `+`;
-    # TODO this should work with this token, which is given a special meaning in
-    # a macro definition above.
+!expect_eq 'token_or_symbol `token_or_symbol`;
+!expect_eq ' + `+`;
 
 ################################################################################
 # In a state where we are only expecting a specific token, any other input
 # should result in a parse error.
 #
 
-\> 7 {^`special_token1` `special_token2`} {{^ foo}};
+\> 7 {^`special_token1` `special_token2`} {{^ foo;7}};
 
 !expect_eq special_token1 special_token2 foo;
 !expect_error {
     !eval `special_token1 foo`
 };
+
+
+################################################################################
+# Macros with nested parse trees.
+#
+
+\> 7 {^`nested_symbol`;7} {{^{^`foo`;7}; 1}};
+!expect_eq nested_symbol `foo`;
+
+\> 7 {^`nested_block`;7} {{^{^`{` {^`^`;7} `}`;7};1}};
+!expect_eq (nested_block foo) `foo`;
+
+\> 7 {^`nested_send`;7} {{^{^{^`{` {^`^`;7} `}`;7} `foo`; 1}; 1}};
+!expect_eq nested_send `foo`;
+
+\> 7 {^`nested_parens`;7} {{^{^`(` `foo` `)`; 7}; 1}};
+!expect_eq nested_parens `foo`;
+
+\> 7 {^`nested_msg`;7} {{^{^`{` `^msg` {^`^msg`;7} `}`; 7}; 1}};
+!expect_eq (nested_msg foo) `foo`;
 
 .

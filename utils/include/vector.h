@@ -48,6 +48,15 @@ PRIVATE Status Vector_Split(Vector *from, size_t i, Vector *to);
 PRIVATE void Vector_Shift(Vector *v, size_t n);
 PRIVATE void Vector_Clear(Vector *v);
 
+static inline Status Vector_Move(Vector *from, Vector *to)
+{
+    *to = *from;
+    from->size = 0;
+    from->capacity = 0;
+    from->data = NULL;
+    return BLIMP_OK;
+}
+
 /**
  * \brief Append a new, uninitialized element and return a pointer to it.
  */
