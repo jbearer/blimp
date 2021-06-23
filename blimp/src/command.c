@@ -361,7 +361,8 @@ static Status ParseTreePrinter(
     TRY(PrintParseTree(blimp, context, message));
     printf(" ");
 
-    return VoidReturn(blimp, result);
+    *result = BlimpObject_Borrow(receiver);
+    return BLIMP_OK;
 }
 
 static BlimpStatus PrintParseTree(

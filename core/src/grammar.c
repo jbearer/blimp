@@ -580,6 +580,21 @@ static Status MacroHandler(ParserContext *ctx, ParseTree *tree)
     // macro handler reduced to. But the invocation of the macro is supposed to
     // reduce to the non-terminal with which the macro is defined. As a last
     // step, fix the symbol of the resulting parse tree.
+    //
+    // This is a temporary hack. It would be better to simply keep the resulting
+    // parse tree as-is, because
+    //  * It makes the language simpler and easier to understand, and macros
+    //    easier to work with, if the rule is: a macro simply replaces one parse
+    //    tree with another, user-provided one, unmodified.
+    //  * It makes it possible to work with macros which return bare symbols as
+    //    their parse trees. Currently, this hack would change such a symbol
+    //    from a terminal to a non-terminal with no sub-trees, making it
+    //    impossible to recover the original symbol from bl:mp code using the
+    //    parse tree API.
+    // Unfortunately, reparsing requires us to update the parse tree here, so
+    // that it can later be used where the macro non-terminal is expected when
+    // it is reparsed as a sub-tree of another macro expansion. When we remove
+    // reparsing, we should also fix this behavior.
     tree->symbol.is_terminal = false;
     TRY(Grammar_GetNonTerminal(
         &ctx->blimp->grammar,

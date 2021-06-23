@@ -171,7 +171,7 @@
 
 {
     !expect_eq define_in_expansion3 foo
-};
+}[];
 !expect_eq (bar-) foo;
 
 # If we try to use the macro defined in the expansion while in a nested

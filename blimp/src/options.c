@@ -32,4 +32,5 @@ void DefaultOptions(Options *options)
     options->no_history_limit = false;
 
     options->implicit_prelude = true;
+    options->debug = false;
 }

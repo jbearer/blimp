@@ -181,6 +181,7 @@ static const char *GenericErrorCodeMessage(BlimpErrorCode code)
         case BLIMP_IO_ERROR:          return "I/O error";
         case BLIMP_NOT_SUPPORTED:     return "operation not supported";
         case BLIMP_INTERRUPTED:       return "interrupted by user";
+        case BLIMP_OPTIMIZED_AWAY:    return "value is optimized away";
         default:                      return "unknown error";
     }
 }

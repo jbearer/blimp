@@ -498,8 +498,8 @@ int main(int argc, char *const *argv)
                     perror("could not allocate import path");
                     return EXIT_FAILURE;
                 }
-                options.import_path[options.import_path_len-1] = optarg;
-                options.import_path[options.import_path_len]   = NULL;
+                options.import_path[options.import_path_len-2] = optarg;
+                options.import_path[options.import_path_len-1]  = NULL;
                 break;
 
             case FLAG_ACTION:

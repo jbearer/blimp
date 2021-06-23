@@ -837,6 +837,8 @@ Status Grammar_AddRule(
 {
     Blimp *blimp = Grammar_GetBlimp(grammar);
 
+    assert(num_symbols > 0);
+
     // Productions have to live on the heap, because we frequently refer to them
     // by pointer, so their address is expected not to change. Allocate a new
     // Production and copy the given data into it.
