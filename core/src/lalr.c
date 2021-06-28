@@ -464,9 +464,12 @@ static Status PseudoHandler(ParserContext *ctx, ParseTree *tree)
 {
     (void)ctx;
 
+    assert(!tree->symbol.is_terminal);
+    assert(tree->num_sub_trees > 0);
+
     // Make a copy of the nested parse tree represented by the pseudo-terminal.
     ParseTree sub_tree;
-    TRY(ParseTree_Copy(Vector_Index(&tree->sub_trees, 0), &sub_tree));
+    TRY(ParseTree_Copy(ctx->blimp, &tree->sub_trees[0], &sub_tree));
 
     // Completely replace the output tree with the copied sub-tree.
     ParseTree_Destroy(tree);
@@ -3047,30 +3050,44 @@ static inline void Lexer_Commit(Lexer *lex)
 
 void ParseTree_Destroy(ParseTree *tree)
 {
-    if (tree->parsed != NULL) {
-        Blimp_FreeExpr(tree->parsed);
+    if (!tree->symbol.is_terminal) {
+        for (size_t i = 0; i < tree->num_sub_trees; ++i) {
+            ParseTree_Destroy(&tree->sub_trees[i]);
+        }
+        free(tree->sub_trees);
     }
-    Vector_Destroy(&tree->sub_trees);
 }
 
-Status ParseTree_Copy(const ParseTree *from, ParseTree *to)
+Status ParseTree_Copy(Blimp *blimp, const ParseTree *from, ParseTree *to)
 {
     to->symbol = from->symbol;
-    to->parsed = BlimpExpr_Borrow(from->parsed);
-    return Vector_Copy(
-        &from->sub_trees, &to->sub_trees, (CopyFunc)ParseTree_Copy);
+    to->range = from->range;
+    if (from->symbol.is_terminal) {
+        to->token = from->token;
+    } else {
+        to->num_sub_trees = from->num_sub_trees;
+        to->sub_trees = malloc(from->num_sub_trees*sizeof(ParseTree));
+        if (to->sub_trees == NULL) {
+            return Error(blimp, BLIMP_OUT_OF_MEMORY);
+        }
+        for (size_t i = 0; i < from->num_sub_trees; ++i) {
+            if (ParseTree_Copy(blimp, &from->sub_trees[i], &to->sub_trees[i])
+                    != BLIMP_OK)
+            {
+                free(to->sub_trees);
+                return Reraise(blimp);
+            }
+        }
+    }
+
+    return BLIMP_OK;
 }
 
-Expr *SubExpr(const ParseTree *tree, size_t i)
+ParseTree *SubTree(const ParseTree *tree, size_t index)
 {
-    return ((ParseTree *)Vector_Index(&tree->sub_trees, i))->parsed;
-}
-
-const Symbol *SubToken(const ParseTree *tree, size_t i)
-{
-    ParseTree *sub_tree = Vector_Index(&tree->sub_trees, i);
-    assert(sub_tree->parsed->tag == EXPR_SYMBOL);
-    return sub_tree->parsed->symbol;
+    assert(!tree->symbol.is_terminal);
+    assert(index < tree->num_sub_trees);
+    return &tree->sub_trees[index];
 }
 
 // A ParseTreeStream is an input abstraction for the parser which yields
@@ -3173,18 +3190,11 @@ static Status ParseTreeStream_Peek(
                 stream->lexer.cache = tok;
             }
 
-            // Convert the peeked Token to a ParseTree with a Terminal symbol
-            // and an EXPR_SYMBOL `parsed` expression.
-            TRY(BlimpExpr_NewSymbol(blimp, tok.symbol, &tree->parsed));
-            BlimpExpr_SetSourceRange(tree->parsed, &tok.range);
+            // Convert the peeked Token to a ParseTree with a Terminal symbol.
             tree->symbol = (GrammarSymbol){
                 .is_terminal = true, .terminal = tok.type};
-            Vector_Init(
-                blimp,
-                &tree->sub_trees,
-                sizeof(ParseTree),
-                (Destructor)ParseTree_Destroy
-            );
+            tree->token = tok.symbol;
+            tree->range = tok.range;
             return BLIMP_OK;
         }
 
@@ -3193,6 +3203,7 @@ static Status ParseTreeStream_Peek(
                 // If there are more trees in the input vector, return the next
                 // one.
                 TRY(ParseTree_Copy(
+                    blimp,
                     Vector_Index(stream->vector.trees, stream->vector.offset),
                     tree
                 ));
@@ -3202,13 +3213,8 @@ static Status ParseTreeStream_Peek(
                     .is_terminal = true,
                     .terminal = TOK_EOF,
                 };
-                tree->parsed = NULL;
-                Vector_Init(
-                    blimp,
-                    &tree->sub_trees,
-                    sizeof(ParseTree),
-                    (Destructor)ParseTree_Destroy
-                );
+                tree->token = NULL;
+                tree->range = (SourceRange){0};
             }
             return BLIMP_OK;
         }
@@ -3361,29 +3367,39 @@ static Status ParseStream(
                 const Production *production =
                     (const Production *)Action_Data(action);
 
-                ParseTree fragment = {
-                    .symbol = {
-                        .is_terminal = false,
-                        .non_terminal = production->non_terminal,
-                    },
-                    .parsed = NULL,
+                GrammarSymbol symbol = {
+                    .is_terminal = false,
+                    .non_terminal = production->non_terminal,
                 };
+                ParseTree fragment = {
+                    .symbol = symbol,
+                    .num_sub_trees = production->num_symbols,
+                    .sub_trees = malloc(
+                        production->num_symbols*sizeof(ParseTree))
+                };
+                if (fragment.sub_trees == NULL) {
+                    Error(blimp, BLIMP_OUT_OF_MEMORY);
+                    goto error;
+                }
 
                 // Get the parse tree fragments which this reduction will
                 // consume from the parse tree stack.
-                if (Vector_Split(
-                        &output,
-                        Vector_Length(&output) - production->num_symbols,
-                        &fragment.sub_trees
-                    ) != BLIMP_OK)
-                {
-                    goto error;
-                }
+                Vector_ContractOut(
+                    &output, production->num_symbols, fragment.sub_trees);
+
+                // Set the source range to encompass the range of all the sub-
+                // trees.
+                fragment.range = (SourceRange) {
+                    .start = SubTree(&fragment, 0)->range.start,
+                    .end = SubTree(
+                        &fragment, production->num_symbols-1)->range.end,
+                };
+
                 // Remove the corresponding symbols from `output_precedences`
                 // for each expression consumed from `output`.
-                for (ParseTree *consumed = Vector_Begin(&fragment.sub_trees);
-                     consumed != Vector_End(&fragment.sub_trees);
-                     consumed = Vector_Next(&fragment.sub_trees, consumed))
+                for (ParseTree *consumed = fragment.sub_trees;
+                     consumed < fragment.sub_trees + fragment.num_sub_trees;
+                     ++consumed)
                 {
                     OrderedMultiset_Remove(
                         &output_precedences, &consumed->symbol);
@@ -3394,18 +3410,13 @@ static Status ParseStream(
                     .blimp = blimp,
                     .parser_state = parser_state,
                     .arg = production->handler_arg,
-                    .range = &(SourceRange){
-                        .start = SubExpr(&fragment, 0)->range.start,
-                        .end = SubExpr(
-                            &fragment, production->num_symbols - 1)->range.end,
-                    }
+                    .range = &fragment.range
                 };
-                if (production->handler(&ctx, &fragment) != BLIMP_OK) {
-                    Vector_Destroy(&fragment.sub_trees);
-                    goto error;
-                }
-                if (!BlimpExpr_HasSourceRange(fragment.parsed)) {
-                    BlimpExpr_SetSourceRange(fragment.parsed, ctx.range);
+                if (production->handler != NULL) {
+                    if (production->handler(&ctx, &fragment) != BLIMP_OK) {
+                        ParseTree_Destroy(&fragment);
+                        goto error;
+                    }
                 }
 
                 // Push the new expression onto the output stack, in place of
@@ -3418,7 +3429,7 @@ static Status ParseStream(
 
                 // Add the symbol we just reduced to `output_precedences`.
                 if (OrderedMultiset_Insert(
-                        &output_precedences, &fragment.symbol) != BLIMP_OK)
+                        &output_precedences, &symbol) != BLIMP_OK)
                 {
                     goto error;
                 }
@@ -3481,31 +3492,21 @@ static Status ParseStream(
                             ? "shift-reduce"
                             : "reduce-reduce";
 
-                    if (tree.parsed->tag == EXPR_SYMBOL) {
-                        // If the input that caused the error is a terminal or a
-                        // non-terminal symbol, include it in the error message.
-                        ErrorFromExpr(blimp, tree.parsed,
+                    if (tree.symbol.is_terminal) {
+                        // If the input that caused the error is a terminal,
+                        // include it in the error message.
+                        ErrorFrom(blimp, tree.range,
                             BLIMP_AMBIGUOUS_PARSE,
                             "ambiguous parse at input `%s' (%s conflict). "
                             "Perhaps you need to add parentheses?",
-                            tree.parsed->symbol->name, conflict
+                            tree.token->name, conflict
                         );
                     } else {
-                        // Otherwise, include the precedence of the non-terminal
-                        // which caused the error.
-                        NonTerminal nt;
-                        if (tree.symbol.is_terminal) {
-                            nt = StateMachine_UnPseudoTerminal(
-                                &m, tree.symbol.terminal);
-                        } else {
-                            nt = tree.symbol.non_terminal;
-                        }
-
-                        ErrorFromExpr(blimp, tree.parsed,
+                        ErrorFrom(blimp, tree.range,
                             BLIMP_AMBIGUOUS_PARSE,
                             "ambiguous parse at expression with precedence %zu "
                             "(%s conflict). Perhaps you need to add "
-                            "parentheses?", nt, conflict);
+                            "parentheses?", tree.symbol.non_terminal, conflict);
                     }
                 } else if (tree.symbol.is_terminal &&
                            tree.symbol.terminal == grammar->eof_terminal)
@@ -3515,28 +3516,22 @@ static Status ParseStream(
                     // have a special error message. The automatic line
                     // continuation feature of the REPL relies on a unique error
                     // code being returned when the unexpected input was EOF.
-                    ErrorFromExpr(blimp, tree.parsed,
+                    ErrorFrom(blimp, tree.range,
                         BLIMP_UNEXPECTED_EOF,
                         "unexpected end of input");
-                } else if (tree.parsed->tag == EXPR_SYMBOL) {
-                    // If the unexpected input was a terminal or a symbol
-                    // non-terminal, include it in the output.
-                    ErrorFromExpr(blimp, tree.parsed,
+                } else if (tree.symbol.is_terminal) {
+                    // If the unexpected input was a terminal, include it in the
+                    // output.
+                    ErrorFrom(blimp, tree.range,
                         BLIMP_UNEXPECTED_TOKEN,
-                        "unexpected token `%s'", tree.parsed->symbol->name);
+                        "unexpected token `%s'", tree.token->name);
                 } else {
                     // Otherwise, include the precedence of the unexpected
                     // non-terminal.
-                    NonTerminal nt;
-                    if (tree.symbol.is_terminal) {
-                        nt = StateMachine_UnPseudoTerminal(
-                            &m, tree.symbol.terminal);
-                    } else {
-                        nt = tree.symbol.non_terminal;
-                    }
-                    ErrorFromExpr(blimp, tree.parsed,
+                    ErrorFrom(blimp, tree.range,
                         BLIMP_UNEXPECTED_TOKEN,
-                        "unexpected expression with precedence %zu", nt);
+                        "unexpected expression with precedence %zu",
+                        tree.symbol.non_terminal);
                 }
                 goto error;
             }
@@ -3558,18 +3553,11 @@ Status Parse(
     Grammar *grammar,
     NonTerminal target,
     void *parser_state,
-    Expr **expr)
+    ParseTree *parsed)
 {
     ParseTreeStream stream;
     ParseTreeStream_InitLexer(&stream, lex);
-
-    ParseTree tree;
-    TRY(ParseStream(&stream, grammar, target, parser_state, &tree));
-
-    *expr = BlimpExpr_Borrow(tree.parsed);
-    ParseTree_Destroy(&tree);
-
-    return BLIMP_OK;
+    return ParseStream(&stream, grammar, target, parser_state, parsed);
 }
 
 Status Reparse(

@@ -32,118 +32,6 @@ static Status CreateTerminal(
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-// Parser API
-//
-
-// The public macro API is not directly compatible with the internal Grammar
-// API, since some of the data types are simplified, and we do not expose all of
-// the internal data types. Therefore, a BlimpMacroHandler can not be used
-// directly as the handler for a grammar rule in Grammar_AddRule(). Instead,
-// APIMacroHandler() must be used to translate between the arguments given to a
-// Grammar macro handler and the arguments expected by a BlimpMacroHandler.
-//
-// APIMacroArg stores the API handler and its argument, which is called by
-// APIMacroHandler after marshalling the arguments it receives from the parser.
-typedef struct {
-    BlimpMacroHandler handler;
-    void *handler_arg;
-} APIMacroArg;
-
-static Status APIMacroHandler(ParserContext *ctx, ParseTree *tree)
-{
-    APIMacroArg *arg = (APIMacroArg *)ctx->arg;
-
-    // Convert the parsed sub-trees from ParseTrees to a list of Exprs.
-    Vector/*<Expr *>*/ exprs;
-    Vector_Init(ctx->blimp, &exprs, sizeof(Expr *), ExprDestructor);
-    TRY(Vector_Reserve(&exprs, Vector_Length(&tree->sub_trees)));
-    for (ParseTree *sub_tree = Vector_Begin(&tree->sub_trees);
-         sub_tree != Vector_End(&tree->sub_trees);
-         sub_tree = Vector_Next(&tree->sub_trees, sub_tree))
-    {
-        Expr *expr = BlimpExpr_Borrow(sub_tree->parsed);
-        CHECK(Vector_PushBack(&exprs, &expr));
-    }
-
-    // Call the user's handler.
-    Status ret = arg->handler(
-        ctx->blimp, Vector_Data(&exprs), arg->handler_arg, &tree->parsed);
-    Vector_Destroy(&exprs);
-    return ret;
-}
-
-Status Blimp_DefineMacro(
-    Blimp *blimp,
-    const Symbol *non_terminal,
-    BlimpGrammarSymbol *symbols,
-    size_t num_symbols,
-    BlimpMacroHandler handler,
-    void *handler_arg)
-{
-    NonTerminal nt;
-    TRY(Grammar_GetNonTerminal(&blimp->grammar, non_terminal, &nt));
-
-    // Convert `symbols` from the public BlimpGrammarSymbol type to the internal
-    // GrammarSymbol type.
-    Vector/*<GrammarSymbol>*/ grammar_symbols;
-    Vector_Init(blimp, &grammar_symbols, sizeof(GrammarSymbol), NULL);
-    TRY(Vector_Reserve(&grammar_symbols, num_symbols));
-    for (size_t i = 0; i < num_symbols; ++i) {
-        GrammarSymbol sym;
-        sym.is_terminal = symbols[i].is_terminal;
-        if (sym.is_terminal) {
-            // Convert the symbol for the token into the unique identifier by
-            // which the lexer knows that token.
-            if (CreateTerminal(blimp, symbols[i].symbol->name, &sym.terminal)
-                != BLIMP_OK)
-            {
-                Vector_Destroy(&grammar_symbols);
-                return Reraise(blimp);
-            }
-        } else {
-            if (Grammar_GetNonTerminal(
-                    &blimp->grammar, symbols[i].symbol, &sym.non_terminal)
-                != BLIMP_OK)
-            {
-                Vector_Destroy(&grammar_symbols);
-                return Reraise(blimp);
-            }
-        }
-
-        CHECK(Vector_PushBack(&grammar_symbols, &sym));
-            // This cannot fail since we reserved enough space in the vector
-            // when we created it.
-    }
-
-    // Save info that the handler will need.
-    APIMacroArg *arg;
-    if (Malloc(blimp, sizeof(APIMacroArg), &arg) != BLIMP_OK) {
-        Vector_Destroy(&grammar_symbols);
-        return Reraise(blimp);
-    }
-    arg->handler = handler;
-    arg->handler_arg = handler_arg;
-
-    // Add a grammar rule coresponding to this macro.
-    if (Grammar_AddRule(
-            &blimp->grammar,
-            nt,
-            num_symbols,
-            Vector_Data(&grammar_symbols),
-            APIMacroHandler,
-            arg)
-        != BLIMP_OK)
-    {
-        Free(blimp, &arg);
-        Vector_Destroy(&grammar_symbols);
-        return Reraise(blimp);
-    }
-
-    Vector_Destroy(&grammar_symbols);
-    return BLIMP_OK;
-}
-
-////////////////////////////////////////////////////////////////////////////////
 // Macros
 //
 
@@ -158,15 +46,13 @@ static Status GetNonTerminal(
 
 typedef struct {
     const Symbol *non_terminal_symbol;
-    Vector/*<ParseTree>*/ sub_trees;
-    Expr *parsed;
+    ParseTree tree;
 } ParseTreeArg;
 
 static void ParseTreeFinalizer(void *p)
 {
     ParseTreeArg *arg = (ParseTreeArg *)p;
-    Vector_Destroy(&arg->sub_trees);
-    Blimp_FreeExpr(arg->parsed);
+    ParseTree_Destroy(&arg->tree);
     free(arg);
 }
 
@@ -187,26 +73,21 @@ static Status ParseTreeMethod(
     ParseTreeArg *arg;
     CHECK(BlimpObject_ParseExtension(receiver, NULL, (void **)&arg));
 
-    Vector/*<ParseTree>*/ *trees = &arg->sub_trees;
+    size_t num_trees = arg->tree.num_sub_trees;
+    ParseTree *trees = arg->tree.sub_trees;
 
     // Send each sub-tree to the `message`.
-    for (ParseTree *tree = Vector_Begin(trees);
-         tree != Vector_End(trees);
-         tree = Vector_Next(trees, tree))
-    {
+    for (ParseTree *tree = trees; tree < trees + num_trees; ++tree) {
         // Get an object representing the sub-tree `tree`. This will be either a
         // symbol or a smaller parse tree extension object, depending on whether
         // `tree` is a terminal or a non-terminal with its own parse tree.
         Object *sub_tree;
         if (tree->symbol.is_terminal) {
-            assert(Vector_Length(&tree->sub_trees) == 0);
-            assert(tree->parsed->tag == EXPR_SYMBOL);
-            TRY(BlimpObject_NewSymbol(blimp, tree->parsed->symbol, &sub_tree));
+            sub_tree = (Object *)tree->token;
         } else {
             // Allocate an argument for ParseTreeMethod() for the sub-tree.
             ParseTreeArg *sub_arg;
             TRY(Malloc(blimp, sizeof(ParseTreeArg), &sub_arg));
-            sub_arg->parsed = BlimpExpr_Borrow(tree->parsed);
             if (Grammar_GetNonTerminalSymbol(
                     &blimp->grammar,
                     tree->symbol.non_terminal,
@@ -220,12 +101,7 @@ static Status ParseTreeMethod(
             // tree, since, while unlikely, the visitor to which we are going to
             // send the sub-tree may save a reference to it which lives longer
             // than the ParseTree `tree`.
-            if (Vector_Copy(
-                    &tree->sub_trees,
-                    &sub_arg->sub_trees,
-                    (CopyFunc)ParseTree_Copy
-                ) != BLIMP_OK)
-            {
+            if (ParseTree_Copy(blimp, tree, &sub_arg->tree) != BLIMP_OK) {
                 free(sub_arg);
                 return Reraise(blimp);
             }
@@ -240,7 +116,7 @@ static Status ParseTreeMethod(
                     &sub_tree
                 ) != BLIMP_OK)
             {
-                Vector_Destroy(&sub_arg->sub_trees);
+                ParseTree_Destroy(&sub_arg->tree);
                 free(sub_arg);
                 return Reraise(blimp);
             }
@@ -260,6 +136,12 @@ static Status ParseTreeMethod(
 }
 
 static Status ObjectToParseTree(Blimp *blimp, Object *obj, ParseTree *tree);
+
+static void ParseTreeVisitorFinalizer(void *p)
+{
+    Vector_Destroy((Vector *)p);
+    free(p);
+}
 
 // Method for a parse tree visitor extension object, which can be used to
 // inspect a user-provided parse tree object (that is, an object which adheres
@@ -293,8 +175,6 @@ static Status ParseTreeVisitor(
     return BLIMP_OK;
 }
 
-static Status ParseTree_ReconstructExpr(Blimp *blimp, ParseTree *tree);
-
 // Extract a ParseTree from an Object which conforms to the parse tree protocol.
 // This function does not reparse the Object. Instead, it trusts that the object
 // represents a valid parse tree.
@@ -326,13 +206,9 @@ static Status ObjectToParseTree(Blimp *blimp, Object *obj, ParseTree *tree)
         {
             goto error;
         }
-        if (Vector_Copy(
-                &arg->sub_trees, &tree->sub_trees, (CopyFunc)ParseTree_Copy)
-            != BLIMP_OK)
-        {
+        if (ParseTree_Copy(blimp, &arg->tree, tree) != BLIMP_OK) {
             goto error;
         }
-        tree->parsed = BlimpExpr_Borrow(arg->parsed);
         return BLIMP_OK;
     }
 
@@ -344,16 +220,7 @@ static Status ObjectToParseTree(Blimp *blimp, Object *obj, ParseTree *tree)
         }
 
         tree->symbol = (GrammarSymbol){.is_terminal=true, .terminal=tok.type};
-        Vector_Init(
-            blimp,
-            &tree->sub_trees,
-            sizeof(ParseTree),
-            (Destructor)ParseTree_Destroy
-        );
-        if (BlimpExpr_NewSymbol(blimp, tok.symbol, &tree->parsed) != BLIMP_OK) {
-            goto error;
-        }
-
+        tree->token = tok.symbol;
         return BLIMP_OK;
     }
 
@@ -362,20 +229,23 @@ static Status ObjectToParseTree(Blimp *blimp, Object *obj, ParseTree *tree)
     // ParseTreeVisitor to collect ParseTrees for each of the sub-trees in the
     // vector `trees`, and then we will parse that sequence of parse trees into
     // one larger tree.
-    Vector/*<ParseTree>*/ trees;
+    Vector/*<ParseTree>*/ *trees;
+    TRY(Malloc(blimp, sizeof(Vector), &trees));
+        // Allocate `trees` on the heap because the object we pass it to might
+        // keep a reference to it that lives longer than this function.
     Vector_Init(
-        blimp, &trees, sizeof(ParseTree), (Destructor)ParseTree_Destroy);
+        blimp, trees, sizeof(ParseTree), (Destructor)ParseTree_Destroy);
     Object *visitor;
     if (BlimpObject_NewExtension(
             blimp,
             (Object *)blimp->global,
-            &trees,
+            trees,
             ParseTreeVisitor,
-            (BlimpFinalizer)Vector_Destroy,
+            ParseTreeVisitorFinalizer,
             &visitor
         ) != BLIMP_OK)
     {
-        Vector_Destroy(&trees);
+        ParseTreeVisitorFinalizer(trees);
         goto error;
     }
 
@@ -399,31 +269,18 @@ static Status ObjectToParseTree(Blimp *blimp, Object *obj, ParseTree *tree)
         BlimpObject_Release(visitor);
         goto error;
     }
-    if (Vector_Move(&trees, &tree->sub_trees) != BLIMP_OK) {
-        BlimpObject_Release(visitor);
-        goto error;
-    }
+    Vector_MoveOut(trees, &tree->num_sub_trees, (void **)&tree->sub_trees);
+
     BlimpObject_Release(visitor);
         // Release `visitor` _after_ moving the `trees` vector to
-        // `tree->sub_trees`, as the finalizer will destroy the `trees` vector.
-
-    // Convert the parse tree to an expression, filling in `tree->parsed`.
-    if (ParseTree_ReconstructExpr(blimp, tree) != BLIMP_OK) {
-        goto error;
-    }
+        // `tree->sub_trees`, as the finalizer might destroy the `trees` vector.
 
     return BLIMP_OK;
 
 error:
     // Make sure `tree` is a valid parse tree even if we failed.
-    tree->parsed = NULL;
     tree->symbol = (GrammarSymbol){.is_terminal=true, .terminal=TOK_INVALID};
-    Vector_Init(
-        blimp,
-        &tree->sub_trees,
-        sizeof(ParseTree),
-        (Destructor)ParseTree_Destroy
-    );
+    TRY(Blimp_GetSymbol(blimp, "", &tree->token));
     return Reraise(blimp);
 }
 
@@ -436,14 +293,7 @@ static Status ParseObject(Blimp *blimp, Object *obj, ParseTree *tree)
         TRY(GetToken(blimp, ((const Symbol *)obj)->name, &tok));
 
         tree->symbol = (GrammarSymbol){.is_terminal=true, .terminal=tok.type};
-        Vector_Init(
-            blimp,
-            &tree->sub_trees,
-            sizeof(ParseTree),
-            (Destructor)ParseTree_Destroy
-        );
-        TRY(BlimpExpr_NewSymbol(blimp, tok.symbol, &tree->parsed));
-
+        tree->token = tok.symbol;
         return BLIMP_OK;
     }
 
@@ -452,20 +302,23 @@ static Status ParseObject(Blimp *blimp, Object *obj, ParseTree *tree)
     // ParseTreeVisitor to collect ParseTrees for each of the sub-trees in the
     // vector `trees`, and then we will parse that sequence of parse trees into
     // one larger tree.
-    Vector/*<ParseTree>*/ trees;
+    Vector/*<ParseTree>*/ *trees;
+    TRY(Malloc(blimp, sizeof(Vector), &trees));
+        // Allocate `trees` on the heap because the object we pass it to might
+        // keep a reference to it that lives longer than this function.
     Vector_Init(
-        blimp, &trees, sizeof(ParseTree), (Destructor)ParseTree_Destroy);
+        blimp, trees, sizeof(ParseTree), (Destructor)ParseTree_Destroy);
     Object *visitor;
     if (BlimpObject_NewExtension(
             blimp,
             (Object *)blimp->global,
-            &trees,
+            trees,
             ParseTreeVisitor,
-            (BlimpFinalizer)Vector_Destroy,
+            ParseTreeVisitorFinalizer,
             &visitor
         ) != BLIMP_OK)
     {
-        Vector_Destroy(&trees);
+        ParseTreeVisitorFinalizer(trees);
         goto error;
     }
 
@@ -487,31 +340,23 @@ static Status ParseObject(Blimp *blimp, Object *obj, ParseTree *tree)
         BlimpObject_Release(visitor);
         goto error;
     }
-    if (Reparse(&trees, &blimp->grammar, nt, NULL, tree) != BLIMP_OK) {
+    if (Reparse(trees, &blimp->grammar, nt, NULL, tree) != BLIMP_OK) {
         BlimpObject_Release(visitor);
         goto error;
     }
     BlimpObject_Release(visitor);
         // Release `visitor` _after_ the call to Reparse() above, as the
-        // finalizer will destroy the `trees` vector.
+        // finalizer might destroy the `trees` vector.
 
     assert(!tree->symbol.is_terminal);
     assert(tree->symbol.non_terminal == nt);
-        // We should have got back a tree with the precedence we were trying to
-        // parse.
 
     return BLIMP_OK;
 
 error:
     // Make sure `tree` is a valid parse tree even if we failed.
-    tree->parsed = NULL;
     tree->symbol = (GrammarSymbol){.is_terminal=true, .terminal=TOK_INVALID};
-    Vector_Init(
-        blimp,
-        &tree->sub_trees,
-        sizeof(ParseTree),
-        (Destructor)ParseTree_Destroy
-    );
+    TRY(Blimp_GetSymbol(blimp, "", &tree->token));
     return Reraise(blimp);
 }
 
@@ -530,15 +375,11 @@ static Status MacroHandler(ParserContext *ctx, ParseTree *tree)
     // to convey the input sub-trees to the handler object.
     ParseTreeArg *input_arg;
     TRY(Malloc(ctx->blimp, sizeof(ParseTreeArg), &input_arg));
-    input_arg->parsed = NULL;
     input_arg->non_terminal_symbol = arg->non_terminal_symbol;
     // We give the parse tree object a copy of the input trees, since, while
     // unlikely, the macro handler may save a reference to the parse tree which
     // lives longer than the input sub-trees.
-    if (Vector_Copy(
-            &tree->sub_trees, &input_arg->sub_trees, (CopyFunc)ParseTree_Copy)
-        != BLIMP_OK)
-    {
+    if (ParseTree_Copy(ctx->blimp, tree, &input_arg->tree) != BLIMP_OK) {
         free(input_arg);
         return Reraise(ctx->blimp);
     }
@@ -595,7 +436,17 @@ static Status MacroHandler(ParserContext *ctx, ParseTree *tree)
     // that it can later be used where the macro non-terminal is expected when
     // it is reparsed as a sub-tree of another macro expansion. When we remove
     // reparsing, we should also fix this behavior.
-    tree->symbol.is_terminal = false;
+    if (tree->symbol.is_terminal) {
+        // Because of the hack described above, we are setting the symbol of the
+        // parse tree to a specific non-terminal, and therefore the parse tree
+        // must be a non-terminal. We cannot change a terminal parse tree to a
+        // non-terminal, because the two kinds of parse trees have completely
+        // different structures. This restriction will be removed when the rest
+        // of this is removed, at which point macros will be able to return
+        // terminals.
+        return Blimp_ErrorFrom(ctx->blimp, *ctx->range, BLIMP_INVALID_PARSE_TREE,
+            "macros returning symbols are not yet supported");
+    }
     TRY(Grammar_GetNonTerminal(
         &ctx->blimp->grammar,
         arg->non_terminal_symbol,
@@ -697,14 +548,17 @@ static Status SymbolVisitor(
 // Handler for `\> Term Term Term`
 static Status PrecedenceHandler(ParserContext *ctx, ParseTree *tree)
 {
-    Expr *production = SubExpr(tree, 1);
-    Expr *handler    = SubExpr(tree, 2);
+    ParseTree *production_tree = SubTree(tree, 1);
+    ParseTree *handler_tree    = SubTree(tree, 2);
 
-    // The expressions for the production and the handler have just now been
-    // parsed; they have not been analyzed yet. Since we are going to evaluate
-    // them now, at parse time, we need to resolve them.
-    TRY(BlimpExpr_Resolve(ctx->blimp, production));
-    TRY(BlimpExpr_Resolve(ctx->blimp, handler));
+    // Convert the production and handler parse trees to expressions so we can
+    // evaluate them at parse time.
+    Expr *production, *handler;
+    TRY(BlimpParseTree_Eval(ctx->blimp, production_tree, &production));
+    if (BlimpParseTree_Eval(ctx->blimp, handler_tree, &handler) != BLIMP_OK) {
+        Blimp_FreeExpr(production);
+        return Reraise(ctx->blimp);
+    }
 
     // Evaluate the production expression to get an Object which is a stream of
     // symbols (the right-hand side of the production).
@@ -793,90 +647,12 @@ static Status PrecedenceHandler(ParserContext *ctx, ParseTree *tree)
     }
 
     Vector_Destroy(&symbols);
-    return BlimpExpr_NewSymbol(ctx->blimp, nt_sym, &tree->parsed);
+    return BLIMP_OK;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // Default grammar
 //
-// In which we define handlers for each production in the default bl:mp grammar
-// (listed in grammar.h) and then define a function DefaultGrammar() which
-// creates a Grammar object containing those productions.
-//
-
-// Use an existing sub-tree as the result of a reduction to a lower-precedence
-// non-terminal. The index of the sub-tree to use, relative to the symbols
-// matched by the production which triggered this reduction, is `ctx->arg`.
-static Status IdentityHandler(ParserContext *ctx, ParseTree *tree)
-{
-    tree->parsed = BlimpExpr_Borrow(SubExpr(tree, (size_t)ctx->arg));
-    return BLIMP_OK;
-}
-
-// Handler for `Expr -> Stmt ; Expr`
-static Status SequenceHandler(ParserContext *ctx, ParseTree *tree)
-{
-    (void)ctx;
-
-    // The sub-statement may already be a sequence, so combining it with the
-    // sub-expression amounts to appending two linked lists.
-    SubExpr(tree, 0)->last->next = BlimpExpr_Borrow(SubExpr(tree, 2));
-    SubExpr(tree, 0)->last = SubExpr(tree, 2)->last;
-    tree->parsed = BlimpExpr_Borrow(SubExpr(tree, 0));
-    return BLIMP_OK;
-}
-
-// Handler for `Stmt -> Stmt -> Expr`
-static Status SendHandler(ParserContext *ctx, ParseTree *tree)
-{
-    return BlimpExpr_NewSend(
-        ctx->blimp,
-        SubExpr(tree, 0),
-        SubExpr(tree, 1),
-        &tree->parsed
-    );
-}
-
-// Handler for `Term -> {^msg Expr}` and `Term -> {Expr}`. `ctx->arg` should be
-// non-zero if an explicit message name for the block is provided (first case)
-// and zero otherwise (second case).
-static Status BlockHandler(ParserContext *ctx, ParseTree *tree)
-{
-    bool has_msg_name = (bool)ctx->arg;
-
-    Expr *body = SubExpr(tree, 1);
-
-    const Symbol *msg_name = NULL;
-    if (has_msg_name) {
-        const Symbol *msg_tok = SubToken(tree, 1);
-        assert(msg_tok->name[0] == '^');
-        assert(msg_tok->name[1] != '\0');
-        TRY(Blimp_GetSymbol(ctx->blimp, &msg_tok->name[1], &msg_name));
-        body = SubExpr(tree, 2);
-            // The message name symbol offsets the index of the body symbol by
-            // 1.
-    }
-
-    return BlimpExpr_NewBlock(ctx->blimp, msg_name, body, &tree->parsed);
-}
-
-// Handler for `Term -> ^msg`
-static Status MsgHandler(ParserContext *ctx, ParseTree *tree)
-{
-    const Symbol *tok = SubToken(tree, 0);
-    assert(tok->name[0] == '^');
-    assert(tok->name[1] != '\0');
-
-    const Symbol *sym;
-    TRY(Blimp_GetSymbol(ctx->blimp, &tok->name[1], &sym));
-    return BlimpExpr_NewMsgName(ctx->blimp, sym, &tree->parsed);
-}
-
-// Handler for `Term -> ^`
-static Status MsgThisHandler(ParserContext *ctx, ParseTree *tree)
-{
-    return BlimpExpr_NewMsgIndex(ctx->blimp, 0, &tree->parsed);
-}
 
 // You can't pass an array literal as an argument to a macro, because commas in
 // the macro argument list which are not intended to separate arguments must be
@@ -929,20 +705,20 @@ Status DefaultGrammar(Blimp *blimp, Grammar *grammar)
 
     // Expr[NoMsg] = Stmt[NoMsg] Semi Expr
     TRY(ADD_GRAMMAR_RULE(grammar, Expr, (NT(Stmt), NT(Semi), NT(Expr)),
-        SequenceHandler, NULL));
+        NULL, NULL));
     TRY(ADD_GRAMMAR_RULE(grammar, ExprNoMsg, (NT(StmtNoMsg), NT(Semi), NT(Expr)),
-        SequenceHandler, NULL));
+        NULL, NULL));
     //      \ Stmt[NoMsg]
     TRY(ADD_GRAMMAR_RULE(grammar, Expr, (NT(Stmt)),
-        IdentityHandler, NULL));
+        NULL, NULL));
     TRY(ADD_GRAMMAR_RULE(grammar, ExprNoMsg, (NT(StmtNoMsg)),
-        IdentityHandler, NULL));
+        NULL, NULL));
 
     // Stmt[NoMsg] = Stmt[NoMsg] Term
     TRY(ADD_GRAMMAR_RULE(grammar, Stmt, (NT(Stmt), NT(Term)),
-        SendHandler, NULL));
+        NULL, NULL));
     TRY(ADD_GRAMMAR_RULE(grammar, StmtNoMsg, (NT(StmtNoMsg), NT(Term)),
-        SendHandler, NULL));
+        NULL, NULL));
     //      \> Term Term
     TRY(ADD_GRAMMAR_RULE(grammar, Stmt, (T(MACRO), NT(Term), NT(Term)),
         PrecedenceHandler, NULL));
@@ -950,34 +726,34 @@ Status DefaultGrammar(Blimp *blimp, Grammar *grammar)
         PrecedenceHandler, NULL));
     //      \ term
     TRY(ADD_GRAMMAR_RULE(grammar, Stmt, (NT(Term)),
-        IdentityHandler, NULL));
+        NULL, NULL));
     TRY(ADD_GRAMMAR_RULE(grammar, StmtNoMsg, (NT(TermNoMsg)),
-        IdentityHandler, NULL));
+        NULL, NULL));
 
     // Semi = ";"
     TRY(ADD_GRAMMAR_RULE(grammar, Semi, (T(SEMI)),
-        IdentityHandler, NULL));
+        NULL, NULL));
 
     // Term = TermNoMsg \ Msg
     TRY(ADD_GRAMMAR_RULE(grammar, Term, (NT(TermNoMsg)),
-        IdentityHandler, NULL));
+        NULL, NULL));
     TRY(ADD_GRAMMAR_RULE(grammar, Term, (T(MSG_NAME)),
-        MsgHandler, NULL));
+        NULL, NULL));
 
     // TermNoMsg = "(" expr ")"
     TRY(ADD_GRAMMAR_RULE(grammar, TermNoMsg, (T(LPAREN), NT(Expr), T(RPAREN)),
-        IdentityHandler, (void *)1));
+        NULL, NULL));
     //      \ "{" [msg] expr "}"
     TRY(ADD_GRAMMAR_RULE(grammar, TermNoMsg, (T(LBRACE), T(MSG_NAME), NT(Expr), T(RBRACE)),
-        BlockHandler, (void *)1));
+        NULL, NULL));
     TRY(ADD_GRAMMAR_RULE(grammar, TermNoMsg, (T(LBRACE), NT(ExprNoMsg), T(RBRACE)),
-        BlockHandler, (void *)0));
+        NULL, NULL));
     //      \ symbol
     TRY(ADD_GRAMMAR_RULE(grammar, TermNoMsg, (T(SYMBOL)),
-        IdentityHandler, NULL));
+        NULL, NULL));
     //      \ "^"
     TRY(ADD_GRAMMAR_RULE(grammar, TermNoMsg, (T(MSG_THIS)),
-        MsgThisHandler, NULL));
+        NULL, NULL));
 
     // Give the parser readable names for the built-in terminals (user-defined
     // terminals will be named by the string used to create the terminal; see
@@ -989,24 +765,103 @@ Status DefaultGrammar(Blimp *blimp, Grammar *grammar)
     return BLIMP_OK;
 }
 
-static inline bool SubTreeIsTerminal(
-    const ParseTree *tree, size_t index, Terminal t)
-{
-    ParseTree *sub_tree = (ParseTree *)Vector_Index(&tree->sub_trees, index);
-    return sub_tree->symbol.is_terminal && sub_tree->symbol.terminal == t;
-}
-
-// Convert parse tree into an expression. In bl:mp semantics, this step is a
-// no-op because parse trees in the basic grammar, after macro expansions; are
-// already expressions. That is, a parse tree made up of only primitive
-// productions is the same S-expression as one of the bl:mp expression forms.
+////////////////////////////////////////////////////////////////////////////////
+// Converting ParseTrees to Exprs
+//
+// In bl:mp semantics, this step is a no-op because parse trees in the basic
+// grammar, after macro expansions, are already expressions. That is, a parse
+// tree made up of only primitive productions is the same S-expression as one of
+// the bl:mp expression forms.
 //
 // In our implementation of the semantics, though, ParseTree data structures
 // represent S-expressions while the Expr type is a more structured
-// representation with extra metadata. So we need to match the form of the parse
-// tree against one of the primitive productions and construct the appropriate
-// Expr, which would have been returned by the reduction handler for that
-// production.
+// representation with extra metadata and less redundant information (for
+// example, we don't keep track of extra, semantic-less lexical artifacts like
+// parentheses in Exprs). So we need to match the form of the parse tree against
+// one of the primitive productions and construct the appropriate Expr.
+//
+// Converting a ParseTree to an Expr requires a bottom-up traversal of the parse
+// tree, where sub-trees are converted to sub-expressions of their parent tree.
+// Such a bottom-up traversal is easy to write recursively, but parse trees can
+// get quite large (and deep, since sequences of expressions are reprsented as
+// nested parse trees) and we might not have the stack space to do this
+// traversal recursively. So, we implement an iterative bottom-up (post-order
+// traversal).
+//
+// Post-order is probably the trickiest tree traversal to do iteratively.
+// Luckily though, all of the primitive expression forms have at most two
+// sub-trees which need to be converted to expressions in order to construct the
+// parent expression, so we can treat a parse tree as a binary tree rather than
+// an N-ary tree. There is a relatively straight-forward solution for iterative
+// post-order traversal of binary trees.
+//
+// The ParseTreeNode type maps a parse tree to a node in a binary tree. It also
+// includes some extra metadata which allows us to map each parse tree to an
+// expression form and a binary tree node at most once. Once we have a
+// ParseTreeNode for a ParseTree, we don't have to inspect the sub-trees of a
+// parse tree to find out what kind of expression it is (for example, is the
+// first sub-tree a `(` terminal?) because this information is encoded in the
+// `type` field of the ParseTreeNode. And we don't have to figure out what kind
+// of expression it is to determine whether it has 0, 1, or 2 sub-expressions,
+// or which sub-trees correspond to the sub-expressions, because the relevant
+// sub-trees are already stored in the `left` and `right` fields.
+//
+// By convention, if a parse tree has exactly 1 sub-tree, it is `left`, and
+// `right` is NULL.
+typedef struct {
+    enum {
+        PARSE_TREE_TERMINAL,
+        PARSE_TREE_TRIVIAL,
+        PARSE_TREE_MSG,
+        PARSE_TREE_MSG_THIS,
+        PARSE_TREE_SEND,
+        PARSE_TREE_SEQUENCE,
+        PARSE_TREE_PARENS,
+        PARSE_TREE_BLOCK_NO_MSG,
+        PARSE_TREE_BLOCK,
+        PARSE_TREE_MACRO,
+    } type;
+
+    ParseTree *tree;
+    ParseTree *left;
+    ParseTree *right;
+} ParseTreeNode;
+
+static inline bool SubTreeIsTerminal(
+    const ParseTree *tree, size_t index, Terminal t)
+{
+    const ParseTree *sub_tree = SubTree(tree, index);
+    if (sub_tree->symbol.is_terminal) {
+        return sub_tree->symbol.terminal == t;
+    } else if (sub_tree->num_sub_trees == 1) {
+        return SubTreeIsTerminal(sub_tree, 0, t);
+    } else {
+        return false;
+    }
+}
+
+static inline const Symbol *SubToken(
+    const ParseTree *tree, size_t index)
+{
+    const ParseTree *sub_tree = SubTree(tree, index);
+    if (sub_tree->symbol.is_terminal) {
+        return sub_tree->token;
+    } else {
+        assert(sub_tree->num_sub_trees == 1);
+        return SubToken(sub_tree, 0);
+    }
+}
+
+// ParseTreeToNode() correlates a ParseTree with one of the primitive expression
+// forms and stores this information in a ParseTreeNode data structure, so that
+// later on we do not have to inspect the ParseTree to find relevant information
+// such as which of its sub-trees need to be converted to expressions or what
+// kind of expression it represents.
+//
+// If the ParseTree does not correspond to a built-in expression form (for
+// example, a user-defined macro returned an ad-hoc parse tree structure which
+// erroneously made it into the final expression tree) this is where we will
+// catch and report those errors.
 //
 // Right now, this logic is a bit complicated, as it is basically an ad-hoc
 // parser for the built-in bl:mp grammar. However, the long-term goal is to
@@ -1016,53 +871,103 @@ static inline bool SubTreeIsTerminal(
 // indicates the production being used. Then, this logic will simply amount to
 // checking the prefix terminal, validating the rest of the tree, and calling
 // the appropriate handler.
-static Status ParseTree_ReconstructExpr(Blimp *blimp, ParseTree *tree)
+static Status ParseTreeToNode(
+    Blimp *blimp, ParseTree *tree, ParseTreeNode *node)
 {
-    Terminal TOK_SEMI, TOK_LBRACE, TOK_RBRACE, TOK_LPAREN, TOK_RPAREN;
+    node->tree = tree;
+
+    // By default, set `left` and `right` to NULL. If either sub-expression is
+    // present, we will set it when we determine which expression form
+    // corresponds to the parse tree.
+    node->left = NULL;
+    node->right = NULL;
+
+    if (tree->symbol.is_terminal) {
+        // Terminals have no sub-trees.
+        node->type = PARSE_TREE_TERMINAL;
+        return BLIMP_OK;
+    }
+
+    // Get the terminals we will need to check for to interpret the built-in
+    // expression forms.
+    Terminal TOK_SEMI, TOK_LBRACE, TOK_RBRACE, TOK_LPAREN, TOK_RPAREN, TOK_MACRO;
     TRY(CreateTerminal(blimp, ";", &TOK_SEMI));
     TRY(CreateTerminal(blimp, "{", &TOK_LBRACE));
     TRY(CreateTerminal(blimp, "}", &TOK_RBRACE));
     TRY(CreateTerminal(blimp, "(", &TOK_LPAREN));
     TRY(CreateTerminal(blimp, ")", &TOK_RPAREN));
+    TRY(CreateTerminal(blimp, "\\>", &TOK_MACRO));
 
-    ParserContext ctx = {blimp, NULL, NULL, NULL};
-
-    // Start by matching the number of sub-trees against the lenghts of possible
+    // Start by matching the number of sub-trees against the lengths of possible
     // reductions. This will narrow down the set of productions that could
     // potentially match this parse tree and eliminate the need to do bounds
     // checking everywhere.
-    switch (Vector_Length(&tree->sub_trees)) {
+    switch (tree->num_sub_trees) {
         case 1:
             // Term -> "^msg"
             if (SubTreeIsTerminal(tree, 0, TOK_MSG_NAME)) {
-                return MsgHandler(&ctx, tree);
+                node->type = PARSE_TREE_MSG;
+                return BLIMP_OK;
             }
             // TermNoMsg -> "^"
             if (SubTreeIsTerminal(tree, 0, TOK_MSG_THIS)) {
-                return MsgThisHandler(&ctx, tree);
+                node->type = PARSE_TREE_MSG_THIS;
+                return BLIMP_OK;
             }
-            // Trivial reductions do not change the parsed expression.
-            return IdentityHandler(&ctx, tree);
-        case 2:
+            // Trivial reductions do not change the parsed expression, we will
+            // just use the expression resulting from the sub-tree.
+            node->type = PARSE_TREE_TRIVIAL;
+            node->left = SubTree(tree, 0);
+            return BLIMP_OK;
+        case 2: {
             // Stmt[NoMsg] = Stmt[NoMsg] Term
-            return SendHandler(&ctx, tree);
+            node->type = PARSE_TREE_SEND;
+            node->left = SubTree(tree, 0);
+            node->right = SubTree(tree, 1);
+            return BLIMP_OK;
+        }
         case 3:
             // Expr[NoMsg] -> Stmt[NoMsg] Semi Expr
             if (SubTreeIsTerminal(tree, 1, TOK_SEMI)) {
-                return SequenceHandler(&ctx, tree);
+                node->type = PARSE_TREE_SEQUENCE;
+                node->left = SubTree(tree, 0);
+                node->right = SubTree(tree, 2);
+                return BLIMP_OK;
             }
             // TermNoMsg -> "(" Expr ")"
             if (SubTreeIsTerminal(tree, 0, TOK_LPAREN) &&
                 SubTreeIsTerminal(tree, 2, TOK_RPAREN))
             {
-                ctx.arg = (void *)1;
-                return IdentityHandler(&ctx, tree);
+                node->type = PARSE_TREE_PARENS;
+                node->left = SubTree(tree, 1);
+                return BLIMP_OK;
             }
             // TermNoMsg -> "{" ExprNoMsg "}"
             if (SubTreeIsTerminal(tree, 0, TOK_LBRACE) &&
                 SubTreeIsTerminal(tree, 2, TOK_RBRACE))
             {
-                return BlockHandler(&ctx, tree);
+                node->type = PARSE_TREE_BLOCK_NO_MSG;
+                node->left = SubTree(tree, 1);
+                return BLIMP_OK;
+            }
+            // Stmt[NoMsg] -> "\>"" Term Term
+            if (SubTreeIsTerminal(tree, 0, TOK_MACRO)) {
+                node->type = PARSE_TREE_MACRO;
+
+                // Currently, the expression resulting from a macro definition
+                // is a dummy symbol, to have no side-effects. In the future,
+                // though, we will have a built-in macro definition expression
+                // type, which defines a macro at runtime when evaluated. That
+                // will require converting the sub-Terms to expressions, so we
+                // include the left and right sub-trees here to ensure current
+                // bl:mp code is forwards compatible; that is, both sub-trees of
+                // a macro definition must be valid parse trees. For now,
+                // ParseTreeNodeToExpr will simply discard the resulting left
+                // and right sub-expressions after the parse trees have been
+                // checked for validity.
+                node->left = SubTree(tree, 1);
+                node->right = SubTree(tree, 2);
+                return BLIMP_OK;
             }
             break;
         case 4:
@@ -1071,11 +976,223 @@ static Status ParseTree_ReconstructExpr(Blimp *blimp, ParseTree *tree)
                 SubTreeIsTerminal(tree, 1, TOK_MSG_NAME) &&
                 SubTreeIsTerminal(tree, 3, TOK_RBRACE))
             {
-                ctx.arg = (void *)1;
-                return BlockHandler(&ctx, tree);
+                node->type = PARSE_TREE_BLOCK;
+                node->left = SubTree(tree, 2);
+                return BLIMP_OK;
             }
             break;
     }
 
     return Error(blimp, BLIMP_INVALID_PARSE_TREE);
+}
+
+static Status ParseTreeNodeToExpr(
+    Blimp *blimp, const ParseTreeNode *node, Expr *left, Expr *right, Expr **expr)
+{
+    const ParseTree *tree = node->tree;
+
+    switch (node->type) {
+        case PARSE_TREE_TERMINAL:
+            return BlimpExpr_NewSymbol(blimp, tree->token, expr);
+        case PARSE_TREE_TRIVIAL:
+            *expr = left;
+            return BLIMP_OK;
+        case PARSE_TREE_MSG: {
+            // Term -> "^msg"
+            const Symbol *tok = SubToken(tree, 0);
+            assert(tok->name[0] == '^');
+            assert(tok->name[1] != '\0');
+
+            const Symbol *sym;
+            TRY(Blimp_GetSymbol(blimp, &tok->name[1], &sym));
+            return BlimpExpr_NewMsgName(blimp, sym, expr);
+        }
+        case PARSE_TREE_MSG_THIS:
+            // TermNoMsg -> "^"
+            return BlimpExpr_NewMsgIndex(blimp, 0, expr);
+        case PARSE_TREE_SEND:
+            // Stmt[NoMsg] = Stmt[NoMsg] Term
+            return BlimpExpr_NewSend(blimp, left, right, expr);
+        case PARSE_TREE_SEQUENCE:
+            // Expr[NoMsg] -> Stmt[NoMsg] Semi Expr
+            //
+            // The sub-statement may already be a sequence, so combining it
+            // with the sub-expression amounts to appending two linked
+            // lists.
+            left->last->next = right;
+            left->last = right->last;
+            *expr = left;
+            return BLIMP_OK;
+        case PARSE_TREE_PARENS:
+            // TermNoMsg -> "(" Expr ")"
+            *expr = left;
+            return BLIMP_OK;
+        case PARSE_TREE_BLOCK_NO_MSG:
+            // TermNoMsg -> "{" ExprNoMsg "}"
+            return BlimpExpr_NewBlock(blimp, NULL, left, expr);
+       case PARSE_TREE_BLOCK: {
+            // TermNoMsg -> "{" "^msg" Expr "}"
+            const Symbol *msg_name;
+            const Symbol *msg_tok = SubToken(tree, 1);
+            assert(msg_tok->name[0] == '^');
+            assert(msg_tok->name[1] != '\0');
+            TRY(Blimp_GetSymbol(blimp, &msg_tok->name[1], &msg_name));
+
+            return BlimpExpr_NewBlock(blimp, msg_name, left, expr);
+        }
+        case PARSE_TREE_MACRO: {
+            // Stmt[NoMsg] -> "\>"" Term Term
+            //
+            // Currently, we simply return a dummy expression which has no
+            // runtime side-effects (a `.` symbol), and thus we discard the two
+            // sub-expressions, which we only wanted to check for validity.
+            //
+            // In the future, we will use these sub-expressions to construct a
+            // built-in "macro definition" expression, which defines a macro at
+            // runtime when evaluated.
+            Blimp_FreeExpr(left);
+            Blimp_FreeExpr(right);
+
+            const Symbol *dot;
+            TRY(Blimp_GetSymbol(blimp, ".", &dot));
+            return BlimpExpr_NewSymbol(blimp, dot, expr);
+        }
+
+        default:
+            abort();
+            return BLIMP_OK;
+    }
+}
+
+Status ParseTreeToExpr(Blimp *blimp, ParseTree *tree, Expr **result)
+{
+    // Iterative post-order traversal. We will use two stacks. The idea is to
+    // get the nodes in reverse post-order onto the `reverse_post_order` stack.
+    // This is based on the observation that the reverse of post-order is
+    // pre-order with left and right reversed, and pre-order is easy to
+    // implement iteratively using one stack (it is just a depth-first
+    // traversal).
+    //
+    // We use `stack` to implement a pre-order traversal (but always visiting
+    // `right` first instead of `left` first) and each time the pre-order
+    // traversal would visit a node, we push it onto `reverse_post_order`. At
+    // the end of this process, `reverse_post_order` will contain all the
+    // required sub-trees in the reverse of the order we want to visit them.
+    //
+    // Also, we will convert ParseTrees to ParseTreeNodes as we push them onto
+    // `stack`, and our traversal will be over the binary tree structure imposed
+    // by the ParseTreeNode type.
+    Vector/*<ParseTreeNode>*/ stack;
+    Vector/*<ParseTreeNode>*/ reverse_post_order;
+
+    Vector_Init(blimp, &stack, sizeof(ParseTreeNode), NULL);
+    Vector_Init(blimp, &reverse_post_order, sizeof(ParseTreeNode), NULL);
+
+    // The first node visited in a pre-order traversal is the root, so convert
+    // it to a ParseTreeNode and push it onto the stack.
+    ParseTreeNode *root;
+    TRY(Vector_EmplaceBack(&stack, (void **)&root));
+    if (ParseTreeToNode(blimp, tree, root) != BLIMP_OK) {
+        Vector_Destroy(&stack);
+        Vector_Destroy(&reverse_post_order);
+        return Reraise(blimp);
+    }
+
+    // Depth-first traversal.
+    while (!Vector_Empty(&stack)) {
+        // Remove the first node from the stack and "visit" it by adding it to
+        // `reverse_post_order`.
+        ParseTreeNode node;
+        Vector_PopBack(&stack, &node);
+        if (Vector_PushBack(&reverse_post_order, &node) != BLIMP_OK) {
+            Vector_Destroy(&stack);
+            Vector_Destroy(&reverse_post_order);
+            return Reraise(blimp);
+        }
+
+        // Push the node's children (if any) onto the stack, converting them to
+        // ParseTreeNodes in the process.
+        if (node.left != NULL) {
+            ParseTreeNode *left;
+            if (Vector_EmplaceBack(&stack, (void **)&left) != BLIMP_OK ||
+                ParseTreeToNode(blimp, node.left, left) != BLIMP_OK)
+            {
+                Vector_Destroy(&stack);
+                Vector_Destroy(&reverse_post_order);
+                return Reraise(blimp);
+            }
+        }
+        if (node.right != NULL) {
+            ParseTreeNode *right;
+            if (Vector_EmplaceBack(&stack, (void **)&right) != BLIMP_OK ||
+                ParseTreeToNode(blimp, node.right, right) != BLIMP_OK)
+            {
+                Vector_Destroy(&stack);
+                Vector_Destroy(&reverse_post_order);
+                return Reraise(blimp);
+            }
+        }
+    }
+    Vector_Destroy(&stack);
+
+    // Now `reverse_post_order` is a stack containing the nodes in post order.
+    // Pop from it until it is empty (popping in LIFO order reverse the nodes so
+    // that we see them in the correct order) and convert each node to an
+    // expression as we go.
+    //
+    // We keep a stack of the expressions we have converted. The post-order,
+    // bottom-up traversal ensures that by the time we reach a new node, the
+    // sub-expressions it requires to construct its own expression are the top
+    // 0, 1, or 2 expressions on the `sub_exprs` stack, as appropriate. We can
+    // thus pop the appropriate number of expressions from `sub_exprs` and pass
+    // them to ParseTreeNodeToExpr() along with the node.
+    Vector/*<Expr *>*/ sub_exprs;
+    Vector_Init(blimp, &sub_exprs, sizeof(Expr *), ExprDestructor);
+    while (!Vector_Empty(&reverse_post_order)) {
+        ParseTreeNode node;
+        Vector_PopBack(&reverse_post_order, &node);
+
+        // Get sub-expressions from the `sub_exprs` stack as needed.
+        Expr *left = NULL;
+        Expr *right = NULL;
+        if (node.right != NULL) {
+            Vector_PopBack(&sub_exprs, &right);
+        }
+        if (node.left != NULL) {
+            Vector_PopBack(&sub_exprs, &left);
+        }
+
+        // Convert to an expression.
+        Expr *expr;
+        if (ParseTreeNodeToExpr(
+                blimp, &node, left, right, &expr) != BLIMP_OK)
+        {
+            if (left != NULL) {
+                Blimp_FreeExpr(left);
+            }
+            if (right != NULL) {
+                Blimp_FreeExpr(right);
+            }
+            Vector_Destroy(&sub_exprs);
+            Vector_Destroy(&reverse_post_order);
+            return Reraise(blimp);
+        }
+
+        // Add the new expression to the `sub_exprs` stack.
+        if (Vector_PushBack(&sub_exprs, &expr) != BLIMP_OK) {
+            Blimp_FreeExpr(expr);
+            Vector_Destroy(&sub_exprs);
+            Vector_Destroy(&reverse_post_order);
+            return Reraise(blimp);
+        }
+    }
+    Vector_Destroy(&reverse_post_order);
+
+    // At the end, the only expression remaining on the `sub_exprs` stack is the
+    // expression corresponding to the root of the tree.
+    assert(Vector_Length(&sub_exprs) == 1);
+    Vector_PopBack(&sub_exprs, result);
+    Vector_Destroy(&sub_exprs);
+
+    return BLIMP_OK;
 }

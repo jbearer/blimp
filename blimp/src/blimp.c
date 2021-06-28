@@ -397,14 +397,24 @@ static int EvalMain(Blimp *blimp, const char *path, const Options *options)
         options->debug ? &db : NULL
     );
     PushInterruptHandler(InterruptAction, blimp);
-    BlimpExpr *expr;
-    if (Blimp_ParseFile(blimp, path, &expr) != BLIMP_OK) {
+    BlimpParseTree tree;
+    if (Blimp_ParseFile(blimp, path, &tree) != BLIMP_OK) {
         Blimp_DumpLastError(blimp, stderr);
         if (options->debug) {
             Debugger_Detach(&db);
         }
         return 1;
     }
+    BlimpExpr *expr;
+    if (BlimpParseTree_Eval(blimp, &tree, &expr) != BLIMP_OK) {
+        BlimpParseTree_Destroy(&tree);
+        Blimp_DumpLastError(blimp, stderr);
+        if (options->debug) {
+            Debugger_Detach(&db);
+        }
+        return 1;
+    }
+    BlimpParseTree_Destroy(&tree);
     PopInterruptHandler();
 
     int ret = EXIT_SUCCESS;

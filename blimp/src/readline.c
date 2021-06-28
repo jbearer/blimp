@@ -185,78 +185,95 @@ Expr *Readline_ReadExpr(
 {
     char *line;
 
-    // Read until we get a non-empty line or end-of-file.
-    while ((line = Readline(prompt)) != NULL && !*line) {
-        free(line);
+    Expr *expr;
+    while (true) {
+        // Read until we get a non-empty line or end-of-file.
+        while ((line = Readline(prompt)) != NULL && !*line) {
+            free(line);
 
-        if (blank_line_repeats) {
-            // If we are treating blank lines as a repeat of the last expression
-            // entered, look up the last entry from the history.
-            HIST_ENTRY *entry = LastHistory();
-            if (entry != NULL) {
-                if (entry->line && *entry->line) {
-                    line = strdup(entry->line);
-                    break;
+            if (blank_line_repeats) {
+                // If we are treating blank lines as a repeat of the last expression
+                // entered, look up the last entry from the history.
+                HIST_ENTRY *entry = LastHistory();
+                if (entry != NULL) {
+                    if (entry->line && *entry->line) {
+                        line = strdup(entry->line);
+                        break;
+                    }
                 }
             }
         }
-    }
 
-    if (line == NULL) {
-        // Return NULL to indicate end-of-file.
-        return NULL;
-    }
+        if (line == NULL) {
+            // Return NULL to indicate end-of-file.
+            return NULL;
+        }
 
-    // Start a new input, which for now consists solely of `line`. We may
-    // append more to it later if this ends up being a multi-line input.
-    char *input = NULL;
-    Blimp_Check(AppendLine(blimp, &input, line));
-    free(line);
+        // Start a new input, which for now consists solely of `line`. We may
+        // append more to it later if this ends up being a multi-line input.
+        char *input = NULL;
+        Blimp_Check(AppendLine(blimp, &input, line));
+        free(line);
 
-    // Try to parse the input we have so far. This will tell us if the input
-    // is a complete expression or not. If not, we will ask the user for
-    // more lines of input.
-    Expr *expr;
-    while (Blimp_ParseString(blimp, input, &expr) != BLIMP_OK) {
-        if (Blimp_GetLastErrorCode(blimp) == BLIMP_UNEXPECTED_EOF) {
-            // If we were expecting more input, print a continuation prompt
-            // and read another line.
-            line = Readline("   ... ");
-            if (line == NULL) {
-                // Return NULL to indicate end-of-file.
-                free(input);
-                return NULL;
-            } else if (!*line) {
-                // If the user hits return twice (that is, enters a blank
-                // line) we assume they really to enter their input as is,
-                // even if it causes a parse error.
+        // Try to parse the input we have so far. This will tell us if the input
+        // is a complete expression or not. If not, we will ask the user for
+        // more lines of input.
+        ParseTree tree;
+        while (Blimp_ParseString(blimp, input, &tree) != BLIMP_OK) {
+            if (Blimp_GetLastErrorCode(blimp) == BLIMP_UNEXPECTED_EOF) {
+                // If we were expecting more input, print a continuation prompt
+                // and read another line.
+                line = Readline("   ... ");
+                if (line == NULL) {
+                    // Return NULL to indicate end-of-file.
+                    free(input);
+                    return NULL;
+                } else if (!*line) {
+                    // If the user hits return twice (that is, enters a blank
+                    // line) we assume they really to enter their input as is,
+                    // even if it causes a parse error.
+                    free(line);
+                    free(input);
+                    Blimp_DumpLastError(blimp, stdout);
+
+                    // Start from scratch, trying to read a new expression.
+                    return Readline_ReadExpr(blimp, prompt, blank_line_repeats);
+                }
+
+                // Add the new line to the input.
+                Blimp_Check(AppendLine(blimp, &input, line));
                 free(line);
+
+                // Remove the partial input that was missing a line from the
+                // history, and replace it with the updated input that contains
+                // the most recent line.
+                ReplaceLastHistoryEntry(input);
+            } else {
                 free(input);
                 Blimp_DumpLastError(blimp, stdout);
 
-                // Start from scratch, trying to read a new expression.
+                // The user entered an expression, but it didn't parse, so we
+                // have nothing to return. Start from scratch, asking for
+                // another expression.
                 return Readline_ReadExpr(blimp, prompt, blank_line_repeats);
             }
-
-            // Add the new line to the input.
-            Blimp_Check(AppendLine(blimp, &input, line));
-            free(line);
-
-            // Remove the partial input that was missing a line from the
-            // history, and replace it with the updated input that contains
-            // the most recent line.
-            ReplaceLastHistoryEntry(input);
-        } else {
-            free(input);
-            Blimp_DumpLastError(blimp, stdout);
-
-            // The user entered an expression, but it didn't parse, so we have
-            // nothing to return. Start from scratch, asking for another
-            // expression.
-            return Readline_ReadExpr(blimp, prompt, blank_line_repeats);
         }
+
+        // Convert the parse tree to an expression, and return the expression if
+        // successful.
+        if (BlimpParseTree_Eval(blimp, &tree, &expr) == BLIMP_OK) {
+            free(input);
+            BlimpParseTree_Destroy(&tree);
+            break;
+        }
+        // This can fail if the parse tree is not a valid expression (can happen
+        // due to user programming errors with macros) or for simple reasons
+        // like lack of memory. If it fails, clean up, report the error, and ask
+        // for more input.
+        free(input);
+        BlimpParseTree_Destroy(&tree);
+        Blimp_DumpLastError(blimp, stdout);
     }
 
-    free(input);
     return expr;
 }

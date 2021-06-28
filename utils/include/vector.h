@@ -57,6 +57,16 @@ static inline Status Vector_Move(Vector *from, Vector *to)
     return BLIMP_OK;
 }
 
+static inline Status Vector_MoveOut(Vector *from, size_t *size, void **to)
+{
+    *to = from->data;
+    *size = from->size;
+    from->size = 0;
+    from->capacity = 0;
+    from->data = NULL;
+    return BLIMP_OK;
+}
+
 /**
  * \brief Append a new, uninitialized element and return a pointer to it.
  */
@@ -102,6 +112,15 @@ PRIVATE Status Vector_Resize(Vector *v, size_t new_size);
  * If `delta` is greater than the current size of `v`, all elements are removed.
  */
 PRIVATE Status Vector_Contract(Vector *v, size_t delta);
+
+static inline void Vector_ContractOut(Vector *v, size_t delta, void *to)
+{
+    if (delta > v->size) {
+        delta = v->size;
+    }
+    v->size -= delta;
+    memcpy(to, (char *)v->data + v->elem_size*v->size, v->elem_size*delta);
+}
 
 static inline void *Vector_Data(const Vector *v)
 {

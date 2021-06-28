@@ -65,10 +65,10 @@ BlimpStatus BlimpModule_Import(
  *
  * This function imports `module` exactly like BlimpModule_Import(), but instead
  * of evaluating the imported module, it simply parses it and returns the
- * resulting expression.
+ * resulting parse tree.
  */
 BlimpStatus BlimpModule_StaticImport(
-    Blimp *blimp, const char *module, const char **path, BlimpExpr **result);
+    Blimp *blimp, const char *module, const char **path, BlimpParseTree *result);
 
 /**
  * \brief Import the source module located at `path`.

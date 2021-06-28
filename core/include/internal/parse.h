@@ -134,18 +134,6 @@ PRIVATE void Lexer_Destroy(Lexer *lex);
 // Parser
 //
 
-typedef TokenType Terminal;
-
-typedef size_t NonTerminal;
-
-typedef struct {
-    bool is_terminal;
-    union {
-        Terminal terminal;
-        NonTerminal non_terminal;
-    };
-} GrammarSymbol;
-
 typedef struct {
     Vector/*<Production *>*/ productions;
     Vector/*<Vector<size_t>>*/ productions_for_non_terminals;
@@ -165,25 +153,12 @@ typedef struct {
     struct GrammarListener *listeners;
 } Grammar;
 
-typedef struct {
-    Blimp *blimp;
-    void *parser_state;
-    void *arg;
-    const SourceRange *range;
-} ParserContext;
-
-typedef struct {
-    GrammarSymbol symbol;
-    Expr *parsed;
-    Vector/*<ParseTree>*/ sub_trees;
-} ParseTree;
-
 PRIVATE void ParseTree_Destroy(ParseTree *tree);
-PRIVATE Status ParseTree_Copy(const ParseTree *from, ParseTree *to);
-PRIVATE Expr *SubExpr(const ParseTree *tree, size_t i);
-PRIVATE const Symbol *SubToken(const ParseTree *tree, size_t i);
+PRIVATE Status ParseTree_Copy(
+    Blimp *blimp, const ParseTree *from, ParseTree *to);
+PRIVATE ParseTree *SubTree(const ParseTree *tree, size_t index);
 
-typedef Status(*ProductionHandler)(ParserContext *ctx, ParseTree *tree);
+typedef BlimpMacroHandler ProductionHandler;
 
 static inline Blimp *Grammar_GetBlimp(const Grammar *grammar)
 {
@@ -213,7 +188,7 @@ PRIVATE Status Parse(
     Grammar *grammar,
     NonTerminal target,
     void *parser_state,
-    Expr **expr);
+    ParseTree *parsed);
 PRIVATE Status Reparse(
     const Vector/*<ParseTree>*/ *input,
     Grammar *grammar,

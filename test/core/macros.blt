@@ -628,7 +628,7 @@ import macro_module;
             }[]
         };
 
-        (sym[])
+        {^{^(sym[]); 7}; 6}
     }[]
 };
 

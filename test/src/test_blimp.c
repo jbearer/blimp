@@ -498,11 +498,17 @@ static BlimpStatus Eval(
         return Blimp_Reraise(blimp);
     }
 
-    BlimpExpr *expr;
-    if (Blimp_ParseString(blimp, BlimpSymbol_GetName(code), &expr) != BLIMP_OK)
+    BlimpParseTree tree;
+    if (Blimp_ParseString(blimp, BlimpSymbol_GetName(code), &tree) != BLIMP_OK)
     {
         return Blimp_Reraise(blimp);
     }
+    BlimpExpr *expr;
+    if (BlimpParseTree_Eval(blimp, &tree, &expr) != BLIMP_OK) {
+        BlimpParseTree_Destroy(&tree);
+        return Blimp_Reraise(blimp);
+    }
+    BlimpParseTree_Destroy(&tree);
 
     BlimpStatus status = Blimp_Eval(
         blimp, expr, Blimp_CurrentScope(blimp), result);

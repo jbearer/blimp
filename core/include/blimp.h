@@ -883,67 +883,113 @@ BlimpStatus Blimp_OpenFileStream(
 BlimpStatus Blimp_StringStream(
     Blimp *blimp, const char *str, BlimpStream **stream);
 
-/**
- * \brief Parse the contents of `input` and construct a `BlimpExpr`.
- *
- * \note
- *      Blimp_Parse will close `input` by calling `input->Close(input)` when
- *      parsing is done.
- */
-BlimpStatus Blimp_Parse(Blimp *blimp, BlimpStream *input, BlimpExpr **output);
-
-/**
- * \brief Parse the contents of the file `path` and construct a `BlimpExpr`.
- */
-BlimpStatus Blimp_ParseFile(Blimp *blimp, const char *path, BlimpExpr **output);
-
-/**
- * \brief Parse the contents of `str` and construct a `BlimpExpr`.
- */
-BlimpStatus Blimp_ParseString(Blimp *blimp, const char *str, BlimpExpr **output);
-
 void Blimp_DumpGrammarVitals(FILE *file, Blimp *blimp);
+
+typedef size_t BlimpTerminal;
+typedef size_t BlimpNonTerminal;
+
+BlimpStatus Blimp_GetTerminal(
+    Blimp *blimp, const BlimpSymbol *sym, BlimpTerminal *terminal);
+BlimpStatus Blimp_GetNonTerminal(
+    Blimp *blimp, const BlimpSymbol *sym, BlimpNonTerminal *non_terminal);
+
+/**
+ * \brief A symbol which matches a section of input during parsing.
+ *
+ * A grammar symbol can either be a terminal or a non-terminal. A terminal
+ * matches a single token, and it is defined by a unique identifier for the text
+ * of the token it matches. Such BlimpTerminal symbols can be obtained using
+ * Blimp_GetTerminal().
+ *
+ * A non-terminal matches an expression, which has already been parsed from a
+ * sequence of one or more tokens. It is also named by a unique identifier,
+ * which can be obtained from a symbolic name via Blimp_GetNonTerminal(). The
+ * behavior of a non-terminal (that is, what kinds of expressions it matches) is
+ * determined by the grammar productions involving that non-terminal. New
+ * productions can be added to the grammar to define new non-terminals using
+ * Blimp_DefineMacro().
+ */
+typedef struct {
+    bool is_terminal;
+    union {
+        BlimpTerminal terminal;
+        BlimpNonTerminal non_terminal;
+    };
+} BlimpGrammarSymbol;
+
+/**
+ * A BlimpParseTree structure represents a section of parsed input in a
+ * structured form which corresponds to the hierarchy of grammar productions
+ * used to parse the input.
+ *
+ * A BlimpParseTree has a BlimpGrammarSymbol `symbol`, which is the symbol that
+ * matched the entirety of the input. This can be a terminal, in which case the
+ * entirety of the input must have been a single token, and that token is stored
+ * in the `token` field. Or `symbol` can be a non-terminal, in which case the
+ * input was first divided into one or more smaller parse trees, whose own
+ * symbols in sequence matched one of the productions for `symbol`. In this
+ * case, the smaller parse trees are contained in the array `sub_trees`.
+ */
+typedef struct BlimpParseTree {
+    BlimpGrammarSymbol symbol;
+    union {
+        /// Valid if `symbol` is a terminal.`
+        const BlimpSymbol *token;
+
+        /// Valid if `symbol` is a non-terminal.
+        struct {
+            struct BlimpParseTree *sub_trees;
+                ///< malloc()-allocated array of sub-trees.
+            size_t num_sub_trees;
+        };
+    };
+    BlimpSourceRange range;
+} BlimpParseTree;
+
+/**
+ * \brief Convert a BlimpParseTree to a BlimpExpr.
+ */
+BlimpStatus BlimpParseTree_Eval(
+    Blimp *blimp, BlimpParseTree *tree, BlimpExpr **expr);
+
+/**
+ * \brief Reclaim resources allocated to a BlimpParseTree.
+ *
+ * If `tree->symbol` is a non-terminal, this function destroys all sub-trees of
+ * `tree`, recursively, and then free()s the sub-trees array. Otherwise, it does
+ * nothing, since terminal parse trees do not own any dynamically allocated
+ * resources.
+ */
+void BlimpParseTree_Destroy(BlimpParseTree *tree);
+
+/**
+ * Information about an in-progress parsing pass which macro handlers can
+ * inspect.
+ */
+typedef struct {
+    Blimp *blimp;
+    void *parser_state;
+    void *arg;
+    const BlimpSourceRange *range;
+} BlimpParserContext;
 
 /**
  * \brief Handler which is called when a macro expansion is triggered.
  *
- * \param[in]  blimp     The interpreter.
- * \param[in]  sub_exprs The sequences of expressions which triggered the macro.
- * \param[in]  arg       Argument registered with Blimp_DefineMacro().
- * \param[out] parsed    A new expression; the result of the macro.
+ * \param[in] ctx
+ *      The parser context at the point when the macro was triggered.
+ * \param[in,out] tree
+ *      The parse tree which triggered the macro. This may be modified by the
+ *      macro handler, or left as is.
  *
  * Macro handlers are registered when macros are defined with Blimp_DefineMacro.
  * Whenever the parser encounters a sequence of parsed sub-expressions matching
  * the symbols given to Blimp_DefineMacro(), it will call the handler associated
- * with that macro. The handler will receive the sequence of expressions which
- * triggered the macro, and it must return an expression which is the result of
- * the macro. This may be a new expression, or it may be a new reference to an
- * existing expression (see BlimpExpr_Borrow()).
+ * with that macro. The handler will receive the parse tree which triggered the
+ * macro, and it may modify that parse tree as it sees fit.
  */
 typedef BlimpStatus(*BlimpMacroHandler)(
-    Blimp *blimp, BlimpExpr **sub_exprs, void *arg, BlimpExpr **parsed);
-
-/**
- * \brief A symbol which matches a section of input in a macro definition.
- *
- * A grammar symbol can either be a terminal or a non-terminal. A terminal
- * matches a single token, and it is defined by the text of the token it matches
- * (in the form of a BlimpSymbol).
- *
- * A non-terminal matches an expression, which has already been parsed from a
- * sequence of one or more tokens. It is defined by its precedence, which
- * describes how greedily the symbol should match input. If there are two
- * symbols which could match a sequence of input, the higher-precedence symbol
- * will match first. If that produces a newly parsed expression which still
- * matches the lower-precedence symbol, only then will the lower-precedence
- * symbol be matched. In other words, the higher the precedence of a symbol is,
- * the earlier in parsing it tends to match, and the smaller expressions it
- * tends to match with.
- */
-typedef struct {
-    bool is_terminal;
-    const BlimpSymbol *symbol;
-} BlimpGrammarSymbol;
+    BlimpParserContext *ctx, BlimpParseTree *tree);
 
 /**
  * \brief
@@ -967,11 +1013,34 @@ typedef struct {
  */
 BlimpStatus Blimp_DefineMacro(
     Blimp *blimp,
-    const BlimpSymbol *non_terminal,
+    BlimpNonTerminal non_terminal,
     BlimpGrammarSymbol *symbols,
     size_t num_symbols,
     BlimpMacroHandler handler,
     void *handler_arg);
+
+/**
+ * \brief Parse the contents of `input` and construct a `BlimpParseTree`.
+ *
+ * \note
+ *      Blimp_Parse will close `input` by calling `input->Close(input)` when
+ *      parsing is done.
+ */
+BlimpStatus Blimp_Parse(
+    Blimp *blimp, BlimpStream *input, BlimpParseTree *output);
+
+/**
+ * \brief
+ *      Parse the contents of the file `path` and construct a `BlimpParseTree`.
+ */
+BlimpStatus Blimp_ParseFile(
+    Blimp *blimp, const char *path, BlimpParseTree *output);
+
+/**
+ * \brief Parse the contents of `str` and construct a `BlimpParseTree`.
+ */
+BlimpStatus Blimp_ParseString(
+    Blimp *blimp, const char *str, BlimpParseTree *output);
 
 /**
  * @}

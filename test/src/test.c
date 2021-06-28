@@ -176,14 +176,24 @@ static void RunTest(Test *test)
     struct timespec start, end;
     clock_gettime(CLOCK_MONOTONIC, &start);
 
-    BlimpExpr *expr;
-    if (Blimp_Parse(test->blimp, test->stream, &expr) != BLIMP_OK) {
+    BlimpParseTree tree;
+    if (Blimp_Parse(test->blimp, test->stream, &tree) != BLIMP_OK) {
         FailTest(test, "failed to parse");
         if (test->options.verbosity >= VERB_FAILURES) {
             Blimp_DumpLastError(test->blimp, stdout);
         }
         return;
     }
+    BlimpExpr *expr;
+    if (BlimpParseTree_Eval(test->blimp, &tree, &expr) != BLIMP_OK) {
+        BlimpParseTree_Destroy(&tree);
+        FailTest(test, "failed to parse");
+        if (test->options.verbosity >= VERB_FAILURES) {
+            Blimp_DumpLastError(test->blimp, stdout);
+        }
+        return;
+    }
+    BlimpParseTree_Destroy(&tree);
 
     if (test->options.enable_racket && test->options.use_racket) {
         if (test->options.verbosity >= VERB_DEBUG) {

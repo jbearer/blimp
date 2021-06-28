@@ -71,6 +71,7 @@
 // non-terminals that we would find in a newly added rule.
 
 PRIVATE Status DefaultGrammar(Blimp *blimp, Grammar *grammar);
+PRIVATE Status ParseTreeToExpr(Blimp *blimp, ParseTree *tree, Expr **expr);
 
 #endif
 

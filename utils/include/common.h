@@ -18,6 +18,11 @@ typedef BlimpExpr Expr;
 typedef BlimpBytecode Bytecode;
 typedef BlimpInstruction Instruction;
 typedef BlimpObject Object;
+typedef BlimpTerminal Terminal;
+typedef BlimpNonTerminal NonTerminal;
+typedef BlimpGrammarSymbol GrammarSymbol;
+typedef BlimpParseTree ParseTree;
+typedef BlimpParserContext ParserContext;
 
 #ifdef NDEBUG
 # ifdef assert

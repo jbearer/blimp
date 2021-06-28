@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <string.h>
@@ -146,18 +147,16 @@ static BlimpStatus ImportExtensionMethod(
 }
 
 // Handler for the `import module` macro.
-static BlimpStatus ImportHandler(
-    Blimp *blimp, BlimpExpr **sub_exprs, void *arg, BlimpExpr **parsed)
+static BlimpStatus ImportHandler(BlimpParserContext *ctx, BlimpParseTree *tree)
 {
-    const char **path = (const char **)arg;
+    const char **path = (const char **)ctx->arg;
 
-    const BlimpSymbol *module;
-    if (BlimpExpr_ParseSymbol(sub_exprs[1], &module) != BLIMP_OK) {
-        return Blimp_Reraise(blimp);
-    }
+    assert(tree->sub_trees[1].symbol.is_terminal);
+    const BlimpSymbol *module = tree->sub_trees[1].token;
 
+    BlimpParseTree_Destroy(tree);
     return BlimpModule_StaticImport(
-        blimp, BlimpSymbol_GetName(module), path, parsed);
+        ctx->blimp, BlimpSymbol_GetName(module), path, tree);
 }
 
 BlimpStatus BlimpModule_Init(Blimp *blimp, const char **path)
@@ -178,22 +177,38 @@ BlimpStatus BlimpModule_Init(Blimp *blimp, const char **path)
     //    like `import_source`, except the module named by the path must be an
     //    extension module, not a source module.
 
-    const BlimpSymbol *import, *import_source, *import_extension, *prec3, *prec7;
-    if (Blimp_GetSymbol(blimp, "import", &import) != BLIMP_OK) {
+    const BlimpSymbol *import_sym, *import_source_sym, *import_extension_sym,
+        *symbol_sym, *prec3_sym;
+    if (Blimp_GetSymbol(blimp, "import", &import_sym) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
-    if (Blimp_GetSymbol(blimp, "import_source", &import_source) != BLIMP_OK) {
-        return Blimp_Reraise(blimp);
-    }
-    if (Blimp_GetSymbol(blimp, "import_extension", &import_extension)
+    if (Blimp_GetSymbol(blimp, "import_source", &import_source_sym)
             != BLIMP_OK)
     {
         return Blimp_Reraise(blimp);
     }
-    if (Blimp_GetSymbol(blimp, "3", &prec3) != BLIMP_OK) {
+    if (Blimp_GetSymbol(blimp, "import_extension", &import_extension_sym)
+            != BLIMP_OK)
+    {
         return Blimp_Reraise(blimp);
     }
-    if (Blimp_GetSymbol(blimp, "7", &prec7) != BLIMP_OK) {
+    if (Blimp_GetSymbol(blimp, "``", &symbol_sym) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+    if (Blimp_GetSymbol(blimp, "3", &prec3_sym) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    BlimpTerminal import, symbol;
+    if (Blimp_GetTerminal(blimp, import_sym, &import) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+    if (Blimp_GetTerminal(blimp, symbol_sym, &symbol) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    BlimpNonTerminal prec3;
+    if (Blimp_GetNonTerminal(blimp, prec3_sym, &prec3) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
 
@@ -210,7 +225,7 @@ BlimpStatus BlimpModule_Init(Blimp *blimp, const char **path)
         return Blimp_Reraise(blimp);
     }
     if (BlimpObject_Set(
-            Blimp_GlobalObject(blimp), import, method) != BLIMP_OK)
+            Blimp_GlobalObject(blimp), import_sym, method) != BLIMP_OK)
     {
         BlimpObject_Release(method);
         return Blimp_Reraise(blimp);
@@ -229,7 +244,7 @@ BlimpStatus BlimpModule_Init(Blimp *blimp, const char **path)
         return Blimp_Reraise(blimp);
     }
     if (BlimpObject_Set(
-            Blimp_GlobalObject(blimp), import_source, method) != BLIMP_OK)
+            Blimp_GlobalObject(blimp), import_source_sym, method) != BLIMP_OK)
     {
         BlimpObject_Release(method);
         return Blimp_Reraise(blimp);
@@ -248,7 +263,8 @@ BlimpStatus BlimpModule_Init(Blimp *blimp, const char **path)
         return Blimp_Reraise(blimp);
     }
     if (BlimpObject_Set(
-            Blimp_GlobalObject(blimp), import_extension, method) != BLIMP_OK)
+            Blimp_GlobalObject(blimp), import_extension_sym, method)
+        != BLIMP_OK)
     {
         BlimpObject_Release(method);
         return Blimp_Reraise(blimp);
@@ -257,8 +273,8 @@ BlimpStatus BlimpModule_Init(Blimp *blimp, const char **path)
 
     // Define the `import module` macro.
     BlimpGrammarSymbol macro_symbols[2] = {
-        {.is_terminal=true, .symbol=import},
-        {.is_terminal=false,.symbol=prec7},
+        {.is_terminal=true, .terminal=import},
+        {.is_terminal=true, .non_terminal=symbol},
     };
     if (Blimp_DefineMacro(
             blimp, prec3, macro_symbols, 2, ImportHandler, (void *)path)
@@ -278,10 +294,16 @@ BlimpStatus BlimpModule_Import(
     BlimpObject **result)
 {
     // Locate the module and parse it into an expression.
-    BlimpExpr *expr;
-    if (BlimpModule_StaticImport(blimp, module, path, &expr) != BLIMP_OK) {
+    BlimpParseTree tree;
+    if (BlimpModule_StaticImport(blimp, module, path, &tree) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
+    BlimpExpr *expr;
+    if (BlimpParseTree_Eval(blimp, &tree, &expr) != BLIMP_OK) {
+        BlimpParseTree_Destroy(&tree);
+        return Blimp_Reraise(blimp);
+    }
+    BlimpParseTree_Destroy(&tree);
 
     // Evaluate the expression.
     BlimpStatus ret = Blimp_Eval(blimp, expr, context, result);
@@ -290,7 +312,7 @@ BlimpStatus BlimpModule_Import(
 }
 
 BlimpStatus BlimpModule_StaticImport(
-    Blimp *blimp, const char *module, const char **path, BlimpExpr **result)
+    Blimp *blimp, const char *module, const char **path, BlimpParseTree *result)
 {
     // Search the path for a file matching `module`.
     for (const char **path_entry = path; *path_entry; ++path_entry) {
@@ -342,36 +364,38 @@ BlimpStatus BlimpModule_StaticImport(
                 // Before we can construct the send, we need an expression for
                 // the receiver:
                 const BlimpSymbol *import_extension;
-                BlimpExpr *receiver;
                 if (Blimp_GetSymbol(
                         blimp, "import_extension", &import_extension)
                     != BLIMP_OK)
                 {
                     return Blimp_Reraise(blimp);
                 }
-                if (BlimpExpr_NewSymbol(blimp, import_extension, &receiver)
-                        != BLIMP_OK)
-                {
+
+                const BlimpSymbol *sym_sym;
+                if (Blimp_GetSymbol(blimp, "``", &sym_sym) != BLIMP_OK) {
                     return Blimp_Reraise(blimp);
                 }
-
-                // And an expression for the message:
-                BlimpExpr *message;
-                if (BlimpExpr_NewSymbol(blimp, path_sym, &message)
+                BlimpTerminal sym_terminal;
+                if (Blimp_GetTerminal(blimp, sym_sym, &sym_terminal)
                         != BLIMP_OK)
                 {
-                    Blimp_FreeExpr(receiver);
                     return Blimp_Reraise(blimp);
                 }
 
                 // Now we can construct the send:
-                if (BlimpExpr_NewSend(blimp, receiver, message, result)
-                        != BLIMP_OK)
-                {
-                    Blimp_FreeExpr(receiver);
-                    Blimp_FreeExpr(message);
+                result->num_sub_trees = 2;
+                result->sub_trees = malloc(2*sizeof(BlimpParseTree));
+                if (result->sub_trees == NULL) {
                     return Blimp_Reraise(blimp);
                 }
+                result->sub_trees[0] = (BlimpParseTree) {
+                    .symbol = {.is_terminal=true, .terminal=sym_terminal},
+                    .token = import_extension,
+                };
+                result->sub_trees[1] = (BlimpParseTree) {
+                    .symbol = {.is_terminal=true, .terminal=sym_terminal},
+                    .token = path_sym,
+                };
 
                 return BLIMP_OK;
             }
@@ -390,10 +414,16 @@ BlimpStatus BlimpModule_ImportSource(
     BlimpObject **result)
 {
     // Parse the file.
-    BlimpExpr *expr;
-    if (Blimp_ParseFile(blimp, path, &expr) != BLIMP_OK) {
+    BlimpParseTree tree;
+    if (Blimp_ParseFile(blimp, path, &tree) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
+    BlimpExpr *expr;
+    if (BlimpParseTree_Eval(blimp, &tree, &expr) != BLIMP_OK) {
+        BlimpParseTree_Destroy(&tree);
+        return Blimp_Reraise(blimp);
+    }
+    BlimpParseTree_Destroy(&tree);
 
     // Evaluate the parsed expression.
     BlimpStatus ret = Blimp_Eval(blimp, expr, context, result);

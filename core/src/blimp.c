@@ -125,7 +125,42 @@ Bytecode *Blimp_GlobalBytecode(Blimp *blimp)
 // Parser API
 //
 
-Status Blimp_Parse(Blimp *blimp, Stream *input, Expr **output)
+Status Blimp_GetTerminal(Blimp *blimp, const Symbol *sym, Terminal *terminal)
+{
+    Token tok;
+    TRY(TokenTrie_InsertToken(&blimp->tokens, sym->name, &tok));
+    TRY(Grammar_AddTerminal(&blimp->grammar, tok.type));
+        // Let the grammar know about the (possibly) newly created terminal.
+    Grammar_SetTerminalString(&blimp->grammar, tok.type, tok.symbol->name);
+        // Set a readable name for the new token.
+    *terminal = tok.type;
+    return BLIMP_OK;
+}
+
+Status Blimp_GetNonTerminal(
+    Blimp *blimp, const Symbol *sym, NonTerminal *non_terminal)
+{
+    return Grammar_GetNonTerminal(&blimp->grammar, sym, non_terminal);
+}
+
+Status Blimp_DefineMacro(
+    Blimp *blimp,
+    NonTerminal nt,
+    GrammarSymbol *symbols,
+    size_t num_symbols,
+    BlimpMacroHandler handler,
+    void *handler_arg)
+{
+    return Grammar_AddRule(
+        &blimp->grammar,
+        nt,
+        num_symbols,
+        symbols,
+        handler,
+        handler_arg);
+}
+
+Status Blimp_Parse(Blimp *blimp, Stream *input, ParseTree *output)
 {
     Lexer lex;
     Lexer_Init(&lex, blimp, input);
@@ -145,19 +180,17 @@ Status Blimp_Parse(Blimp *blimp, Stream *input, Expr **output)
     Status ret = Parse(&lex, &blimp->grammar, nt, NULL, output);
     Lexer_Destroy(&lex);
     Stream_Delete(input);
-    TRY(ret);
-
-    return BlimpExpr_Resolve(blimp, *output);
+    return ret;
 }
 
-Status Blimp_ParseFile(Blimp *blimp, const char *path, Expr **output)
+Status Blimp_ParseFile(Blimp *blimp, const char *path, ParseTree *output)
 {
     Stream *stream;
     TRY(Blimp_FileStream(blimp, path, &stream));
     return Blimp_Parse(blimp, stream, output);
 }
 
-Status Blimp_ParseString(Blimp *blimp, const char *str, Expr **output)
+Status Blimp_ParseString(Blimp *blimp, const char *str, ParseTree *output)
 {
     Stream *stream;
     TRY(Blimp_StringStream(blimp, str, &stream));
@@ -167,6 +200,21 @@ Status Blimp_ParseString(Blimp *blimp, const char *str, Expr **output)
 void Blimp_DumpGrammarVitals(FILE *file, Blimp *blimp)
 {
     Grammar_DumpVitals(file, &blimp->grammar);
+}
+
+Status BlimpParseTree_Eval(Blimp *blimp, ParseTree *tree, Expr **expr)
+{
+    TRY(ParseTreeToExpr(blimp, tree, expr));
+    if (BlimpExpr_Resolve(blimp, *expr) != BLIMP_OK) {
+        Blimp_FreeExpr(*expr);
+        return Reraise(blimp);
+    }
+    return BLIMP_OK;
+}
+
+void BlimpParseTree_Destroy(ParseTree *tree)
+{
+    ParseTree_Destroy(tree);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
