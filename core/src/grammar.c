@@ -160,7 +160,7 @@ static Status ParseTreeVisitor(
     Vector/*<ParseTree>*/ *trees;
     CHECK(BlimpObject_ParseExtension(receiver, NULL, (void **)&trees));
 
-    ParseTree tree;
+    ParseTree tree = {0};
     TRY(ObjectToParseTree(blimp, message, &tree));
         // Recursively visit the sub-trees of the parse tree object we are
         // visiting and convert those sub-trees into a single ParseTree.
@@ -1176,6 +1176,11 @@ Status ParseTreeToExpr(Blimp *blimp, ParseTree *tree, Expr **result)
             Vector_Destroy(&sub_exprs);
             Vector_Destroy(&reverse_post_order);
             return Reraise(blimp);
+        }
+
+        // Copy the source range from the parse tree to the expression.
+        if (!BlimpExpr_HasSourceRange(expr)) {
+            BlimpExpr_SetSourceRange(expr, &node.tree->range);
         }
 
         // Add the new expression to the `sub_exprs` stack.

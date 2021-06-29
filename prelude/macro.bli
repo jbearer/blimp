@@ -1,0 +1,516 @@
+# Loop over a parse tree returned from a Kleene star production. A Kleene star
+# production is one of a pair of productions of the form
+#
+#   K -> {term}
+#   K -> {term} {K}
+#
+# Actually this represents the + operator rather than the Kleene star *, but it
+# is equivalent to KK*, which is close enough.
+#
+# Productions which are intended to be used with `__kleene_for` must return a
+# parse tree of a specific form: an outer parse tree with a single child, which
+# in turn contains once child for each term in the sequence. With such a parse
+# tree, the recursive structure of these sequences has been linearized into a
+# single, shallow parse tree with many children, rather than a deep parse tree
+# with only one or two children at each level. This allows for easier iteration.
+# The purpose of the outer parse tree is to prevent the inner parse tree from
+# being reparsed, since if it contains many children it will probably not be a
+# valid parse tree on its own.
+#
+# For example, the Kleene parse tree for the singleton sequence `term` would be
+#   ((term ; 7) ; 6)
+# The parse tree for the sequence `term1 term2 term3` would similarly be
+#   ((term1 term2 term3 ; 7) ; 6)
+# Note how the inner parse tree (term1 term2 term3 ; 7) is invalid; it does not
+# match any production for its non-terminal `7`. But it is protected from
+# reparsing by the outer parse tree.
+#
+# This macro takes such a parse tree object and a block, and applies the block
+# to each term in the inner parse tree.
+\> {^`__kleene_for` {6} {7}; 3} {^toks
+    {
+        n_ref{^ ^};
+        n n_ref;
+        n_ref _0;
+
+        terms{^ ^};
+        do{^ ^};
+        ^toks {^tok
+            {
+                _0{^{{
+                    n_ref _1
+                }}};
+                _1{^{{
+                    terms {(^tok)};
+                    n_ref _2
+                }}};
+                _2{^{{
+                    do {(^tok)};
+                    n_ref _3
+                }}};
+
+                n[] []
+            }[]
+        };
+
+        {^ (terms[]) `{` `^term`
+            `^term` (do[])
+          `}`;
+          3
+        }
+    }[]
+};
+
+# A non-terminal which just reduces symbols. This is just because it's slightly
+# nicer to write {symbol} than `\`sym\``.
+\> {^`\`sym\``; symbol} {^toks
+    {
+        sym{^ ^};
+        ^toks{^tok sym{(^tok)}};
+        {^(sym[]); 7}
+    }[]
+};
+
+################################################################################
+# grammar_symbol
+#
+# Here we define a grammar for symbols which can appear in the production
+# portion of a macro definition. These are either terminals (which are just
+# symbols) or non-terminals (the symbol naming the non-terminal, enclosed in
+# <>).
+#
+
+# Terminal symbols.
+\> {^{symbol}; grammar_symbol}  {^toks
+    {
+        sym{^ ^};
+        ^toks{^tok sym{(^tok)}};
+        sym[]
+    }[]
+};
+
+# Non-terminal symbols.
+\> {^ < {symbol} >; grammar_symbol} {^toks
+    {
+        n_ref{^ ^};
+        n n_ref;
+        n_ref _0;
+
+        nt{^ ^};
+        ^toks {^tok
+            {
+                _0{^{{
+                    # '
+                    n_ref _1
+                }}};
+                _1{^{{
+                    nt {(^tok)};
+                    n_ref _2
+                }}};
+
+                n[] []
+            }[]
+        };
+
+        # Return a parse tree object with the given non-terminal; that is, a
+        # block which simply returns the non-terminal symbol. This is how we
+        # represent non-terminals in low-level, built-in macro definitions.
+        {^ `{`; (nt[]) ^; ^ `}`; 6}
+    }[]
+};
+
+################################################################################
+# pattern
+#
+# A pattern is a grammar_symbol with an optional name, written name@symbol. If
+# provided, the name will be bound to the sub-parse-tree matched by the symbol
+# in the macro handler.
+#
+# The ad-hoc parse tree returned by these macros cannot be converted to an
+# expression, but it can be traversed using __kleene_for to yield a sequence
+# (name, symbol).
+#
+# If no name is given in the pattern, the `name` field in the result will be
+# `_`.
+#
+
+# No-name patterns.
+\> {^{grammar_symbol}; pattern} {^toks
+    {
+        ret{^ ^};
+
+        # ^toks is a parse tree of the form ((... ; grammar_symbol) ; pattern).
+        # Traverse it to get to the grammar_symbol sub-tree, and return a
+        # singleton Kleene sequence containing the symbol `_` and the contents
+        # of that sub-tree.
+        ^toks {^sym
+            ret{
+                {^{^ _; ^sym ^; 7}; 6}
+            }
+        };
+        ret[]
+    }[]
+};
+
+# Named patterns.
+\> {^{symbol} `@` {grammar_symbol}; pattern} {^toks
+    {
+        n_ref{^ ^};
+        n n_ref;
+        n_ref _0;
+
+        binder{^ ^};
+        symbol{^ ^};
+        ^toks {^tok
+            {
+                _0{^{{
+                    binder {(^tok)};
+                    n_ref _1
+                }}};
+                _1{^{{
+                    # @
+                    n_ref _2
+                }}};
+                _2{^{{
+                    symbol {(^tok)};
+                    n_ref _3
+                }}};
+                n[] []
+            }[]
+        };
+
+        {^{(binder[]) ^; (symbol[]) ^; 7}; 6}
+    }[]
+};
+
+# A singleton Kleene sequence of patterns.
+\> {^{pattern}; patterns} {^toks
+    {^ {(^toks) ^; 7}; 6}
+};
+
+# A non-trivial Kleene sequence of patterns.
+\> {^{pattern} {patterns}; patterns} {^toks
+    {
+        n_ref{^ ^};
+        n n_ref;
+        n_ref _0;
+
+        head{^ ^};
+        tail{^ ^};
+        ^toks {^tok
+            {
+                _0{^{{
+                    head {(^tok)};
+                    n_ref _1
+                }}};
+                _1{^{{
+                    tail {(^tok)};
+                    n_ref _2
+                }}};
+                n[] []
+            }[]
+        };
+
+        {^{^out
+            ^out(head[]);
+            __kleene_for(tail[]) {^term
+                ^out ^term
+            };
+            7
+        }; 6}
+    }[]
+};
+
+################################################################################
+# Macro definitions
+#
+
+\> {^ `syntax` `\`sym\`` `->` {patterns} `{` {1} `}`; 3} {^toks
+    {
+        n_ref{^ ^};
+        n n_ref;
+        n_ref _0;
+
+        nt{^ ^};
+        patterns{^ ^};
+        handler{^ ^};
+        ^toks {^tok
+            {
+                _0{^{{
+                    # syntax
+                    n_ref _1
+                }}};
+                _1{^{{
+                    nt {(^tok)};
+                    n_ref _2
+                }}};
+                _2{^{{
+                    # ->
+                    n_ref _3
+                }}};
+                _3{^{{
+                    patterns {(^tok)};
+                    n_ref _4
+                }}};
+                _4{^{{
+                    # {
+                    n_ref _5
+                }}};
+                _5{^{{
+                    handler {(^tok)};
+                    n_ref _6
+                }}};
+                _6{^{{
+                    # }
+                    n_ref _7
+                }}};
+
+                n[] []
+            }[]
+        };
+
+        # Helper function for traversing the sequence of patterns from the macro
+        # definition.
+        visit_patterns{^} {^pats{^visit
+            __kleene_for ^pats {^pat
+                {
+                    # The pattern itself is a Kleene sequence with two terms,
+                    # the binder and the grammar symbol. Traverse the sequence
+                    # to extract these terms and then pass them to the visitor.
+                    n_ref _0;
+                    binder{^ ^};
+                    sym{^ ^};
+                    __kleene_for ^pat {^sym
+                        {
+                            _0{^{{
+                                binder{(^sym)};
+                                n_ref _1
+                            }}};
+                            _1{^{{
+                                sym{(^sym)};
+                                n_ref _2
+                            }}};
+                            n[] []
+                        }[]
+                    };
+
+                    ^visit(sym[])(binder[])
+                }[]
+            }
+        }};
+
+        # Helpers for generating code that traverses the ^toks argument to the
+        # generated macro handler. Calling `next_tok` will return a parse tree
+        # which, when evaluated, accesses the next parse tree in ^toks. It will
+        # then advance curr_tok so that the next time `next_tok` is called, it
+        # generates code for the following sub-tree.
+        curr_tok_ref{^ ^};
+        curr_tok curr_tok_ref;
+        curr_tok_ref {{^`^toks`; 7}};
+            # `curr_tok` should always represent the sequence of tokens not yet
+            # visited. Initialize it to the whole sequence, and each time we
+            # advance by one we will add an application of `__pat_tail` to
+            # represent the next sub-tree.
+        next_tok{^} {
+            {^curr
+                curr_tok_ref {{^ __pat_tail ^curr; 7}};
+                {^ `__pat_head` ^curr; 1}
+            } (curr_tok[])
+        };
+
+        {^out
+            ^`\\>` `{`;
+                visit_patterns (patterns[]) {^sym{^binder
+                    ^out `^`; ^out ^sym; ^out `;`
+                }};
+                ^(nt[]);
+            ^`}`;
+
+            ^`{` `^toks`;
+                ^ `{`;
+                    # This block will receive the output of the user's handler
+                    # (which is a list of parse trees) and feed each output tree
+                    # to the output stream.
+                    ^ `{` `^list`
+                        `{`
+                            `(` `^list` `)` `each` `^` `;` `1`
+                        `}`
+                    `}` `(`
+                        # Depending on whether the standard library has already
+                        # been imported, we need to call the user's handler
+                        # slightly differently. If std has already been imported
+                        # (for example, as a preimport when running via the
+                        # interpreter without --core) we need not (and cannot)
+                        # import it again. But if it has not yet been imported
+                        # (for example, in a standard bl:mp program beginning
+                        # with `import std`, where that import statement has not
+                        # been evaluated yet since we are still in the parsing
+                        # phase) we must import it now, at parse time, in the
+                        # scope in which we invoke the handler, since the
+                        # handler almost certainly depends on standard library
+                        # features. We will use the state of the symbol
+                        # `__std_imported` to determine what to do.
+                        `__std_imported` `{`
+                            # If the standard library has not been imported and
+                            # evaluated, then __std_imported will be undefined,
+                            # and this block will execute. The argument (which
+                            # we ignore) will be a reference to
+                            # `__std_imported`. We return a block which, when
+                            # invoked, imports the idempotent parts of the
+                            # standard library and then invokes the user's
+                            # handler. This block will be invoked immediately
+                            # when it receives (and ignores) the block
+                            # representing the second case of this conditional.
+                            `{`
+                                `(` `import` `std_idempotent` `)` `;`
+                                    # We import std_idempotent, not std, because
+                                    # it is only safe to import the parts of the
+                                    # library which are idempotent at parse time
+                                    # (e.g. we cannot re-import this file if it
+                                    # has already been parsed, since that would
+                                    # cause the addition of duplicate grammar
+                                    # rules to the parser).
+                                    #
+                                    # Note that we do not have to worry about
+                                    # runtime idempotency, since this import
+                                    # executes in a sandboxed scope (the block
+                                    # we are in now), not at the global scope,
+                                    # where it would potentially clash with
+                                    # future imports of `std`.
+                                `__call` `{`;
+                                    visit_patterns (patterns[]) {^sym{^binder
+                                        ^out ^binder `:=` `(` (next_tok[]) `)` `;`
+                                    }};
+                                    curr_tok_ref {{^`^toks`; 7}};
+                                        # Reset `curr_tok` after traversing the
+                                        # list of patterns.
+                                    ^`(`(handler[])`)`
+                                `}`
+                            `}`
+                        `}` `{`
+                            # If the standard library has already been imported
+                            # and evaluated, then __std_imported will be defined
+                            # to ignore its first argument (the block above) and
+                            # execute its second, where we simply invoke the
+                            # handler.
+                            `__call` `{`;
+                                visit_patterns (patterns[]) {^sym{^binder
+                                    ^out ^binder `:=` `(` (next_tok[]) `)` `;`
+                                }};
+                                ^`(`(handler[])`)`
+                            `}`
+                        `}`
+                    `)`;
+                ^`}` `[]`;
+            ^`}`;
+
+            1
+        }
+    }[]
+};
+
+################################################################################
+# terms
+#
+# To make it a bit easier to define macros, we provide a convenient syntax for
+# creating a parse tree which emits a list of sub-trees. The `terms` grammar
+# matches a Kleen sequence of precedence-7 expressions. Quotes ("") signal the
+# parser to look for a sequence of terms, and the macro definition macro above
+# expects the handler to return a list of terms.
+#
+
+\> {^{7}; terms} {^toks
+    {^ {(^toks) ^; 7}; 6}
+};
+
+\> {^{7} {terms}; terms} {^toks
+    {
+        n_ref{^ ^};
+        n n_ref;
+        n_ref _0;
+
+        head{^ ^};
+        tail{^ ^};
+        ^toks {^tok
+            {
+                _0{^{{
+                    head {(^tok)};
+                    n_ref _1
+                }}};
+                _1{^{{
+                    tail {(^tok)};
+                    n_ref _2
+                }}};
+                n[] []
+            }[]
+        };
+
+        {^{^out
+            ^out(head[]);
+            __kleene_for(tail[]) {^term
+                ^out ^term
+            };
+            7
+        }; 6}
+    }[]
+};
+
+\> {^`"` {terms} `"`; 3} {^toks
+    {
+        n_ref{^ ^};
+        n n_ref;
+        n_ref _0;
+
+        terms{^ ^};
+        ^toks {^tok
+            {
+                _0{^{{
+                    # "
+                    n_ref _1
+                }}};
+                _1{^{{
+                    terms {(^tok)};
+                    n_ref _2
+                }}};
+                _2{^{{
+                    # "
+                    n_ref _3
+                }}};
+
+                n[] []
+            }[]
+        };
+
+        # Visit each term, and take an action where we want to emit a separator
+        # (between each pair of terms).
+        visit_terms{^} {^terms{^visit
+            # Initially, `sep` is set to `{.}`, to skip the separator action
+            # before the first term.
+            sep_ref{^ ^};
+            sep sep_ref;
+            sep_ref{{.}};
+
+            __kleene_for ^terms {^term
+                ^visit ^term (sep[]);
+                sep_ref{{^ []}}
+                    # After visiting a term, set `sep` to {^[]}, so that passing
+                    # a block to `sep` will evaluate that block before each
+                    # remaining term.
+            }
+        }};
+
+        {^out
+            ^`[`;
+                visit_terms (terms[]) {^term{^sep
+                    ^sep {
+                        (^out `,`)
+                    };
+                    ^out {(^term) ^; 7}
+                }};
+            ^`]`;
+            3
+        }
+    }[]
+};
+
+.

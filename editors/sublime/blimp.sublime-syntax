@@ -34,7 +34,7 @@ contexts:
         1: variable.parameter
         2: punctuation.definition.variable
 
-    - match: "'{{symbol}}"
+    - match: '<{{symbol}}>'
       scope: constant.language
 
     - match: '{{symbol}}'

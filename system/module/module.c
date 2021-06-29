@@ -154,9 +154,17 @@ static BlimpStatus ImportHandler(BlimpParserContext *ctx, BlimpParseTree *tree)
     assert(tree->sub_trees[1].symbol.is_terminal);
     const BlimpSymbol *module = tree->sub_trees[1].token;
 
+    BlimpParseTree parsed;
+    if (BlimpModule_StaticImport(
+            ctx->blimp, BlimpSymbol_GetName(module), path, &parsed)
+        != BLIMP_OK)
+    {
+        return Blimp_Reraise(ctx->blimp);
+    }
+
     BlimpParseTree_Destroy(tree);
-    return BlimpModule_StaticImport(
-        ctx->blimp, BlimpSymbol_GetName(module), path, tree);
+    *tree = parsed;
+    return BLIMP_OK;
 }
 
 BlimpStatus BlimpModule_Init(Blimp *blimp, const char **path)
@@ -314,6 +322,15 @@ BlimpStatus BlimpModule_Import(
 BlimpStatus BlimpModule_StaticImport(
     Blimp *blimp, const char *module, const char **path, BlimpParseTree *result)
 {
+    const BlimpSymbol *prec3_sym;
+    if (Blimp_GetSymbol(blimp, "3", &prec3_sym) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+    BlimpNonTerminal prec3;
+    if (Blimp_GetNonTerminal(blimp, prec3_sym, &prec3) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
     // Search the path for a file matching `module`.
     for (const char **path_entry = path; *path_entry; ++path_entry) {
         const char *dir = *path_entry;
@@ -383,6 +400,10 @@ BlimpStatus BlimpModule_StaticImport(
                 }
 
                 // Now we can construct the send:
+                result->symbol = (BlimpGrammarSymbol) {
+                    .is_terminal = false,
+                    .non_terminal = prec3,
+                };
                 result->num_sub_trees = 2;
                 result->sub_trees = malloc(2*sizeof(BlimpParseTree));
                 if (result->sub_trees == NULL) {

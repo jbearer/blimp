@@ -1,0 +1,82 @@
+################################################################################
+# A trivial macro with only one symbol.
+#
+
+syntax 7 -> test_macro {
+    "foo"
+};
+
+!expect_eq test_macro foo;
+
+################################################################################
+# A simple macro with multiple symbols.
+
+syntax 7 -> test2 test3 {
+    "bar"
+};
+
+!expect_eq test2 test3 bar;
+
+################################################################################
+# A macro with a non-terminal in the symbol list.
+#
+
+syntax 7 -> test4 <7> {
+    "baz"
+};
+
+!expect_eq test4 {^} baz;
+!expect_eq test4 ({^} foo) baz;
+
+################################################################################
+# A macro with a named capture.
+#
+
+syntax 7 -> `<+` arg@<3> `+>` {
+    "($arg)"
+};
+
+!expect_eq <+foo+> foo;
+!expect_eq <+bar+> bar;
+!expect_eq (<+{foo}+> []) foo;
+
+################################################################################
+# Define a trivial macro again after doing some stuff: if there is any
+# persistent state in the implementation, it should still be in a good state.
+#
+
+syntax 7 -> test_macro2 {
+    "foo"
+};
+
+!expect_eq test_macro2 foo;
+
+################################################################################
+# A macro with multiple symbols in the output.
+#
+
+syntax 7 -> test5 {
+    "foo bar"
+};
+
+foo{^}{^};
+!expect_eq test5 `bar`;
+
+syntax 7 -> test6 {
+    "bar baz"
+};
+
+!expect_eq test6 `bar`;
+
+################################################################################
+# Quoted symbols in a macro definition that are supposed to get unquoted
+#
+
+syntax 7 -> quotes_in_def2 {
+    "`{` `foo` `}`"
+};
+
+!expect_eq (quotes_in_def2 []) foo;
+
+.
+

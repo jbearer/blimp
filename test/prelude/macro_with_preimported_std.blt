@@ -1,0 +1,2 @@
+#: -floop-errors -istd
+import macro_tests
