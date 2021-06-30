@@ -1,6 +1,6 @@
 # Create a token `a+c`, which we will use to force the lexer into a multi-
 # character lookahead loop.
-\> {^`a+c`;7} {{^`confusing_token`}};
+{ \> {^`a+c`;7} {{^`confusing_token`}} };
 
 a{^} {foo};
 foo{^} {bar};

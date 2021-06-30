@@ -1,5 +1,6 @@
 #include "internal/blimp.h"
 #include "internal/eval.h"
+#include "internal/grammar.h"
 
 static inline Status LoopDetected(
     Blimp *blimp, const Instruction *ip, const Symbol *sym)
@@ -780,6 +781,38 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                 } else {
                     continue;
                 }
+            }
+
+            case INSTR_MACRO: {
+                // Get the production and handler from the result stack. The
+                // handler is on top since it was evaluated second.
+                Object *handler = ObjectStack_Pop(blimp, &blimp->result_stack);
+                Object *production = ObjectStack_Pop(
+                    blimp, &blimp->result_stack);
+
+                // Define the macro and get the symbol for the non-terminal of
+                // the production.
+                const Symbol *nt;
+                if (DefineMacro(blimp, production, handler, &nt) != BLIMP_OK) {
+                    BlimpObject_Release(production);
+                    BlimpObject_Release(handler);
+                    goto error;
+                }
+                BlimpObject_Release(production);
+                BlimpObject_Release(handler);
+
+                if (use_result) {
+                    // If this instruction should produce a result, push the
+                    // non-terminal symbol onto the result stack.
+                    if (ObjectStack_Push(
+                            blimp, &blimp->result_stack, (Object *)nt)
+                        != BLIMP_OK)
+                    {
+                        goto error;
+                    }
+                }
+
+                break;
             }
 
             case INSTR_RET: {

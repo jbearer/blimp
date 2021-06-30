@@ -54,6 +54,15 @@ static inline Status Emit_SEND(
     return Bytecode_Append(code, (Instruction *)&instr);
 }
 
+static inline Status Emit_MACRO(Bytecode *code, ResultType result_type)
+{
+    MACRO instr = {
+        {INSTR_MACRO, result_type, sizeof(instr)}
+    };
+
+    return Bytecode_Append(code, (Instruction *)&instr);
+}
+
 static inline Status Emit_SENDTO(
     Bytecode *code,
     ResultType result_type,
@@ -168,7 +177,8 @@ static Status CompileStmt(
         case EXPR_SEND: {
             const Symbol *sym_receiver = NULL;
             if (Expr_EvaluatesToSymbol(
-                    stmt->send.receiver, &sym_receiver) == YES)
+                    stmt->send.receiver, &sym_receiver) == YES
+                && sym_receiver != NULL)
             {
                 if (Expr_IsPure(stmt->send.receiver) != YES) {
                     TRY(CompileExpr(
@@ -203,6 +213,13 @@ static Status CompileStmt(
             if (returned) {
                 *returned = !!(flags & SEND_TAIL);
             }
+            break;
+        case EXPR_MACRO:
+            TRY(CompileExpr(
+                blimp, stmt->macro.production, RESULT_USE, depth, code));
+            TRY(CompileExpr(
+                blimp, stmt->macro.handler, RESULT_USE, depth, code));
+            TRY(Emit_MACRO(code, result_type));
             break;
         default:
             assert(false);

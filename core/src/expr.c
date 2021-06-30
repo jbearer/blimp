@@ -47,6 +47,15 @@ Status BlimpExpr_NewSend(
     return BLIMP_OK;
 }
 
+Status BlimpExpr_NewMacro(
+    Blimp *blimp, Expr *production, Expr *handler, Expr **expr)
+{
+    TRY(Expr_New(blimp, EXPR_MACRO, expr));
+    (*expr)->macro.production = BlimpExpr_Borrow(production);
+    (*expr)->macro.handler    = BlimpExpr_Borrow(handler);
+    return BLIMP_OK;
+}
+
 Status BlimpExpr_NewMsgName(Blimp *blimp, const Symbol *name, Expr **expr)
 {
     TRY(Expr_New(blimp, EXPR_MSG_NAME, expr));
@@ -83,6 +92,11 @@ static Status ResolveStmt(Blimp *blimp, Expr *stmt, DeBruijnMap *scopes)
             // Recurse into sub-expressions.
             TRY(ResolveExpr(blimp, stmt->send.receiver, scopes));
             TRY(ResolveExpr(blimp, stmt->send.message, scopes));
+            return BLIMP_OK;
+        case EXPR_MACRO:
+            // Recurse into sub-expressions.
+            TRY(ResolveExpr(blimp, stmt->macro.production, scopes));
+            TRY(ResolveExpr(blimp, stmt->macro.handler, scopes));
             return BLIMP_OK;
         case EXPR_BLOCK:
             DBMap_Push(scopes, (void *)stmt->block.msg_name);
@@ -181,6 +195,10 @@ void Blimp_FreeExpr(Expr *expr)
                 Blimp_FreeExpr(expr->send.receiver);
                 Blimp_FreeExpr(expr->send.message);
                 break;
+            case EXPR_MACRO:
+                Blimp_FreeExpr(expr->macro.production);
+                Blimp_FreeExpr(expr->macro.handler);
+                break;
             case EXPR_MSG:
                 break;
             case EXPR_MSG_NAME:
@@ -254,6 +272,13 @@ static void DumpExpr(FILE *file, const Expr *expr, DeBruijnMap *scopes)
                 DumpExpr(file, expr->send.message, scopes);
                 fputc(')', file);
                 break;
+            case EXPR_MACRO:
+                fputs("(macro ", file);
+                DumpExpr(file, expr->macro.production, scopes);
+                fputc(' ', file);
+                DumpExpr(file, expr->macro.handler, scopes);
+                fputc(')', file);
+                break;
             case EXPR_MSG:
                 fputc('^', file);
                 DumpSymbol(file, DBMap_Resolve(scopes, expr->msg.index));
@@ -305,6 +330,13 @@ void PrintClosure(FILE *f, const Expr *expr, DeBruijnMap *scopes)
                 PrintClosure(f, expr->send.receiver, scopes);
                 fputc(' ', f);
                 PrintClosure(f, expr->send.message, scopes);
+                fputc(')', f);
+                break;
+            case EXPR_MACRO:
+                fputs("(\\> ", f);
+                PrintClosure(f, expr->macro.production, scopes);
+                fputc(' ', f);
+                PrintClosure(f, expr->macro.handler, scopes);
                 fputc(')', f);
                 break;
             case EXPR_MSG: {

@@ -25,6 +25,7 @@ struct BlimpInstruction {
         INSTR_SENDTO,
         INSTR_CALL,
         INSTR_CALLTO,
+        INSTR_MACRO,
         INSTR_RET,
         INSTR_NOP,
     } type;

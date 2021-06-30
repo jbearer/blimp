@@ -291,6 +291,11 @@ static void PrintInstruction(
             break;
         }
 
+        case INSTR_MACRO: {
+            PRINT_INSTR(file, MACRO, "");
+            break;
+        }
+
         case INSTR_RET: {
             PRINT_INSTR(file, RET, "");
             break;

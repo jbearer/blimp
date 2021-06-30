@@ -545,6 +545,73 @@ static Status SymbolVisitor(
     return BLIMP_OK;
 }
 
+Status DefineMacro(
+    Blimp *blimp, Object *production, Object *handler, const Symbol **nt_sym)
+{
+    // Use a symbol visitor to extract a list of GrammarSymbols from
+    // `production`.
+    Vector/*<GrammarSymbol>*/ symbols;
+    Vector_Init(blimp, &symbols, sizeof(GrammarSymbol), NULL);
+    Object *symbol_visitor;
+    if (BlimpObject_NewExtension(
+            blimp,
+            (Object *)blimp->global,
+            &symbols,
+            SymbolVisitor,
+            NULL,
+            &symbol_visitor
+        ) != BLIMP_OK)
+    {
+        Vector_Destroy(&symbols);
+        return Reraise(blimp);
+    }
+
+    // Send the visitor to the production parse tree and get the return value,
+    // which is the non-terminal of the production.
+    if (Blimp_SendAndParseSymbol(
+            blimp,
+            (Object *)blimp->global,
+            production,
+            symbol_visitor,
+            nt_sym)
+        != BLIMP_OK)
+    {
+        Vector_Destroy(&symbols);
+        return Reraise(blimp);
+    }
+    BlimpObject_Release(symbol_visitor);
+
+    // Collect information needed by MacroHandler().
+    MacroArg *handler_arg;
+    if (Malloc(blimp, sizeof(MacroArg), &handler_arg) != BLIMP_OK) {
+        Vector_Destroy(&symbols);
+        return Reraise(blimp);
+    }
+    handler_arg->handler = BlimpObject_Borrow(handler);
+    handler_arg->non_terminal_symbol = *nt_sym;
+
+    // Add a new production which will be handled by `handler`.
+    NonTerminal nt;
+    TRY(Grammar_GetNonTerminal(&blimp->grammar, *nt_sym, &nt));
+    if (Grammar_AddRule(
+            &blimp->grammar,
+            nt,
+            Vector_Length(&symbols),
+            Vector_Data(&symbols),
+            MacroHandler,
+            handler_arg)
+        != BLIMP_OK)
+    {
+        Vector_Destroy(&symbols);
+        BlimpObject_Release(handler);
+        free(handler_arg);
+        return Reraise(blimp);
+    }
+
+    Vector_Destroy(&symbols);
+    return BLIMP_OK;
+}
+
 // Handler for `\> Term Term Term`
 static Status PrecedenceHandler(ParserContext *ctx, ParseTree *tree)
 {
@@ -566,44 +633,6 @@ static Status PrecedenceHandler(ParserContext *ctx, ParseTree *tree)
     TRY(Blimp_Eval(
         ctx->blimp, production, (Object *)ctx->blimp->global, &production_obj));
 
-    // Use a symbol visitor to extract a list of GrammarSymbols from
-    // `production_obj`.
-    Vector/*<GrammarSymbol>*/ symbols;
-    Vector_Init(ctx->blimp, &symbols, sizeof(GrammarSymbol), NULL);
-    Object *symbol_visitor;
-    if (BlimpObject_NewExtension(
-            ctx->blimp,
-            (Object *)ctx->blimp->global,
-            &symbols,
-            SymbolVisitor,
-            NULL,
-            &symbol_visitor
-        ) != BLIMP_OK)
-    {
-        Vector_Destroy(&symbols);
-        BlimpObject_Release(production_obj);
-        return Reraise(ctx->blimp);
-    }
-
-    // Send the visitor to the production parse tree and get the return value,
-    // which is the non-terminal of the production.
-    const Symbol *nt_sym;
-    if (Blimp_SendAndParseSymbol(
-            ctx->blimp,
-            (Object *)ctx->blimp->global,
-            production_obj,
-            symbol_visitor,
-            &nt_sym)
-        != BLIMP_OK)
-    {
-        Vector_Destroy(&symbols);
-        BlimpObject_Release(production_obj);
-        return Reraise(ctx->blimp);
-    }
-
-    BlimpObject_Release(production_obj);
-    BlimpObject_Release(symbol_visitor);
-
     // Evaluate the handler Object which will be attached to this macro, to run
     // whenever it is reduced.
     Object *handler_obj;
@@ -614,40 +643,15 @@ static Status PrecedenceHandler(ParserContext *ctx, ParseTree *tree)
             &handler_obj
         ) != BLIMP_OK)
     {
-        Vector_Destroy(&symbols);
         return Reraise(ctx->blimp);
     }
 
-    // Collect information needed by MacroHandler().
-    MacroArg *handler_arg;
-    if (Malloc(ctx->blimp, sizeof(MacroArg), &handler_arg) != BLIMP_OK) {
-        Vector_Destroy(&symbols);
-        BlimpObject_Release(handler_obj);
-        return Reraise(ctx->blimp);
-    }
-    handler_arg->handler = handler_obj;
-    handler_arg->non_terminal_symbol = nt_sym;
+    const Symbol *nt_sym;
+    Status ret = DefineMacro(ctx->blimp, production_obj, handler_obj, &nt_sym);
 
-    // Add a new production which will be handled by `handler_obj`.
-    NonTerminal nt;
-    TRY(Grammar_GetNonTerminal(&ctx->blimp->grammar, nt_sym, &nt));
-    if (Grammar_AddRule(
-            &ctx->blimp->grammar,
-            nt,
-            Vector_Length(&symbols),
-            Vector_Data(&symbols),
-            MacroHandler,
-            handler_arg)
-        != BLIMP_OK)
-    {
-        Vector_Destroy(&symbols);
-        BlimpObject_Release(handler_obj);
-        free(handler_arg);
-        return Reraise(ctx->blimp);
-    }
-
-    Vector_Destroy(&symbols);
-    return BLIMP_OK;
+    BlimpObject_Release(production_obj);
+    BlimpObject_Release(handler_obj);
+    return ret;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -953,18 +957,6 @@ static Status ParseTreeToNode(
             // Stmt[NoMsg] -> "\>"" Term Term
             if (SubTreeIsTerminal(tree, 0, TOK_MACRO)) {
                 node->type = PARSE_TREE_MACRO;
-
-                // Currently, the expression resulting from a macro definition
-                // is a dummy symbol, to have no side-effects. In the future,
-                // though, we will have a built-in macro definition expression
-                // type, which defines a macro at runtime when evaluated. That
-                // will require converting the sub-Terms to expressions, so we
-                // include the left and right sub-trees here to ensure current
-                // bl:mp code is forwards compatible; that is, both sub-trees of
-                // a macro definition must be valid parse trees. For now,
-                // ParseTreeNodeToExpr will simply discard the resulting left
-                // and right sub-expressions after the parse trees have been
-                // checked for validity.
                 node->left = SubTree(tree, 1);
                 node->right = SubTree(tree, 2);
                 return BLIMP_OK;
@@ -1042,20 +1034,7 @@ static Status ParseTreeNodeToExpr(
         }
         case PARSE_TREE_MACRO: {
             // Stmt[NoMsg] -> "\>"" Term Term
-            //
-            // Currently, we simply return a dummy expression which has no
-            // runtime side-effects (a `.` symbol), and thus we discard the two
-            // sub-expressions, which we only wanted to check for validity.
-            //
-            // In the future, we will use these sub-expressions to construct a
-            // built-in "macro definition" expression, which defines a macro at
-            // runtime when evaluated.
-            Blimp_FreeExpr(left);
-            Blimp_FreeExpr(right);
-
-            const Symbol *dot;
-            TRY(Blimp_GetSymbol(blimp, ".", &dot));
-            return BlimpExpr_NewSymbol(blimp, dot, expr);
+            return BlimpExpr_NewMacro(blimp, left, right, expr);
         }
 
         default:

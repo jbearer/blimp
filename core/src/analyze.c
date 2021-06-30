@@ -110,6 +110,11 @@ static Status AnalyzeStmt(Blimp *blimp, Expr *expr, DeBruijnMap *scopes)
             TRY(AnalyzeExpr(blimp, expr->send.message, scopes));
             return BLIMP_OK;
 
+        case EXPR_MACRO:
+            TRY(AnalyzeExpr(blimp, expr->macro.production, scopes));
+            TRY(AnalyzeExpr(blimp, expr->macro.handler, scopes));
+            return BLIMP_OK;
+
         case EXPR_BLOCK:
             if (expr->analysis == NULL) {
                 TRY(NewAnalysis(blimp, &expr->analysis));
@@ -157,10 +162,28 @@ Tristate Expr_EvaluatesToSymbol(Expr *expr, const Symbol **sym)
             return MAYBE;
         }
     } else if (expr->next == NULL) {
-        // A single statement evaluates to a symbol if it is a symbol literal.
+        // A single statement evaluates to a symbol if it is a symbol literal or
+        // a macro expression.
         if (expr->tag == EXPR_SYMBOL) {
             if (sym != NULL) {
                 *sym = expr->symbol;
+            }
+            return YES;
+        } else if (expr->tag == EXPR_MACRO) {
+            Expr *production = expr->macro.production->last;
+            if (production->tag == EXPR_BLOCK && sym != NULL) {
+                // The result of the macro definition is the result of sending a
+                // parse tree visitor to the production object. In the common
+                // case, the production will be a block which simply returns a
+                // symbol literal. In this case, we can easily say exactly what
+                // symbol the macro returns.
+                //
+                // Note that we could be more general here if we had an analysis
+                // function like
+                //  Send_EvaluatesToSymbol(Expr *receiver, const Symbol **sym)
+                // But for now, this special case will catch most macro
+                // definitions.
+                *sym = production->block.code->analysis->sym_value;
             }
             return YES;
         } else {

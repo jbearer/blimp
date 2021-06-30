@@ -227,6 +227,15 @@ typedef struct {
     // message: stack
 } CALLTO;
 
+// Define a new macro, interpreting the top two objects on the stack as a parse
+// tree representing the production, and the handler. The result of this
+// instruction is the non-terminal symbol of the production.
+typedef struct {
+    Instruction header;
+    // production: stack
+    // handler: stack
+} MACRO;
+
 // Pop the current frame off of the call stack, and continue executing at the
 // instruction saved in the `return_address` field. If the return address is
 // NULL, terminate bytecode interpretation and return the top of the result

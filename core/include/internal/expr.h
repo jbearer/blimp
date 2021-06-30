@@ -10,6 +10,7 @@ typedef enum {
     EXPR_SYMBOL,
     EXPR_BLOCK,
     EXPR_SEND,
+    EXPR_MACRO,
     EXPR_MSG,
 
     // Unresolved expressions. These should be eliminated from the AST after the
@@ -58,6 +59,11 @@ struct BlimpExpr {
         } send;
 
         struct {
+            Expr *production;
+            Expr *handler;
+        } macro;
+
+        struct {
             size_t index;
                 // DeBruijn index of the message being referred to by this
                 // expression.
@@ -99,6 +105,8 @@ struct BlimpExpr {
 
 PRIVATE Status BlimpExpr_NewMsgName(Blimp *blimp, const Symbol *name, Expr **expr);
 PRIVATE Status BlimpExpr_NewMsgIndex(Blimp *blimp, size_t index, Expr **expr);
+PRIVATE Status BlimpExpr_NewMacro(
+    Blimp *blimp, Expr *production, Expr *handler, Expr **expr);
 
 // Replace any EXPR_MSG_NAME sub-expressions of `expr` with an EXPR_MSG where
 // the `index` indicates the depth relative to the scope whose message name

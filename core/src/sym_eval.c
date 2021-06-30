@@ -1022,6 +1022,12 @@ static Status SymEvalInstructionAndPushResult(
                 result);
         }
 
+        case INSTR_MACRO: {
+            Optimizer_Pop(opt); // Handler
+            Optimizer_Pop(opt); // Production
+            return Optimizer_Emit(opt, ip, result);
+        }
+
         case INSTR_RET: {
             *ret = true;
 
