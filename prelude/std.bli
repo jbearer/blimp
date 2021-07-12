@@ -1,3 +1,4 @@
 import macro;
 import std_idempotent;
+import syntax;
 .

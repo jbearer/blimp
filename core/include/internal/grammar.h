@@ -60,8 +60,8 @@
 // non-terminal (even if that non-terminal is relatively high precedence, like
 // Term). To fix this, we force the parser to reduce `;` into a low-precedence
 // non-terminal as soon as it sees it, by adding the rule `Semi -> ;`, where
-// `Semi` has precedence just higher than StmtNoMsg. We then replace the two
-// productions that used the `;` terminal with:
+// `Semi` has very low precedence. We then replace the two productions that used
+// the `;` terminal with:
 //
 //  Expr      -> Stmt Semi Expr
 //  ExprNoMsg -> StmtNoMsg Semi Expr

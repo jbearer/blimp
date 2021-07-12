@@ -120,7 +120,13 @@ __symop{^} {^opref{^code
 __operator __declare __symop {^sym .};
 
 # Dereference: get the value of a symbol.
-${^} {^sym
+`$`{^} {^sym
+    {
+        (^sym __get)
+    }[]
+};
+
+__operator __get __symop {^sym
     {
         (^sym __declare);
         ^sym __sym_cell{^}

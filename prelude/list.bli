@@ -1,4 +1,89 @@
+################################################################################
+# list
+#
+# The standard bl:mp list is a versatile data structure for storing and
+# accessing an ordered sequence of dynamically type items. It is not, as the
+# name might suggest, merely a linked list. It behaves like a linked list for
+# some operations and like an array for others, giving a good mix of the
+# performance characteristics of both. Of course, this is not without tradeoffs.
+#
+# The list is structured as a linked list of nodes, each of which contains a
+# value. But it also has an auxiliary index, which is a trie mapping sequences
+# of integer digits (from the `int` module) to nodes. This allows O(log(n))
+# random access by index. The trie index is thus used for efficient indexing
+# (including element access and updates) while the linked list structure is used
+# for efficient iteration, since iterating via indices requires arithmetic that
+# carries somewhat more overhead than just dereferencing symbols to move from
+# node to node.
+#
+# The addition of the O(log(n)) index does hurt performance for certain
+# operations relative to a plain linked list. For example, insertion and
+# deletion are more expensive because the index must be updated for all indices
+# after the point of insertion or removal (though note that for the special
+# cases of insertion and deletion at the end of the list, the stack operations
+# `push` and `pop`, remains fast). This tradeoff is judged acceptable because
+# for a good general-purpose sequence data structure, the operations whose
+# performance is improved (indexing and iteration) are by far the most common,
+# while insertion and deletion in the middle of the list are much less common
+# and, when they are used, are often not used repeatedly on the critical
+# performance path.
+#
+# In short, this is not a specialized data structure. It prioritizes usability
+# and performance of common operations. If the user needs high performance out
+# of a particular operation that is not optimized here, they can use a more
+# specialized data structure like a vector or a linked list.
+#
+
+# The digit trie data structure which is used as an index into the list. An
+# __int_trie has a node, which is a cell containing the node in the list indexed
+# by this trie, and children, which is a map from digits to __int_tries,
+# recursively.
+#
+# The node asssociated with a particulare integer in a trie index is the node
+# obtained by recursively descending into the appropriate child tries for each
+# digit in the integer, starting from the least significant. The node for the
+# top-level trie (which is reached by following an empty sequence of digits)
+# corresponds to the integer 0.
+__int_trie{^} {
+    {
+        node{^} ({^cell {(^cell)}} (__cell[]));
+        children{^} (
+            # Initialize the map of children and pass it to this block, which
+            # creates an accessor method for it.
+            {^children {(^children)}}
+                # The actual map object.
+                {^digit
+                    # If ^digit is already initialized to a getter for the
+                    # corresponding child trie, this message send just gets the
+                    # child. Otherwise, if ^digit is an uninitialized symbol,
+                    # the block executes and initializes it to a new, empty
+                    # trie.
+                    ^digit {^ref
+                        {^node
+                            ^ref {(^node)};
+                            ^node
+                        } (__int_trie[])
+                    }
+                }
+        );
+        {^msg
+            ^msg[]
+        }
+    }[]
+};
+
+# The symbol `__list_nil` is globally bound to a singleton object which
+# implements all of the node operations that can be implemented for a nil node.
+# Thus, this symbol can be used as a placeholder for a node. It is used for the
+# `next` field of the last node in a list, and for the head and tail fields of
+# empty lists.
 __list_nil{^} ({
+    append{^} {
+        {^node
+            ^node
+        }
+    };
+
     each{^} {
         {^f
             .
@@ -11,6 +96,12 @@ __list_nil{^} ({
         }
     };
 
+    if_nil{^} {
+        {^t{^f
+            ^t[]
+        }}
+    };
+
     {^msg
         ^msg[]
     }
@@ -18,6 +109,7 @@ __list_nil{^} ({
 
 __bind __list_node __init {^self{^value
     ^self next (__cell[]);
+    ^self next {__list_nil};
     ^self value (__cell[]):
     ^self value {(^value)}
 }};
@@ -37,40 +129,86 @@ __bind __list_node assign{^self{^values
     ^self next{^} assign (^values next{^})
 }};
 
-__bind list __init {^self{^value
+__bind __list_node get{^self
+    ^self value
+};
+
+__bind __list_node if_nil{^self{^t{^f
+    ^f[]
+}}};
+
+__bind list __init {^self{
+    .
+    # Declare fields.
     ^self __head (__cell[]);
     ^self __tail (__cell[]);
     ^self __length (__cell[]);
+    ^self __index (__int_trie[]);
+        # Initialize the trie index to an empty trie.
 
-    ^self __head {
-        __new __list_node ^value
-    };
-    ^self __tail {
-        (^self __head){^}
-    };
-
-    ^self __length { 1 }
+    # Initialize the linked list structure: set head and tail to nil, and length
+    # to 0.
+    ^self __head {__list_nil};
+    ^self __tail {__list_nil};
+    ^self __length {0};
+    .
 }};
 
 __bind list length {^self
     ^self __length {^}
 };
 
-__bind list , {^self{^value
-    ^self __tail {
-        (^self __tail{^} append (__new __list_node ^value))
+__bind list push {^self{^value
+    # Set the tail to a reference to a new node, after appending the new node to
+    # the current tail.
+    ^self __tail {^tail
+        {^new_tail
+            # If the old tail was nil, the list was empty, so we must also set
+            # the head to the new node.
+            ^tail if_nil {
+                (^self) __head {(^new_tail)}
+            } {
+                .
+            };
+
+            # Append the new tail to the old tail and return the new tail.
+            ^tail append ^new_tail
+        } (__new __list_node ^value)
     };
 
-    (^self __length{
-        (^self __length{^}) + 1
+    # Increment length.
+    (^self __length{^length
+        # Update the index with the new value. The index of the pushed element
+        # is equal to the old length of the list.
+        ^self __at ^length {(^self __tail){^}};
+
+        ^length + 1
     });
 
     ^self
 }};
 
-__bind list ] {^self
-    ^self
-};
+__bind list __at {^self{^index
+    curr_ref{^ ^};
+    curr curr_ref;
+    curr_ref (^self __index);
+
+    # Follow trie children for each digit in the index.
+    (^index) __digits each {^digit
+        curr_ref (curr children ^digit)
+    };
+
+    # Return the node associated with the trie where we ended up.
+    curr node
+}};
+
+__bind list __get_item {^self{^index
+    ^self __at ^index{^} get{^}
+}};
+
+__bind list __set_item {^self{^index{^value
+    ^self __at ^index{^} get{(^value)}
+}}};
 
 __bind list each {^self{^f
     ^self __head{^} each ^f;
@@ -84,16 +222,20 @@ __bind list := {^self{^values
 
 __bind list render {^self{^out
     ^out `[`;
-    (^self __head{^} value{^}) render ^out;
-    ^self __head{^} next{^} each {^val
-        ^out `, `;
-        ^val render ^out
+    ^self __head{^head
+        ^head if_nil {
+            .
+        } {
+            (^head value{^}) render ^out;
+            ^head next{^} each {^val
+                ^out `, `;
+                ^val render ^out
+            }
+        };
+
+        ^head
     };
     ^out `]`
 }};
-
-[{^} {^value
-    __new list ^value
-};
 
 .

@@ -473,6 +473,12 @@ __dneg{
         }
     };
 
+    each{^} {
+        {^f
+            ^f __dneg
+        }
+    };
+
     __render {^} {
         {^out
             ^out `-`
@@ -594,6 +600,12 @@ __dpos{
         }
     };
 
+    each{^} {
+        {^f
+            .
+        }
+    };
+
     __render {^} {
         {^out
             .
@@ -668,6 +680,13 @@ __dcons{^} {^lsd{^tail
                 (^f[]);
                 (^f[])
             }
+        }
+    };
+
+    each{^} {
+        {^f
+            ^f ^lsd;
+            ^tail each ^f
         }
     };
 

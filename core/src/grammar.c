@@ -697,11 +697,11 @@ Status DefaultGrammar(Blimp *blimp, Grammar *grammar)
     // of increasing precedence:
     NonTerminal NT_Expr, NT_ExprNoMsg, NT_Stmt, NT_StmtNoMsg, NT_Semi, NT_Term,
         NT_TermNoMsg;
+    TRY(GetNonTerminal(grammar,"5", &NT_Semi));
     TRY(GetNonTerminal(grammar,"1", &NT_Expr));
     TRY(GetNonTerminal(grammar,"2", &NT_ExprNoMsg));
     TRY(GetNonTerminal(grammar,"3", &NT_Stmt));
     TRY(GetNonTerminal(grammar,"4", &NT_StmtNoMsg));
-    TRY(GetNonTerminal(grammar,"5", &NT_Semi));
     TRY(GetNonTerminal(grammar,"6", &NT_Term));
     TRY(GetNonTerminal(grammar,"7", &NT_TermNoMsg));
 

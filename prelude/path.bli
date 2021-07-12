@@ -1,0 +1,37 @@
+################################################################################
+# @-path
+#
+# An @-path is just a [base, index] pair representing the result of a
+# `base@index` expression. `base` is an object to index into and `index` is the
+# index to use. The resulting path object handles getting and setting the value
+# at the index in the base.
+#
+# When it is assigned to, it uses the __set_item method of the base to set the
+# value of `index` in `base`. When it is read from, it uses the __get_item
+# method of the base to get the value of `index` in `base`.
+#
+
+__bind __at_path __init{^self
+    function(__new list[] push `base` push `index`) {
+        .
+        ^self __base ($base);
+        ^self __index ($index);
+        .
+    }
+};
+
+__bind __at_path __get {^self
+    (^self __base) __get_item (^self __index)
+};
+
+__bind __at_path := {^self{^value
+    (^self __base) __set_item (^self __index) ^value
+}};
+
+__bind __at_path render{^self{^out
+    ^self __base render ^out;
+    ^out `@`;
+    ^self __index render ^out
+}};
+
+.

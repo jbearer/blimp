@@ -1,0 +1,56 @@
+import std;
+
+1000{^} (digits[1,0,0,0]);
+
+l := [0];
+i := 0;
+1000 times {
+    i := ($i + 1);
+    $l push($i)
+};
+
+i := 0;
+1000+1 times {
+    !expect (($(($l)@($i))) == ($i));
+    i := ($i + 1)
+};
+
+!benchmark{n{^ 10}; list_index} {
+    ($(($l)@(1000)))
+};
+
+# This benchmark does the same thing as `list_index` (indexes to the last
+# element in a large list) but it does so by iterating over the list until it
+# reaches the 1000th element. This should be significantly slower than
+# `list_index`; otherwise, having the O(log(n)) index in addition to the linked
+# list structure is not gaining anything.
+!benchmark{n{^ 10}; list_index_iter} {
+    elem{^ ^};
+    i := 0;
+    ($l) each {^elem
+        if ($i == 1000) {
+            elem{(^elem)}
+        };
+        i := ($i + 1)
+    };
+    elem[]
+};
+
+!benchmark{n{^ 1}; ops{^ 1000}; list_iter} {
+    ($l) each {^}
+};
+
+# This benchmark does the same thing as `list_iter` (iterates over a large list)
+# but it does so by incrementing an index and repeatedly indexing into the list.
+# This should be significantly slower than `list_iter`; otherwise, having the
+# linked list structure in addition to the O(log(n)) index is not gaining
+# anything.
+!benchmark{n{^ 1}; ops{^ 1000}; list_iter_indices} {
+    i := 0;
+    $l length times {
+        $(($l)@($i));
+        i := ($i + 1)
+    }
+};
+
+.
