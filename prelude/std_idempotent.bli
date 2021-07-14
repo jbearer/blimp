@@ -7,6 +7,7 @@ import symbol;
 import function;
 import int;
 import list;
+import struct;
 import path;
 import macro_runtime;
 

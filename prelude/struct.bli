@@ -1,0 +1,62 @@
+################################################################################
+# struct
+#
+# A struct is simply a key-value map where the keys are constrained to be
+# symbols. Fields can be accessed by sending the struct object the name of the
+# desired field a message. They can also be accessed and set using the @-path
+# protocol (e.g. $my_struct@field := value; $($my_struct@field)).
+#
+
+__struct{^} {
+    {
+        # __refs maps field names to references to the corresponding fields in
+        # the `__fields` object. Thus, it can be used to change the value of a
+        # field.
+        #
+        # When it receives a field name as a message, it returns
+        #   * a reference to that field in `__fields` if the field has already
+        #     been initialized, or
+        #   * a function which can be used to set the reference corresponding to
+        #     the new field, if the field is uninitialized.
+        __refs{^} {^field
+            ^field {^ref
+                # If the field is not initialized, return a setter which takes
+                # a reference in `__fields` as an arguments and uses `^ref` (a
+                # reference in `__refs`) to store a getter for the reference to
+                # `__fields` in `__refs`.
+                {^value
+                    ^ref {(^value)}
+                }
+            }
+        };
+
+        __fields{^} {^field
+            ^field {^ref
+                # If the field is not initialized, initialize it in `__refs`...
+                __refs ^field ^ref;
+                # ...and then initialize it here, to a getter for `undefined`.
+                ^ref {undefined};
+                undefined
+            }
+        };
+
+        __set_item{^} {
+            {^field{^value
+                __fields ^field;
+                    # Ensure the field is initialized.
+                __refs ^field {(^value)}
+                    # Set the field in `__fields` to a getter for the value.
+            }}
+        };
+
+        __get_item{^} {
+            {^sym
+                __fields ^sym
+            }
+        };
+
+        {^msg
+            __fields ^msg
+        }
+    }[]
+}
