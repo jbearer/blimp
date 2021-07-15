@@ -436,6 +436,24 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                         goto error;
                     }
 
+                    if (sp->message != NULL) {
+                        // Capture the parent's message. This is the outermost
+                        // capture, outside of captures on the result stack
+                        // which came from inner scopes (between the parent and
+                        // the new object) which got inlined. So we must do this
+                        // before capturing messages from the result stack.
+                        if (ScopedObject_CaptureMessage(
+                                (ScopedObject *)obj,
+                                (instr->flags & BLOCK_CLOSURE)
+                                    ? sp->message
+                                    : NULL)
+                            != BLIMP_OK)
+                        {
+                            BlimpObject_Release((Object *)obj);
+                            goto error;
+                        }
+                    }
+
                     // Pop captured messages from the result stack.
                     for (size_t i = 0; i < instr->captures; ++i) {
                         Object *capture = ObjectStack_Pop(
@@ -450,20 +468,6 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                         }
 
                         if (capture) BlimpObject_Release(capture);
-                    }
-
-                    if (sp->message != NULL) {
-                        // Capture the parent's message.
-                        if (ScopedObject_CaptureMessage(
-                                (ScopedObject *)obj,
-                                (instr->flags & BLOCK_CLOSURE)
-                                    ? sp->message
-                                    : NULL)
-                            != BLIMP_OK)
-                        {
-                            BlimpObject_Release((Object *)obj);
-                            goto error;
-                        }
                     }
 
                     // Push the object onto the stack. Note that we do not
