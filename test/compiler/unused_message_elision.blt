@@ -1,0 +1,19 @@
+#: -funused-message-elision -finlining
+
+# Unused message with no side-effects.
+!expect_eq ({foo} bar) foo;
+
+# And where the receiver can't be inlined because it uses its scope.
+!expect_eq ({local{^} {foo}; local[]} bar) foo;
+
+# Unused message with side-effects.
+val{^ ^};
+!expect_eq ({foo} (val {bar})) foo;
+!expect_eq (val[]) bar;
+
+# And where the receiver can't be inlined because it uses its scope.
+val2{^ ^};
+!expect_eq ({local{^} {foo}; local[]} (val2 {bar})) foo;
+!expect_eq (val2[]) bar;
+
+.

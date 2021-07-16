@@ -13,6 +13,7 @@ const BlimpOptions DEFAULT_BLIMP_OPTIONS = {
     .tail_call_elimination  = true,
     .constant_elision       = false,
     .inlining               = false,
+    .unused_message_elision = false,
     .loop_errors            = false,
 };
 
@@ -230,6 +231,18 @@ const char *BLIMP_OPTIONS_USAGE =
     "\n"
     "        This option is disabled by default.\n"
     "\n"
+    "    [no-]unused-message-elision\n"
+    "        Enable or disable the optimization of unused messages.\n"
+    "\n"
+    "        When enabled, if a message is sent to an object that the\n"
+    "        interpreter can determine does not use its message, then the\n"
+    "        computation of the message can be elided (if it has no side-\n"
+    "        effects) or decoupled from the sending of the message. This in\n"
+    "        turn can enable inlining of the receiver (if inlining is\n"
+    "        enabled) even in the case when the message has side-effects.\n"
+    "\n"
+    "        This option is disabled by default.\n"
+    "\n"
     "    [no-]loop-errors\n"
     "        Treat infinite loops as errors.\n"
     "\n"
@@ -372,6 +385,9 @@ const char *Blimp_ParseOption(const char *str, BlimpOptions *options)
     } else if (strncmp("inlining", option, option_len) == 0) {
         options->inlining = !negate;
         return NULL;
+    } else if (strncmp("unused-message-elision", option, option_len) == 0) {
+        options->unused_message_elision = !negate;
+        return NULL;
     } else if (strncmp("loop-errors", option, option_len) == 0) {
         options->loop_errors = !negate;
         return NULL;
@@ -385,4 +401,5 @@ void Blimp_OptimizationsOn(BlimpOptions *options)
     options->tail_call_elimination = true;
     options->constant_elision = true;
     options->inlining = true;
+    options->unused_message_elision = true;
 }

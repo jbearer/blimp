@@ -79,6 +79,9 @@ static Status ExecuteSend(
 
             // ...and we pass that reference to the message which was passed to
             // `sym`.
+            assert(message != NULL);
+                // `message` should only be `NULL` if it is ignored by the
+                // receiver; in this case it is not.
             receiver = message;
             message = (Object *)ref;
         }
@@ -96,6 +99,9 @@ static Status ExecuteSend(
 
             // When a reference object receives a message, it sets
             // the value of the associated symbol to the message.
+            assert(message != NULL);
+                // `message` should only be `NULL` if it is ignored by the
+                // receiver; in this case it is not.
             if ((status = ReferenceObject_Store(ref, message)) != BLIMP_OK) {
                 break;
             }
@@ -128,6 +134,8 @@ static Status ExecuteSend(
                 .has_range      = range != NULL,
                 .use_result     = use_result,
                 .executing      = block->code,
+                .top_level      = false,
+                    // This is a send, not a top-level execution.
             };
             if (range != NULL) {
                 frame.range = *range;
@@ -431,17 +439,20 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                             sp->scope,
                             instr->msg_name,
                             instr->code,
+                            instr->flags,
                             &obj) != BLIMP_OK)
                     {
                         goto error;
                     }
 
-                    if (sp->message != NULL) {
-                        // Capture the parent's message. This is the outermost
-                        // capture, outside of captures on the result stack
-                        // which came from inner scopes (between the parent and
-                        // the new object) which got inlined. So we must do this
-                        // before capturing messages from the result stack.
+                    if (!sp->top_level) {
+                        // If we are processing a message send (that is, if we
+                        // are not in a top-level stack context) capture the
+                        // parent's message. This is the outermost capture,
+                        // outside of captures on the result stack which came
+                        // from inner scopes (between the parent and the new
+                        // object) which got inlined. So we must do this before
+                        // capturing messages from the result stack.
                         if (ScopedObject_CaptureMessage(
                                 (ScopedObject *)obj,
                                 (instr->flags & BLOCK_CLOSURE)
@@ -497,6 +508,7 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                             instr->scope,
                             instr->msg_name,
                             instr->code,
+                            instr->flags,
                             &obj) != BLIMP_OK)
                     {
                         goto error;
@@ -638,7 +650,10 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                 // message is computed and pushed onto the stack after the
                 // receiver, which means it is the first object to pop off the
                 // stack.
-                Object *message  = ObjectStack_Pop(blimp, &blimp->result_stack);
+                Object *message = NULL;
+                if (!(instr->flags & SEND_NO_MESSAGE)) {
+                    message = ObjectStack_Pop(blimp, &blimp->result_stack);
+                }
                 Object *receiver = ObjectStack_Pop(blimp, &blimp->result_stack);
 
                 if (EvalSend(
@@ -672,7 +687,10 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                 // message is computed and pushed onto the stack after the
                 // receiver, which means it is the first object to pop off the
                 // stack.
-                Object *message  = ObjectStack_Pop(blimp, &blimp->result_stack);
+                Object *message = NULL;
+                if (!(instr->flags & SEND_NO_MESSAGE)) {
+                    message = ObjectStack_Pop(blimp, &blimp->result_stack);
+                }
                 Object *receiver = ObjectStack_Pop(blimp, &blimp->result_stack);
 
                 if (EvalSend(
@@ -717,7 +735,10 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                 }
 
                 // Get the message from the result stack.
-                Object *message = ObjectStack_Pop(blimp, &blimp->result_stack);
+                Object *message = NULL;
+                if (!(instr->flags & SEND_NO_MESSAGE)) {
+                    message = ObjectStack_Pop(blimp, &blimp->result_stack);
+                }
 
                 if (EvalSend(
                         blimp,
@@ -760,7 +781,10 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                 }
 
                 // Get the message from the result stack.
-                Object *message = ObjectStack_Pop(blimp, &blimp->result_stack);
+                Object *message = NULL;
+                if (!(instr->flags & SEND_NO_MESSAGE)) {
+                    message = ObjectStack_Pop(blimp, &blimp->result_stack);
+                }
 
                 if (EvalSend(
                         blimp,
@@ -890,7 +914,7 @@ Status EvalBytecode(
         // frame owns a reference to that as well.
 
     StackFrame frame = {
-         .return_address = NULL,
+        .return_address = NULL,
             // A NULL return address indicates that RET instructions should
             // cause us to return from this function back into user code, rather
             // than returning to the address stored in the stack frame.
@@ -899,6 +923,8 @@ Status EvalBytecode(
         .has_range      = false,
         .use_result     = result != NULL,
         .executing      = code,
+        .top_level      = true,
+            // This is a top-level execution, not a send.
     };
     if (Stack_Push(blimp, &blimp->stack, &frame, 128) != BLIMP_OK) {
             // Unlike in ExecuteSend, where we requested 0 additional bytes on

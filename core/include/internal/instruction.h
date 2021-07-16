@@ -120,12 +120,6 @@ typedef struct {
     const Symbol *sym;
 } SYMI;
 
-typedef enum {
-    BLOCK_DEFAULT = 0x0,
-    BLOCK_CLOSURE = 0x1,
-    BLOCK_LAMBDA  = 0x2,
-} BlockFlags;
-
 // Push a block immediate onto the result stack.
 //
 // The object will be a child of the scope currently on the call stack.
@@ -179,8 +173,9 @@ typedef struct {
 } MSGOF;
 
 typedef enum {
-    SEND_DEFAULT = 0x0,
-    SEND_TAIL    = 0x1,
+    SEND_DEFAULT    = 0x0,
+    SEND_TAIL       = 0x1,
+    SEND_NO_MESSAGE = 0x2,
 } SendFlags;
 
 // Push a new frame onto the call stack, where the message comes from the top of

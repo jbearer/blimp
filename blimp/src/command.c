@@ -329,7 +329,8 @@ static BlimpStatus InspectObject(
 
     PrintObjectInfo(obj);
 
-    return VoidReturn(blimp, result);
+    *result = BlimpObject_Borrow(obj);
+    return BLIMP_OK;
 }
 
 static BlimpStatus InspectExpr(
@@ -339,11 +340,14 @@ static BlimpStatus InspectExpr(
     void *arg,
     BlimpObject **result)
 {
+    (void)blimp;
     (void)scope;
     (void)arg;
 
     PrintObjectInfo(args[0]);
-    return VoidReturn(blimp, result);
+
+    *result = BlimpObject_Borrow(args[0]);
+    return BLIMP_OK;
 }
 
 static BlimpStatus PrintParseTree(

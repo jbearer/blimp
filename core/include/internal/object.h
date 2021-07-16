@@ -416,6 +416,13 @@ PRIVATE Status GlobalObject_New(Blimp *blimp, GlobalObject **object);
 // concrete class BlockObject extends ScopedObject
 //
 
+typedef enum BlockFlags {
+    BLOCK_DEFAULT      = 0x0,
+    BLOCK_CLOSURE      = 0x1,
+    BLOCK_LAMBDA       = 0x2,
+    BLOCK_USES_MESSAGE = 0x4,
+} BlockFlags;
+
 typedef struct {
     ScopedObject header;
 
@@ -425,6 +432,7 @@ typedef struct {
         // DeBruijn index.
     Bytecode *code;
         // Body of the block.
+    BlockFlags flags;
 } BlockObject;
 
 PRIVATE Status BlockObject_New(
@@ -432,6 +440,7 @@ PRIVATE Status BlockObject_New(
     ScopedObject *parent,
     const Symbol *msg_name,
     Bytecode *code,
+    BlockFlags flags,
     BlockObject **object);
 
 /**

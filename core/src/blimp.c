@@ -242,6 +242,9 @@ Status BlimpObject_NewBlock(
         (ScopedObject *)parent,
         msg_name,
         bytecode,
+        BLOCK_USES_MESSAGE,
+            // For API-created blocks, we don't know if the object will use its
+            // message or not, so be conservative and say it does.
         (BlockObject **)obj);
 }
 

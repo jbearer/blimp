@@ -14,6 +14,7 @@ typedef struct StackFrame {
     const Instruction *return_address;
     Bytecode *executing;
     bool use_result;
+    bool top_level;
 } StackFrame;
 
 struct BlimpStackTrace {

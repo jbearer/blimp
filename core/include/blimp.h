@@ -222,7 +222,6 @@ typedef struct {
      */
     bool tail_call_elimination;
 
-
     /**
      * \brief Enables constant elision.
      *
@@ -256,6 +255,19 @@ typedef struct {
      * This option is disabled by default.
      */
     bool inlining;
+
+    /**
+     * \brief Enables the optimization of unused messages.
+     *
+     * When enabled, if a message is sent to an object that the interpreter can
+     * determine does not use its message, then the computation of the message
+     * can be elided (if it has no side-effects) or decoupled from the sending
+     * of the message. This in turn can enable inlining of the receiver (if
+     * inlining is enabled) even in the case when the message has side-effects.
+     *
+     * This option is disabled by default.
+     */
+    bool unused_message_elision;
 
     /**
      * \brief Treat infinite loops as errors.

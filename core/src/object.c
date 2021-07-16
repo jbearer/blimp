@@ -2190,6 +2190,7 @@ Status BlockObject_New(
     ScopedObject *parent,
     const Symbol *msg_name,
     Bytecode *code,
+    BlockFlags flags,
     BlockObject **obj)
 {
     TRY(ScopedObject_New(blimp, OBJ_BLOCK, parent, (ScopedObject **)obj));
@@ -2197,6 +2198,7 @@ Status BlockObject_New(
     // Initialize derived fields.
     (*obj)->msg_name = msg_name;
     (*obj)->code = code;
+    (*obj)->flags = flags;
     ++code->refcount;
 
     HeapCheck(blimp);

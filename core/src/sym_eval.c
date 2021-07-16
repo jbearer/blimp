@@ -228,11 +228,28 @@ static Status SymEvalSendTo(
         }
     }
 
+    // If enabled, try unused message elision. If the message has not already
+    // been optimized away (`message != NULL`) and if we can determine that the
+    // receiver is a block which does not use its message, delete the `message`
+    // and set it to `NULL`, indicating that it has been optimized away.
+    //
+    // We do this before trying inlining, because it may make inlining possible
+    // when it previously wasn't, in the case where `message` was not a pure
+    // value.
+    if (blimp->options.unused_message_elision &&
+        message != NULL &&
+        Object_Type(receiver) == OBJ_BLOCK &&
+        !(((BlockObject *)receiver)->flags & BLOCK_USES_MESSAGE))
+    {
+        Optimizer_Delete(opt, message);
+        message = NULL;
+    }
+
     // Try inlining if the receiver is a block object and the message is a pure
     // value.
     if (blimp->options.inlining &&
         Object_Type(receiver) == OBJ_BLOCK &&
-        message->value_type != VALUE_UNKNOWN)
+        (message == NULL || message->value_type != VALUE_UNKNOWN))
     {
         // Create a symbolic stack frame to represent information about this
         // inline send, which will not be on the call stack at runtime since we
@@ -260,7 +277,7 @@ static Status SymEvalSendTo(
         Optimizer_InlineReturn(opt);
 
         if (status == BLIMP_OK) {
-            Optimizer_Delete(opt, message);
+            if (message != NULL) Optimizer_Delete(opt, message);
             return BLIMP_OK;
         }
     }
@@ -314,6 +331,12 @@ static Status SymEvalSendTo(
             // tail position in the overall procedure.
             new_instr.flags &= ~SEND_TAIL;
         }
+        if (message == NULL) {
+            // If the message has been optimized away (either just above, or by
+            // the previous version of this instruction) indicate that by
+            // setting the SEND_NO_MESSAGE flag.
+            new_instr.flags |= SEND_NO_MESSAGE;
+        }
         TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, result));
     } else {
         // In the case where the original instruction did not specify an
@@ -328,6 +351,12 @@ static Status SymEvalSendTo(
             // Clear the tail call bit if the call being inlined is not in a
             // tail position in the overall procedure.
             new_instr.flags &= ~SEND_TAIL;
+        }
+        if (message == NULL) {
+            // If the message has been optimized away (either just above, or by
+            // the previous version of this instruction) indicate that by
+            // setting the SEND_NO_MESSAGE flag.
+            new_instr.flags |= SEND_NO_MESSAGE;
         }
         TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, result));
     }
@@ -415,8 +444,25 @@ static Status SymEvalSend(
             // message in the context of the receiver's code:
             //          `lambda_body(message)`
 
+            // If enabled, try unused message elision. If the message has not
+            // already been optimized away (`message != NULL`) and if we can
+            // determine that the receiver is a block which does not use its
+            // message, delete the `message` and set it to `NULL`, indicating
+            // that it has been optimized away.
+            //
+            // We do this before trying inlining, because it may make inlining
+            // possible when it previously wasn't, in the case where `message`
+            // was not a pure value.
+            if (blimp->options.unused_message_elision &&
+                message != NULL &&
+                !(receiver->value.lambda.flags & BLOCK_USES_MESSAGE))
+            {
+                Optimizer_Delete(opt, message);
+                message = NULL;
+            }
+
             if (!blimp->options.inlining ||
-                message->value_type == VALUE_UNKNOWN)
+                (message != NULL && message->value_type == VALUE_UNKNOWN))
             {
                 // If inlining is disabled, of course we cannot proceed with the
                 // inlining optimization. Also, if the message is not a pure
@@ -492,7 +538,7 @@ static Status SymEvalSend(
             // receiver and message to ever be pushed onto the result stack in
             // the first place.
             Optimizer_Delete(opt, receiver);
-            Optimizer_Delete(opt, message);
+            if (message != NULL) Optimizer_Delete(opt, message);
 
             return BLIMP_OK;
         }
@@ -543,6 +589,12 @@ static Status SymEvalSend(
             // in a tail position in the overall procedure.
             new_instr.flags &= ~SEND_TAIL;
         }
+        if (message == NULL) {
+            // If the message has been optimized away (either just above, or by
+            // the previous version of this instruction) indicate that by
+            // setting the SEND_NO_MESSAGE flag.
+            new_instr.flags |= SEND_NO_MESSAGE;
+        }
         TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, result));
     } else {
         // In the normal case, there is no explicit scope encoded in the
@@ -555,6 +607,12 @@ static Status SymEvalSend(
         };
         if (opt->stack && !opt->stack->tail_call) {
             new_instr.flags &= ~SEND_TAIL;
+        }
+        if (message == NULL) {
+            // If the message has been optimized away (either just above, or by
+            // the previous version of this instruction) indicate that by
+            // setting the SEND_NO_MESSAGE flag.
+            new_instr.flags |= SEND_NO_MESSAGE;
         }
         TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, result));
     }
@@ -955,7 +1013,10 @@ static Status SymEvalInstructionAndPushResult(
         case INSTR_SEND: {
             SEND *instr = (SEND *)ip;
 
-            SymbolicObject *message = Optimizer_Pop(opt);
+            SymbolicObject *message = NULL;
+            if (!(instr->flags & SEND_NO_MESSAGE)) {
+                message = Optimizer_Pop(opt);
+            }
             SymbolicObject *receiver = Optimizer_Pop(opt);
 
             return SymEvalSend(
@@ -974,7 +1035,10 @@ static Status SymEvalInstructionAndPushResult(
         case INSTR_CALL: {
             CALL *instr = (CALL *)ip;
 
-            SymbolicObject *message = Optimizer_Pop(opt);
+            SymbolicObject *message = NULL;
+            if (!(instr->flags & SEND_NO_MESSAGE)) {
+                message = Optimizer_Pop(opt);
+            }
             SymbolicObject *receiver = Optimizer_Pop(opt);
 
             return SymEvalSend(
@@ -993,11 +1057,16 @@ static Status SymEvalInstructionAndPushResult(
         case INSTR_SENDTO: {
             SENDTO *instr = (SENDTO *)ip;
 
+            SymbolicObject *message = NULL;
+            if (!(instr->flags & SEND_NO_MESSAGE)) {
+                message = Optimizer_Pop(opt);
+            }
+
             return SymEvalSendTo(
                 opt,
                 false,
                 instr->receiver,
-                Optimizer_Pop(opt),
+                message,
                 &instr->range,
                 instr->flags,
                 scope,
@@ -1009,11 +1078,16 @@ static Status SymEvalInstructionAndPushResult(
         case INSTR_CALLTO: {
             CALLTO *instr = (CALLTO *)ip;
 
+            SymbolicObject *message = NULL;
+            if (!(instr->flags & SEND_NO_MESSAGE)) {
+                message = Optimizer_Pop(opt);
+            }
+
             return SymEvalSendTo(
                 opt,
                 true,
                 instr->receiver,
-                Optimizer_Pop(opt),
+                message,
                 &instr->range,
                 instr->flags,
                 instr->scope,

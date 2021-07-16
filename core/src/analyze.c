@@ -15,6 +15,10 @@ static Status NewAnalysis(Blimp *blimp, Analysis **analysis)
         // This property can be decided statically, so its value should never be
         // MAYBE. We initialize it to NO, and change it to YES if we ever see
         // the message get captured.
+    (*analysis)->uses_message = NO;
+        // This property can be decided statically, so its value should never be
+        // MAYBE. We initialize it to NO, and change it to YES if we ever see
+        // the message get used.
 
     return BLIMP_OK;
 }
@@ -93,7 +97,12 @@ static Status AnalyzeStmt(Blimp *blimp, Expr *expr, DeBruijnMap *scopes)
         case EXPR_SYMBOL:
             return BLIMP_OK;
 
-        case EXPR_MSG:
+        case EXPR_MSG: {
+            // Find the block whose message is being referenced and record that
+            // it uses its message.
+            Analysis *owner = DBMap_Resolve(scopes, expr->msg.index);
+            owner->uses_message = YES;
+
             if (0 < expr->msg.index && expr->msg.index <= DBMap_Size(scopes)) {
                 // If the index of this message refers to the message of a block
                 // object which is an ancestor of the one currently being
@@ -104,6 +113,7 @@ static Status AnalyzeStmt(Blimp *blimp, Expr *expr, DeBruijnMap *scopes)
                 capturing_child->captures_parents_message = YES;
             }
             return BLIMP_OK;
+        }
 
         case EXPR_SEND:
             TRY(AnalyzeExpr(blimp, expr->send.receiver, scopes));
@@ -252,11 +262,20 @@ Tristate Stmt_UsesScope(Expr *stmt)
     }
 }
 
-PRIVATE Tristate Expr_CapturesParentsMessage(Expr *expr)
+Tristate Expr_CapturesParentsMessage(Expr *expr)
 {
     if (expr->analysis == NULL) {
         return MAYBE;
     } else {
         return expr->analysis->captures_parents_message;
+    }
+}
+
+Tristate Expr_UsesMessage(Expr *expr)
+{
+    if (expr->analysis == NULL) {
+        return MAYBE;
+    } else {
+        return expr->analysis->uses_message;
     }
 }

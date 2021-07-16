@@ -1,0 +1,2 @@
+#: -finlining
+import bench_unused_message_elision
