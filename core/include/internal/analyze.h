@@ -39,6 +39,7 @@ typedef struct {
     // Data about this expression itself.
     Tristate captures_parents_message;
     Tristate uses_message;
+    Tristate affine;
 } Analysis;
 
 PRIVATE Status Expr_Analyze(Blimp *blimp, Expr *expr);
@@ -52,5 +53,6 @@ PRIVATE Tristate Block_UsesScope(Expr *expr);
 PRIVATE Tristate Stmt_UsesScope(Expr *stmt);
 PRIVATE Tristate Expr_CapturesParentsMessage(Expr *expr);
 PRIVATE Tristate Expr_UsesMessage(Expr *expr);
+PRIVATE Tristate Expr_IsAffine(Expr *expr);
 
 #endif

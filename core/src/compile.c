@@ -172,6 +172,9 @@ static Status CompileStmt(
             if (Block_IsPure(stmt) == YES) {
                 flags |= BLOCK_PURE;
             }
+            if (Expr_IsAffine(stmt) == NO) {
+                flags |= BLOCK_NOT_AFFINE;
+            }
 
             TRY(Emit_BLOCKI(
                 code, result_type, stmt->block.msg_name, block_code, flags));

@@ -246,7 +246,7 @@ static Status SymEvalSendTo(
                 // is referenced in the inlined procedure. If the message is not
                 // a pure value which can be recomputed as needed, we need to do
                 // a relocation.
-            (((BlockObject *)receiver)->flags & BLOCK_PURE)
+            (((BlockObject *)receiver)->flags & BLOCK_PURE) &&
                 // We only relocate if the procedure being inlined is pure,
                 // because if the message has side-effects, we cannot relocate
                 // it after side-effects within the procedure, since this would
@@ -258,13 +258,17 @@ static Status SymEvalSendTo(
                 // occur after it evalutes the message. But this adds
                 // significantly more complexity, while the current check covers
                 // most common cases.
+            !(((BlockObject *)receiver)->flags & BLOCK_NOT_AFFINE)
+                // We only inline an effectful message into a procedure which
+                // might be affine (that is, is not definitely NOT_AFFINE),
+                // since we can only evaluate an inlined effectful expression
+                // once. "Might be affine" is sufficient because relocatable
+                // objects have affine-ness built in, and inlining will fail if
+                // we try to evaluate the relocated message more than once.
+                // Thus, this check is merely an optimization so that we don't
+                // going trying to inline non-affine procedures where inlining
+                // will definitely fail.
         ) {
-            // Technically, the check above is insufficient for inlining
-            // effectful messages; the procedure into which we are inlining must
-            // also be affine, since we can only evaluate an inlined effectful
-            // expression once. However, relocatable objects have affine-ness
-            // built in, and inlining will fail if we try to evaluate the
-            // relocated message more than once.
             SymbolicObject *reloc = Optimizer_Relocate(opt, message);
             if (reloc != NULL) {
                 message = reloc;
@@ -492,10 +496,10 @@ static Status SymEvalSend(
             }
 
             if (message != NULL && !CanSymEvalObject(message)) {
-                // Also, if the message is not a pure value, we can't substitute
-                // the message into the lambda's body, because that might cause
-                // the message's side-effects to be evaluated in the wrong order
-                // or more than once.
+                // If the message is not a pure value, we can't substitute the
+                // message into the lambda's body, because that might cause the
+                // message's side-effects to be evaluated in the wrong order or
+                // more than once.
                 //
                 // However, if the receiver is pure, we can try relocating the
                 // computation of the message into the inline procedure where it
@@ -514,14 +518,20 @@ static Status SymEvalSend(
                     break;
                 }
 
-                // Note that the pureness check above is insufficient for
-                // inlining effectful messages; the procedure into which we are
-                // inlining must also be affine, since we can only evaluate an
-                // inlined effectful expression once. However, relocatable
-                // objects have affine-ness built in, and inlining will fail if
-                // we try to evaluate the relocated message more than once, so
-                // we will optimistically proceed with relocation and inlining
-                // for now.
+                if (receiver->value.lambda.flags & BLOCK_NOT_AFFINE) {
+                    // We only relocate an effectful message into a procedure
+                    // which might be affine (that is, is not definitely
+                    // NOT_AFFINE), since we can only evaluate an inlined
+                    // effectful expression once. "Might be affine" is
+                    // sufficient because relocatable objects have affine-ness
+                    // built in, and inlining will fail if we try to evaluate
+                    // the relocated message more than once. Thus, this check is
+                    // merely an optimization so that we don't going trying to
+                    // inline non-affine procedures where inlining will
+                    // definitely fail.
+                    break;
+                }
+
                 SymbolicObject *reloc = Optimizer_Relocate(opt, message);
                 if (reloc == NULL) {
                     break;

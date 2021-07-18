@@ -16,9 +16,17 @@ static Status NewAnalysis(Blimp *blimp, Analysis **analysis)
         // MAYBE. We initialize it to NO, and change it to YES if we ever see
         // the message get captured.
     (*analysis)->uses_message = NO;
-        // This property can be decided statically, so its value should never be
-        // MAYBE. We initialize it to NO, and change it to YES if we ever see
-        // the message get used.
+        // We initialize `uses_message` to NO, since the message is definitely
+        // not used if we don't find a static reference to it in the code. If we
+        // do find a reference, this will be changed to YES or MAYBE, depending
+        // on whether we can guarantee the block containing the message will
+        // execute.
+    (*analysis)->affine = YES;
+        // Until we see a static reference to a block's message, we can say for
+        // sure that the block is affine (uses its message 0 or 1 times) since
+        // we know it uses it 0 times. If we see more than one static reference
+        // to the message, or if we see a reference that may execute an unkonwn
+        // number of times, we will set this to NO or MAYBE.
 
     return BLIMP_OK;
 }
@@ -44,6 +52,18 @@ static inline Tristate Tristate_Or(Tristate t1, Tristate t2)
             return t2;
         default:
             return t2 == YES ? YES : MAYBE;
+    }
+}
+
+static inline Tristate Tristate_Not(Tristate t)
+{
+    switch (t) {
+        case YES:
+            return NO;
+        case NO:
+            return YES;
+        default:
+            return MAYBE;
     }
 }
 
@@ -101,7 +121,31 @@ static Status AnalyzeStmt(Blimp *blimp, Expr *expr, DeBruijnMap *scopes)
             // Find the block whose message is being referenced and record that
             // it uses its message.
             Analysis *owner = DBMap_Resolve(scopes, expr->msg.index);
-            owner->uses_message = YES;
+            if (expr->msg.index == 0) {
+                // If the message is being used by the object itself, then it is
+                // definitely used, regardless of any conditional execution.
+                owner->affine = Tristate_Not(owner->uses_message);
+                    // The owner can now be affine only if it has not already
+                    // used its message.
+                owner->uses_message = YES;
+            } else {
+                // If the message is being used by a child object, then we have
+                // no idea how many times it will actually be evaluated. It
+                // could be zero, if this child block is never sent a message.
+                // Or it could be many.
+                if (owner->uses_message == NO) {
+                    owner->uses_message = MAYBE;
+                        // If we hadn't previously seen a use of the message, we
+                        // now have a potential (but not definite) use. If we
+                        // were already unsure, we remain unsure, and if we were
+                        // already sure we used the message, then we still use
+                        // it.
+                }
+                owner->affine = MAYBE;
+                    // We cannot speak to affine-ness, since it is always
+                    // possible for this child block to be evaluated more than
+                    // once.
+            }
 
             if (0 < expr->msg.index && expr->msg.index <= DBMap_Size(scopes)) {
                 // If the index of this message refers to the message of a block
@@ -283,5 +327,14 @@ Tristate Expr_UsesMessage(Expr *expr)
         return MAYBE;
     } else {
         return expr->analysis->uses_message;
+    }
+}
+
+Tristate Expr_IsAffine(Expr *expr)
+{
+    if (expr->analysis == NULL) {
+        return MAYBE;
+    } else {
+        return expr->analysis->affine;
     }
 }
