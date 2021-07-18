@@ -1,0 +1,30 @@
+work{^} {.};
+
+!benchmark{n{^}100; ops{^}10; sequence_using_send} {
+    {{^}} (work[]) (
+    {{^}} (work[]) (
+    {{^}} (work[]) (
+    {{^}} (work[]) (
+    {{^}} (work[]) (
+    {{^}} (work[]) (
+    {{^}} (work[]) (
+    {{^}} (work[]) (
+    {{^}} (work[])
+          (work[])
+    ))))))))
+};
+
+!benchmark{n{^}100; ops{^}10; sequence_using_semis} {
+    work[];
+    work[];
+    work[];
+    work[];
+    work[];
+    work[];
+    work[];
+    work[];
+    work[];
+    work[]
+};
+
+.

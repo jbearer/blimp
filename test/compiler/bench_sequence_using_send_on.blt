@@ -1,0 +1,2 @@
+#: -O
+import bench_sequence_using_send

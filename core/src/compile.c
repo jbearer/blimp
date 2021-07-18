@@ -169,6 +169,9 @@ static Status CompileStmt(
             if (Expr_UsesMessage(stmt) != NO) {
                 flags |= BLOCK_USES_MESSAGE;
             }
+            if (Block_IsPure(stmt) == YES) {
+                flags |= BLOCK_PURE;
+            }
 
             TRY(Emit_BLOCKI(
                 code, result_type, stmt->block.msg_name, block_code, flags));

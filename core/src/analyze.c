@@ -217,6 +217,12 @@ Tristate Expr_IsPure(Expr *expr)
     }
 }
 
+Tristate Block_IsPure(Expr *expr)
+{
+    assert(expr->tag == EXPR_BLOCK);
+    return Expr_IsPure(expr->block.code);
+}
+
 Tristate Stmt_IsPure(Expr *stmt)
 {
     switch (stmt->tag) {

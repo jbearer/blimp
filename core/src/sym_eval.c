@@ -15,6 +15,7 @@ static inline bool CanSymEvalObject(SymbolicObject *obj)
     switch (obj->value_type) {
         case VALUE_SYMBOL:
         case VALUE_OBJECT:
+        case VALUE_RELOCATABLE:
             return true;
         case VALUE_LAMBDA:
             if (!(obj->value.lambda.flags & BLOCK_LAMBDA)) {
@@ -24,30 +25,18 @@ static inline bool CanSymEvalObject(SymbolicObject *obj)
                 // code which produces the same reference, which is impossible.
                 //
                 // TODO This check is currently a bit too conservative because
-                //  1. The compiler is conservative about setting the
-                //     BLOCK_LAMBDA flag, because it doesn't have as much
-                //     information as we do at runtime. For example, if the
-                //     compiler sees a send to a symbol, it can never prove that
-                //     that send does not use its scope. At runtime, though, we
-                //     know the send will not use the scope as long as the
-                //     symbol is already defined in a parent scope. We can fix
-                //     this by doing a runtime check to update the BLOCK_LAMBDA
-                //     flag if it is not set by the compiler. Ideally, we'd want
-                //     to save the result of this runtime check in the generated
-                //     code, not just in this SymbolicObject, so we can take
-                //     advantage of that information in future optimiztion
-                //     passes.
-                //  2. If this object is in an affine position, then generating
-                //     code to emit a new object with the same code _is_
-                //     equivalent, since there are no other references to this
-                //     object. For example,
-                //          {^scope (^scope msg)} {^sym (^sym{^} value)}
-                //     the second block is not a lambda, because it does use its
-                //     scope whenever it is sent a symbol. However, since the
-                //     first block is affine (actually linear) we can still
-                //     inline the computation of the second block:
-                //          {^sym (^sym{^} value)}
-                //     The new code is equivalent to the original code.
+                // the compiler is conservative about setting the BLOCK_LAMBDA
+                // flag, because it doesn't have as much information as we do at
+                // runtime. For example, if the compiler sees a send to a
+                // symbol, it can never prove that that send does not use its
+                // scope. At runtime, though, we know the send will not use the
+                // scope as long as the symbol is already defined in a parent
+                // scope. We can fix this by doing a runtime check to update the
+                // BLOCK_LAMBDA flag if it is not set by the compiler. Ideally,
+                // we'd want to save the result of this runtime check in the
+                // generated code, not just in this SymbolicObject, so we can
+                // take advantage of that information in future optimiztion
+                // passes.
                 return false;
             }
 
@@ -164,6 +153,10 @@ static Status SymEvalObject(
             break;
         }
 
+        case VALUE_RELOCATABLE:
+            TRY(Optimizer_EmitRelocatable(opt, obj, result_type, result));
+            break;
+
         default:
             assert(false);
     }
@@ -245,40 +238,71 @@ static Status SymEvalSendTo(
         message = NULL;
     }
 
-    // Try inlining if the receiver is a block object and the message is a pure
-    // value.
-    if (blimp->options.inlining &&
-        Object_Type(receiver) == OBJ_BLOCK &&
-        (message == NULL || message->value_type != VALUE_UNKNOWN))
-    {
-        // Create a symbolic stack frame to represent information about this
-        // inline send, which will not be on the call stack at runtime since we
-        // are inlining it.
-        SymbolicFrame frame = {
-            .flags      = BLOCK_DEFAULT,
-            .tail_call  = flags & SEND_TAIL,
-            .scope      = (ScopedObject *)receiver,
-            .use_result = Optimizer_UseResult(opt, result_type),
-            .arg        = message,
-            .captures   = NULL,
-        };
-        if (opt->stack && !opt->stack->tail_call) {
-            // Clear the tail_call flag if we're already inlining a call
-            // which is not in a tail position in its parent procedure.
-            frame.tail_call = false;
+    // Try inlining if the receiver is a block object.
+    if (blimp->options.inlining && Object_Type(receiver) == OBJ_BLOCK) {
+        if (message != NULL &&
+            !CanSymEvalObject(message) &&
+                // We need to move the computation of the message to wherever it
+                // is referenced in the inlined procedure. If the message is not
+                // a pure value which can be recomputed as needed, we need to do
+                // a relocation.
+            (((BlockObject *)receiver)->flags & BLOCK_PURE)
+                // We only relocate if the procedure being inlined is pure,
+                // because if the message has side-effects, we cannot relocate
+                // it after side-effects within the procedure, since this would
+                // change the observable order of side-effects.
+                //
+                // Note that this check is a bit conservative; we could
+                // theoretically relocate the message into an impure inline
+                // procedure as long as all of the side-effects in the procedure
+                // occur after it evalutes the message. But this adds
+                // significantly more complexity, while the current check covers
+                // most common cases.
+        ) {
+            // Technically, the check above is insufficient for inlining
+            // effectful messages; the procedure into which we are inlining must
+            // also be affine, since we can only evaluate an inlined effectful
+            // expression once. However, relocatable objects have affine-ness
+            // built in, and inlining will fail if we try to evaluate the
+            // relocated message more than once.
+            SymbolicObject *reloc = Optimizer_Relocate(opt, message);
+            if (reloc != NULL) {
+                message = reloc;
+            }
         }
 
-        Optimizer_InlineCall(opt, &frame);
-        Status status = SymEvalProcedure(
-            opt,
-            ((BlockObject *)receiver)->code,
-            (ScopedObject *)receiver,
-            result);
-        Optimizer_InlineReturn(opt);
+        // We can inline if the message has been optimized away, or if it can be
+        // evaluated inline (possibly after relocation above).
+        if (message == NULL || CanSymEvalObject(message)) {
+            // Create a symbolic stack frame to represent information about this
+            // inline send, which will not be on the call stack at runtime since
+            // we are inlining it.
+            SymbolicFrame frame = {
+                .flags      = BLOCK_DEFAULT,
+                .tail_call  = flags & SEND_TAIL,
+                .scope      = (ScopedObject *)receiver,
+                .use_result = Optimizer_UseResult(opt, result_type),
+                .arg        = message,
+                .captures   = NULL,
+            };
+            if (opt->stack && !opt->stack->tail_call) {
+                // Clear the tail_call flag if we're already inlining a call
+                // which is not in a tail position in its parent procedure.
+                frame.tail_call = false;
+            }
 
-        if (status == BLIMP_OK) {
-            if (message != NULL) Optimizer_Delete(opt, message);
-            return BLIMP_OK;
+            Optimizer_InlineCall(opt, &frame);
+            Status status = SymEvalProcedure(
+                opt,
+                ((BlockObject *)receiver)->code,
+                (ScopedObject *)receiver,
+                result);
+            Optimizer_InlineReturn(opt);
+
+            if (status == BLIMP_OK) {
+                if (message != NULL) Optimizer_Delete(opt, message);
+                return BLIMP_OK;
+            }
         }
     }
 
@@ -461,15 +485,48 @@ static Status SymEvalSend(
                 message = NULL;
             }
 
-            if (!blimp->options.inlining ||
-                (message != NULL && message->value_type == VALUE_UNKNOWN))
-            {
-                // If inlining is disabled, of course we cannot proceed with the
-                // inlining optimization. Also, if the message is not a pure
-                // value, we can't substitute the message into the lambda's
-                // body, because that might cause the message's side-effects to
-                // be evaluated in the wrong order or more than once.
+            if (!blimp->options.inlining) {
+                // If inlining is disabled, we cannot proceed with the inlining
+                // optimization.
                 break;
+            }
+
+            if (message != NULL && !CanSymEvalObject(message)) {
+                // Also, if the message is not a pure value, we can't substitute
+                // the message into the lambda's body, because that might cause
+                // the message's side-effects to be evaluated in the wrong order
+                // or more than once.
+                //
+                // However, if the receiver is pure, we can try relocating the
+                // computation of the message into the inline procedure where it
+                // references its message. We only do this if the receiver is
+                // pure, because otherwise we might relocate the effectful
+                // computation of the message after some side-effects performed
+                // by the inlined procedure, thus reversing the order of side-
+                // effects.
+                //
+                // Note that this is a bit conservative; we could theoretically
+                // relocate the message into an impure inline procedure as long
+                // as all of the side-effects in the procedure occur after it
+                // evalutes the message. But this adds significantly more
+                // complexity, while the current check covers most common cases.
+                if (!(receiver->value.lambda.flags & BLOCK_PURE)) {
+                    break;
+                }
+
+                // Note that the pureness check above is insufficient for
+                // inlining effectful messages; the procedure into which we are
+                // inlining must also be affine, since we can only evaluate an
+                // inlined effectful expression once. However, relocatable
+                // objects have affine-ness built in, and inlining will fail if
+                // we try to evaluate the relocated message more than once, so
+                // we will optimistically proceed with relocation and inlining
+                // for now.
+                SymbolicObject *reloc = Optimizer_Relocate(opt, message);
+                if (reloc == NULL) {
+                    break;
+                }
+                message = reloc;
             }
 
             // Now that we're going to be processing an inline procedure, we
@@ -746,6 +803,9 @@ static Status SymEvalInstructionAndPushResult(
                      capture = capture->next)
                 {
                     SymbolicObject *obj;
+                    if (!CanSymEvalObject(capture)) {
+                        return Error(blimp, BLIMP_ERROR);
+                    }
                     TRY(SymEvalObject(opt, capture, RESULT_USE, &obj));
                     Optimizer_Pop(opt);
                     ++num_captures;

@@ -232,16 +232,26 @@ void Optimizer_End(Optimizer *opt, Bytecode **code)
     opt->optimized_subroutine = NULL;
 }
 
-Status Optimizer_Emit(
-    Optimizer *opt, const Instruction *instr, SymbolicObject **result)
+static Status Emit(
+    Optimizer *opt,
+    const Instruction *instr,
+    bool move,
+    SymbolicObject **result)
 {
     Blimp *blimp = Optimizer_Blimp(opt);
 
     TRY(SymbolicObject_New(opt, result));
     (*result)->instr_offset = Bytecode_Offset(opt->code);
 
-    if (Bytecode_Append(opt->code, instr) != BLIMP_OK) {
-        return Reraise(blimp);
+    if (move) {
+        if (Bytecode_MoveToEnd(opt->code, instr) != BLIMP_OK) {
+            return Reraise(blimp);
+        }
+        instr = Bytecode_Get(opt->code, (*result)->instr_offset);
+    } else {
+        if (Bytecode_Append(opt->code, instr) != BLIMP_OK) {
+            return Reraise(blimp);
+        }
     }
 
     // Update the `result_type` of the new instruction if necessary.
@@ -282,6 +292,12 @@ Status Optimizer_Emit(
     }
 
     return BLIMP_OK;
+}
+
+Status Optimizer_Emit(
+    Optimizer *opt, const Instruction *instr, SymbolicObject **result)
+{
+    return Emit(opt, instr, false, result);
 }
 
 Status Optimizer_EmitGhost(
@@ -368,6 +384,213 @@ void Optimizer_Delete(Optimizer *opt, SymbolicObject *obj)
 
         obj->instr_offset = UNKNOWN_INSTR_OFFSET;
     }
+}
+
+SymbolicObject *Optimizer_Relocate(Optimizer *opt, SymbolicObject *obj)
+{
+    if (obj->instr_offset == GHOST_INSTR_OFFSET ||
+        obj->instr_offset == UNKNOWN_INSTR_OFFSET)
+    {
+        // We can't relocate an object if we can't locate the instruction that
+        // originally computed it.
+        return NULL;
+    }
+
+    // Try to relocate the sub-expressions of `obj` before creating a new result
+    // object, in case we fail to relocate the sub-expressions.
+    const Instruction *instr = Bytecode_Get(opt->code, obj->instr_offset);
+    if (instr->type == INSTR_BLOCKI || instr->type == INSTR_CLOSEI) {
+        // Relocate captured objects, constructing a list of relocatable objects
+        // in the same order as `obj->captures`.
+        SymbolicObject *captures = NULL;
+        SymbolicObject *captures_end = NULL;
+        for (SymbolicObject *capture = obj->captures;
+             capture != NULL;
+             capture = capture->next)
+        {
+            SymbolicObject *reloc = Optimizer_Relocate(opt, capture);
+            if (reloc == NULL) {
+                return NULL;
+            }
+
+            if (captures_end == NULL) {
+                captures = reloc;
+            } else {
+                captures_end->next = reloc;
+            }
+            captures_end = reloc;
+        }
+
+        // Create the result object.
+        SymbolicObject *result;
+        if (SymbolicObject_New(opt, &result) != BLIMP_OK) {
+            return NULL;
+        }
+        result->value_type = VALUE_RELOCATABLE;
+        result->instr_offset = obj->instr_offset;
+        result->captures = captures;
+        return result;
+    } else {
+        // Relocate the receiver and the message.
+        SymbolicObject *receiver = NULL;
+        if (obj->receiver != NULL) {
+            receiver = Optimizer_Relocate(opt, obj->receiver);
+            if (receiver == NULL) {
+                return NULL;
+            }
+        }
+        SymbolicObject *message = NULL;
+        if (obj->message != NULL) {
+            message = Optimizer_Relocate(opt, obj->message);
+            if (message == NULL) {
+                return NULL;
+            }
+        }
+
+        // Create the result object.
+        SymbolicObject *result;
+        if (SymbolicObject_New(opt, &result) != BLIMP_OK) {
+            return NULL;
+        }
+        result->value_type = VALUE_RELOCATABLE;
+        result->instr_offset = obj->instr_offset;
+        result->receiver = receiver;
+        result->message = message;
+        return result;
+    }
+}
+
+Status Optimizer_EmitRelocatable(
+    Optimizer *opt,
+    SymbolicObject *obj,
+    ResultType result_type,
+    SymbolicObject **result)
+{
+    assert(obj->value_type == VALUE_RELOCATABLE);
+
+    // Get the offset of the original instruction which generated this object,
+    // and clear `obj->instr_offset`, since we are about to relocate this
+    // instruction.
+    size_t instr_offset = obj->instr_offset;
+    obj->instr_offset = UNKNOWN_INSTR_OFFSET;
+
+    // Relocatable objects must have valid instruction offets. This is ensured
+    // by Optimizer_Relocate().
+    assert(instr_offset != UNKNOWN_INSTR_OFFSET);
+    assert(instr_offset != GHOST_INSTR_OFFSET);
+
+    // Get the original instruction, and update its result type to match the
+    // result type of the relocated code.
+    Instruction *instr = Bytecode_Get(opt->code, instr_offset);
+    instr->result_type = result_type;
+
+    // Determine the result type of sub-expressions.
+    switch (instr->type) {
+        case INSTR_SYMI:
+        case INSTR_BLOCKI:
+        case INSTR_CLOSEI:
+        case INSTR_OBJI:
+        case INSTR_MSG:
+        case INSTR_MSGOF:
+            // This instruction is pure. We will only evaluate it if we are
+            // actually interested in its result.
+            if (Optimizer_UseResult(opt, instr->result_type)) {
+                result_type = RESULT_USE;
+            } else {
+                // If we are not evaluating this instruction, we can ignore the
+                // results of its sub-expressions and just compute them for
+                // their side-effects.
+                result_type = RESULT_IGNORE;
+            }
+            break;
+        default:
+            // This instruction might have side-effects, so we need to evaluate
+            // it regardless of whether we are using its result. Therefore, we
+            // do care about the results of its sub-expressions.
+            result_type = RESULT_USE;
+            break;
+    }
+
+    // Relocate instructions for the sub-expressions, and use the results to
+    // construct a new object representing the result of this instruction.
+    if (instr->type == INSTR_BLOCKI || instr->type == INSTR_CLOSEI) {
+        // Relocate captured objects.
+        SymbolicObject *captures = NULL;
+        SymbolicObject *captures_end = NULL;
+        for (SymbolicObject *capture = obj->captures;
+             capture != NULL;
+             capture = capture->next)
+        {
+            SymbolicObject *reloc;
+            TRY(Optimizer_EmitRelocatable(
+                opt, capture, result_type, &reloc));
+            if (Optimizer_UseResult(opt, result_type)) {
+                Optimizer_Pop(opt);
+                    // The captures are going to be consumed by this BLOCKI or
+                    // CLOSEI instruction, so they should not end up on the
+                    // result stack.
+                if (captures_end == NULL) {
+                    captures = reloc;
+                } else {
+                    captures_end->next = reloc;
+                }
+                captures_end = reloc;
+            }
+        }
+
+        instr = Bytecode_Get(opt->code, instr_offset);
+        if (Optimizer_UseResult(opt, result_type)) {
+            // Evaluate this instruction if necessary (either it has
+            // side-effects, or we need its result).
+            TRY(Emit(opt, instr, true, result));
+            (*result)->captures = captures;
+        } else {
+            Bytecode_Delete(opt->code, instr);
+        }
+    } else {
+        // Relocate the receiver and message, as appropriate.
+        SymbolicObject *receiver = NULL;
+        if (obj->receiver != NULL) {
+            TRY(Optimizer_EmitRelocatable(
+                opt, obj->receiver, result_type, &receiver));
+            if (Optimizer_UseResult(opt, result_type)) {
+                // The receiver is going to be consumed by this instruction, so
+                // it should not end up on the result stack.
+                Optimizer_Pop(opt);
+            }
+        }
+        SymbolicObject *message = NULL;
+        if (obj->message != NULL) {
+            TRY(Optimizer_EmitRelocatable(
+                opt, obj->message, result_type, &message));
+            if (Optimizer_UseResult(opt, result_type)) {
+                // The message is going to be consumed by this instruction, so
+                // it should not end up on the result stack.
+                Optimizer_Pop(opt);
+            }
+        }
+
+        instr = Bytecode_Get(opt->code, instr_offset);
+        if (Optimizer_UseResult(opt, result_type)) {
+            // Evaluate this instruction if necessary (either it has
+            // side-effects, or we need its result).
+            TRY(Emit(opt, instr, true, result));
+            (*result)->receiver = receiver;
+            (*result)->message = message;
+        } else {
+            Bytecode_Delete(opt->code, instr);
+        }
+    }
+
+    if (!Optimizer_UseResult(opt, result_type)) {
+        // If we are not evaluating this instruction, generate a dummy object
+        // representing a lack of knowledge about the result.
+        TRY(SymbolicObject_New(opt, result));
+    }
+
+    obj->value_type = VALUE_UNKNOWN;
+        // Clear the value type so that this object cannot be relocated twice.
+    return BLIMP_OK;
 }
 
 SymbolicObject *Optimizer_GetMessage(Optimizer *opt, size_t index)

@@ -1,5 +1,7 @@
 #include <stddef.h>
 
+#include "hash_set.h"
+
 #include "internal/expr.h"
 #include "internal/instruction.h"
 
@@ -93,6 +95,47 @@ Status Bytecode_Append(Bytecode *code, const Instruction *instr)
         (char *)code->instructions + code->size);
     memcpy(dst, instr, instr->size);
     code->size += instr->size;
+
+    return BLIMP_OK;
+}
+
+Status Bytecode_MoveToEnd(Bytecode *code, const Instruction *instr)
+{
+    assert(Bytecode_Begin(code) <= instr && instr < Bytecode_End(code));
+        // Make sure the instruction occurs within this array.
+    assert((instr->size & (sizeof(void *) - 1)) == 0);
+        // Make sure the size of the instruction is a multiple of the word size,
+        // so that packing instructions together preserves alignment.
+    size_t offset = (char *)instr - (char *)code->instructions;
+        // Get the offset of the instruction so we have a stable way to
+        // reference it before possibly reallocating the array.
+
+    if (offset == code->size) {
+        // If this instruction is already the last instruction in the procedure,
+        // we don't have to do anything.
+        return BLIMP_OK;
+    }
+
+    // Increase the capacity of the instructions array if necessary.
+    if (code->size + instr->size > code->capacity) {
+        code->capacity = code->capacity*2 + instr->size;
+            // We add `instr->size` to the new capacity so that the new array
+            // is guaranteed to be able to hold the new instruction, even if the
+            // old capacity is less than `instr->size / 2`.
+        TRY(Realloc(code->blimp, code->capacity, &code->instructions));
+    }
+
+    // Copy the instruction from its current location to the end of the array.
+    Instruction *src = (Instruction *)(
+        (char *)code->instructions + offset);
+    Instruction *dst = (Instruction *)(
+        (char *)code->instructions + code->size);
+    memcpy(dst, src, src->size);
+    code->size += dst->size;
+
+    // Replace the old instruction with a NOP.
+    src->type = INSTR_NOP;
+    src->result_type = RESULT_IGNORE;
 
     return BLIMP_OK;
 }
@@ -317,8 +360,16 @@ static void PrintProcedure(
     FILE *file,
     const BlimpBytecode *code,
     const Instruction *current,
-    bool recursive)
+    HashSet/*<Bytecode *>*/ *visited)
 {
+    bool recursive = visited != NULL;
+    if (recursive) {
+        if (HashSet_Contains(visited, &code)) {
+            return;
+        }
+        CHECK(HashSet_Insert(visited, &code));
+    }
+
     for (const Instruction *ip = Bytecode_Begin(code);
          ip != Bytecode_End(code);
          ip = Instruction_Next(ip))
@@ -382,7 +433,7 @@ static void PrintProcedure(
                         } else {
                             fprintf(file, "  %p <%p>\n", block->code, block);
                         }
-                        PrintProcedure(file, block->code, NULL, true);
+                        PrintProcedure(file, block->code, NULL, visited);
                     }
 
                     break;
@@ -409,14 +460,44 @@ void BlimpBytecode_Print(FILE *file, const BlimpBytecode *code, bool recursive)
     BlimpBytecode_PrintWithIP(file, code, NULL, recursive);
 }
 
+static bool PointerEq(const void *p1, const void *p2, void *arg)
+{
+    (void)arg;
+    return *(void **)p1 == *(void **)p2;
+}
+
+static size_t PointerHash(const void *p, void *arg)
+{
+    (void)arg;
+
+    size_t hash = HASH_SEED;
+    Hash_AddPointer(&hash, *(void **)p);
+    return hash;
+}
+
 void BlimpBytecode_PrintWithIP(
     FILE *file,
     const BlimpBytecode *code,
     const Instruction *ip,
     bool recursive)
 {
+    HashSet/*<Bytecode *>*/ visited;
+    if (recursive) {
+        CHECK(HashSet_Init(
+            code->blimp,
+            &visited,
+            sizeof(Bytecode *),
+            PointerEq,
+            PointerHash,
+            NULL));
+    }
+
     fprintf(file, "  %p\n", code);
-    PrintProcedure(file, code, ip, recursive);
+    PrintProcedure(file, code, ip, recursive ? &visited : NULL);
+
+    if (recursive) {
+        HashSet_Destroy(&visited);
+    }
 }
 
 static bool BlimpInstruction_Returns(const Instruction *instr)

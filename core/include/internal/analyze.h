@@ -45,6 +45,7 @@ PRIVATE Status Expr_Analyze(Blimp *blimp, Expr *expr);
 
 PRIVATE Tristate Expr_EvaluatesToSymbol(Expr *expr, const Symbol **sym);
 PRIVATE Tristate Expr_IsPure(Expr *expr);
+PRIVATE Tristate Block_IsPure(Expr *expr);
 PRIVATE Tristate Stmt_IsPure(Expr *stmt);
 PRIVATE Tristate Expr_UsesScope(Expr *expr);
 PRIVATE Tristate Block_UsesScope(Expr *expr);

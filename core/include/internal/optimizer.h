@@ -140,11 +140,19 @@ typedef struct SymbolicObject {
     //      a specific object instance, created by an OBJI instruction. Any
     //      two instruction sequences which result in the same Object pointer
     //      are very clearly equivalent in value.
-    //
+    //  * VALUE_RELOCATABLE:
+    //      the result of a linear computation. The value may be recomputed by
+    //      emitting the exact sequence of instructions which originally
+    //      generated the value, so long as
+    //          * the original instructions are deleted from the program, so the
+    //            value is still only computed once, and
+    //          * there are no side-effects between the original computation of
+    //            the value and the relocated computation.
     enum {
         VALUE_SYMBOL,
         VALUE_LAMBDA,
         VALUE_OBJECT,
+        VALUE_RELOCATABLE,
         VALUE_UNKNOWN,
     } value_type;
     union {
@@ -413,6 +421,39 @@ PRIVATE Status Optimizer_Emit(
  */
 PRIVATE Status Optimizer_EmitGhost(
     Optimizer *opt, ResultType result_type, SymbolicObject **result);
+
+/**
+ * \brief Turn an object into a relocatable linear value.
+ *
+ * If the computation that generated `obj` can be relocated, then this function
+ * returns a new object with value type `VALUE_RELOCATABLE`. When this object is
+ * evaluated using Optimizer_EmitRelocatable(), the instructions which
+ * originally generated `obj` will be moved to the end of the output procedure,
+ * and the relocatable object will be made useless by changing its value type to
+ * `VALUE_UNKNOWN`.
+ *
+ * This ensures that the object is relocated at most once (although the new
+ * object returned by Optimizer_EmitRelocatable() can be further relocated by
+ * calling Optimizer_Relocate() again). The caller is responsible for ensuring
+ * that no side-effects are emitted between the call to Optimizer_Relocate() and
+ * the corresponding Optimizer_EmitRelocatable().
+ *
+ * If a relocatable object is optimized away using Optimizer_Delete(), then its
+ * code is not relocated, but the original code is stripped to evaluate side-
+ * effects only, discarding the results, just as when deleting a normal object.
+ */
+PRIVATE SymbolicObject *Optimizer_Relocate(Optimizer *opt, SymbolicObject *obj);
+
+/**
+ * \brief
+ *      Move the computation of a relocatable object to the end of the output
+ *      stream.
+ */
+PRIVATE Status Optimizer_EmitRelocatable(
+    Optimizer *opt,
+    SymbolicObject *obj,
+    ResultType result_type,
+    SymbolicObject **result);
 
 /**
  * \brief Delete the code which generated a result object.

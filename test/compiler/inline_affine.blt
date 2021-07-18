@@ -1,0 +1,63 @@
+#: -finlining
+
+increment{^} {^x
+    {
+        0{^} {{1}};
+        1{^} {{2}};
+        2{^} {{3}};
+        ^x {{(^x)}}
+    }[]
+};
+
+decrement{^} {^x
+    {
+        3{^} {{2}};
+        2{^} {{1}};
+        1{^} {{0}};
+        ^x {{(^x)}}
+    }[]
+};
+
+set_x{^ ^};
+x set_x;
+
+set_y {^ ^};
+y set_y;
+
+# Check that an effectful argument to a linear pure block has its side-effects
+# evaluated exactly once.
+set_x {0};
+{^} (set_x (increment (x[])));
+!expect_eq (x[]) 1;
+
+# Check that an effectful argument to a pure block that ignores its argument has
+# it's side-effects evaluated exactly once.
+set_x {0};
+{.} (set_x (increment (x[])));
+!expect_eq (x[]) 1;
+
+# Check that an effectful argument to a pure block that uses its argument more
+# than once has its side-effects evaluated exactly once.
+set_x {0};
+{{^} ^} (set_x (increment (x[])));
+!expect_eq (x[]) 1;
+
+# Check that an effectful argument to a linear block with side-effects after
+# referencing its argument has its side-effects evaluated before the side-
+# effects in the block.
+set_x {0};
+set_y {0};
+{set_x (decrement (^[]))} (set_x (increment (x[])); set_y (increment (y[])));
+!expect_eq (x[]) 0;
+!expect_eq (y[]) 1;
+
+# Check that an effectful argument to a linear block with side-effects before
+# referencing its argument has its side-effects evaluated before the side-
+# effects in the block.
+set_x {0};
+set_y {0};
+{set_x (decrement (x[])); ^} (set_x (increment (x[])); set_y (increment (y[])));
+!expect_eq (x[]) 0;
+!expect_eq (y[]) 1;
+
+.

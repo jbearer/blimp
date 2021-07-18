@@ -421,6 +421,7 @@ typedef enum BlockFlags {
     BLOCK_CLOSURE      = 0x1,
     BLOCK_LAMBDA       = 0x2,
     BLOCK_USES_MESSAGE = 0x4,
+    BLOCK_PURE         = 0x8,
 } BlockFlags;
 
 typedef struct {
