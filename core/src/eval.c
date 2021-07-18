@@ -136,6 +136,9 @@ static Status ExecuteSend(
                 .executing      = block->code,
                 .top_level      = false,
                     // This is a send, not a top-level execution.
+#ifndef NDEBUG
+                .objects        = ObjectStack_Size(&blimp->result_stack),
+#endif
             };
             if (range != NULL) {
                 frame.range = *range;
@@ -244,6 +247,14 @@ static Status EvalSend(
         if ((*sp)->message) BlimpObject_Release((*sp)->message);
         if ((*sp)->scope) BlimpObject_Release((Object*)(*sp)->scope);
         if ((*sp)->executing) BlimpBytecode_Free((*sp)->executing);
+
+#ifndef NDEBUG
+        assert(ObjectStack_Size(&blimp->result_stack) == (*sp)->objects);
+            // Check that the returning procedure did not remove any of the
+            // caller's objects from the result stack or leak any extra objects
+            // on the result stack.
+#endif
+
         Stack_Pop(blimp, &blimp->stack);
         *sp = Stack_CurrentFrame(&blimp->stack);
     }
@@ -429,9 +440,9 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
             }
 
             case INSTR_BLOCKI: {
-                if (use_result) {
-                    BLOCKI *instr = (BLOCKI *)ip;
+                BLOCKI *instr = (BLOCKI *)ip;
 
+                if (use_result) {
                     // Create a new block object.
                     BlockObject *obj;
                     if (BlockObject_New(
@@ -492,15 +503,33 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                         BlimpObject_Release((Object *)obj);
                         goto error;
                     }
+                } else {
+                    assert(ip->result_type == RESULT_INHERIT);
+                        // The compiler/optimizer should not generate ignored
+                        // BLOCKI instructions, because they have no side-
+                        // effects, and thus ignoring the result of these
+                        // instructions is pointless.
+                        //
+                        // However, we may still end up ignoring the result of a
+                        // BLOCKI instruction if the result type is conditional
+                        // on the caller, since the compiler cannot statically
+                        // determine whether the caller wants the result or not.
+
+                    // If we are ignoring the result, just pop the captured
+                    // messages from the result stack and discard them.
+                    for (size_t i = 0; i < instr->captures; ++i) {
+                        BlimpObject_Release(
+                            ObjectStack_Pop(blimp, &blimp->result_stack));
+                    }
                 }
 
                 break;
             }
 
             case INSTR_CLOSEI: {
-                if (use_result) {
-                    CLOSEI *instr = (CLOSEI *)ip;
+                CLOSEI *instr = (CLOSEI *)ip;
 
+                if (use_result) {
                     // Create a new block object.
                     BlockObject *obj;
                     if (BlockObject_New(
@@ -541,8 +570,25 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                         BlimpObject_Release((Object *)obj);
                         goto error;
                     }
-                }
+                } else {
+                    assert(ip->result_type == RESULT_INHERIT);
+                        // The compiler/optimizer should not generate ignored
+                        // CLOSEI instructions, because they have no side-
+                        // effects, and thus ignoring the result of these
+                        // instructions is pointless.
+                        //
+                        // However, we may still end up ignoring the result of a
+                        // CLOSEI instruction if the result type is conditional
+                        // on the caller, since the compiler cannot statically
+                        // determine whether the caller wants the result or not.
 
+                    // If we are ignoring the result, just pop the captured
+                    // messages from the result stack and discard them.
+                    for (size_t i = 0; i < instr->captures; ++i) {
+                        BlimpObject_Release(
+                            ObjectStack_Pop(blimp, &blimp->result_stack));
+                    }
+                }
                 break;
             }
 
@@ -854,6 +900,14 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                     // Continue executing from the return address stored in the
                     // stack frame.
 
+#ifndef NDEBUG
+                // Check that this procedure has not removed any of the caller's
+                // objects from the result stack, or leaked any extra objects on
+                // the result stack.
+                assert(ObjectStack_Size(&blimp->result_stack)
+                    == sp->objects + (sp->use_result ? 1 : 0));
+#endif
+
                 // Update the stack.
                 Stack_Pop(blimp, &blimp->stack);
                 sp = Stack_CurrentFrame(&blimp->stack);
@@ -925,6 +979,9 @@ Status EvalBytecode(
         .executing      = code,
         .top_level      = true,
             // This is a top-level execution, not a send.
+#ifndef NDEBUG
+        .objects        = ObjectStack_Size(&blimp->result_stack),
+#endif
     };
     if (Stack_Push(blimp, &blimp->stack, &frame, 128) != BLIMP_OK) {
             // Unlike in ExecuteSend, where we requested 0 additional bytes on

@@ -15,6 +15,14 @@ typedef struct StackFrame {
     Bytecode *executing;
     bool use_result;
     bool top_level;
+#ifndef NDEBUG
+    size_t objects;
+        // Keep track of the number of objects on the result stack when this
+        // call was made. If this number changes after the call completes
+        // (excluding the possible addition of a return value) then something
+        // has gone wrong, and these sorts of errors are difficult to catch
+        // without this instrumentation.
+#endif
 } StackFrame;
 
 struct BlimpStackTrace {
