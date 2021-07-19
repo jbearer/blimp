@@ -280,6 +280,11 @@ typedef struct {
         // we reach a checkpoint, we must fail and backtrack, undoing
         // optimizations if necessary, to prevent those ghost objects from being
         // created.
+    size_t last_offset;
+        // The offset in `code` of the last instruction we emitted. This is used
+        // to optimize the last instruction of a procedure when we encounter a
+        // RET instruction. We must remember this offset since we cannot
+        // efficiently iterate backwards through a bytecode procedure.
 } Optimizer;
 
 typedef struct {
@@ -565,6 +570,13 @@ static inline SymbolicObject *Optimizer_Pop(Optimizer *opt)
 {
     return SymbolicObjectStack_Pop(
         Optimizer_Blimp(opt), &opt->result_stack);
+}
+
+static inline Instruction *Optimizer_LastInstruction(const Optimizer *opt)
+{
+    assert(Bytecode_Offset(opt->code) != 0);
+        // We must have emitted at least one instruction.
+    return Bytecode_Get(opt->code, opt->last_offset);
 }
 
 PRIVATE Status SymbolicObject_Copy(

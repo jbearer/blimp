@@ -1182,6 +1182,39 @@ static Status SymEvalInstructionAndPushResult(
                 return BLIMP_OK;
             }
 
+            if (blimp->options.tail_call_elimination) {
+                // If we are returning and the previous instruction is a send or
+                // call, make it a tail call instead of emitting a RET.
+                Instruction *prev = Optimizer_LastInstruction(opt);
+                assert(prev->result_type == RESULT_INHERIT);
+                    // If `prev` is the last instruction before a RET, it's
+                    // result type should always be INHERIT.
+                SendFlags *flags = NULL;
+                switch (prev->type) {
+                    case INSTR_SEND:
+                        flags = &((SEND *)prev)->flags;
+                        break;
+                    case INSTR_SENDTO:
+                        flags = &((SENDTO *)prev)->flags;
+                        break;
+                    case INSTR_CALL:
+                        flags = &((CALL *)prev)->flags;
+                        break;
+                    case INSTR_CALLTO:
+                        flags = &((CALLTO *)prev)->flags;
+                        break;
+                    default:
+                        break;
+                }
+                if (flags != NULL) {
+                    assert(!(*flags & SEND_TAIL));
+                        // The instruction should not already be a tail call, if
+                        // there is a RET after it.
+                    *flags |= SEND_TAIL;
+                    return BLIMP_OK;
+                }
+            }
+
             return Optimizer_Emit(opt, ip, result);
         }
 

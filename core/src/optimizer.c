@@ -241,7 +241,8 @@ static Status Emit(
     Blimp *blimp = Optimizer_Blimp(opt);
 
     TRY(SymbolicObject_New(opt, result));
-    (*result)->instr_offset = Bytecode_Offset(opt->code);
+    opt->last_offset = Bytecode_Offset(opt->code);
+    (*result)->instr_offset = opt->last_offset;
 
     if (move) {
         if (Bytecode_MoveToEnd(opt->code, instr) != BLIMP_OK) {
