@@ -1,0 +1,351 @@
+################################################################################
+# parse tree: an abstract interface for the parse tree protocol.
+#
+# This library provides syntax for creating and using parse trees which is
+# implemented in terms of the low-level parse tree protocol built into the
+# language. Code which uses this syntax for macro definitions can be both more
+# readable than code which does not and agnostic to the details of the protocol.
+# This is useful for tests of the protcol while the protocol is in development
+# and subject to frequent changes.
+
+{
+    ############################################################################
+    # gramamr symbols: the items of a parse tree
+    #
+
+    # A terminal symbol
+    \> {^`\`sym\``; grammar_symbol} {^toks
+        {
+            n_ref{^ ^};
+            n n_ref;
+            n_ref 0;
+
+            t{^ ^};
+            ^toks {^tok
+                {
+                    0{^{{
+                        t {(^tok)};
+                        n_ref 1
+                    }}};
+
+                    n[] []
+                }[]
+            };
+
+            {^ `(`{^(t[]);7}`)`; 7 }
+        }[]
+    };
+
+
+    # A non-terminal symbol
+    \> {^ `<` {1} `>`; grammar_symbol} {^toks
+        {
+            n_ref{^ ^};
+            n n_ref;
+            n_ref 0;
+
+            nt{^ ^};
+            ^toks {^tok
+                {
+                    0{^{{
+                        n_ref 1
+                    }}};
+                    1{^{{
+                        nt {(^tok)};
+                        n_ref 2
+                    }}};
+                    2{^{{
+                        n_ref 3
+                    }}};
+
+                    n[] []
+                }[]
+            };
+
+            {^ `{` `(`(nt[])`)` `}`; 7 }
+        }[]
+    };
+
+    # A nested parse tree
+    \> {^ `{` {1} `}`; grammar_symbol} {^toks
+        {
+            n_ref{^ ^};
+            n n_ref;
+            n_ref 0;
+
+            sub_tree{^ ^};
+            ^toks {^tok
+                {
+                    0{^{{
+                        n_ref 1
+                    }}};
+                    1{^{{
+                        sub_tree {(^tok)};
+                        n_ref 2
+                    }}};
+                    2{^{{
+                        n_ref 3
+                    }}};
+
+                    n[] []
+                }[]
+            };
+
+            {^`(`(sub_tree[])`)`; 7 }
+        }[]
+    };
+
+    # A nested expression which evaluates to a terminal
+    \> {^ `(` {1} `)`; grammar_symbol} {^toks
+        {
+            n_ref{^ ^};
+            n n_ref;
+            n_ref 0;
+
+            expr{^ ^};
+            ^toks {^tok
+                {
+                    0{^{{
+                        n_ref 1
+                    }}};
+                    1{^{{
+                        expr {(^tok)};
+                        n_ref 2
+                    }}};
+                    2{^{{
+                        n_ref 3
+                    }}};
+
+                    n[] []
+                }[]
+            };
+
+            {^`(`(expr[])`)`; 7 }
+        }[]
+    };
+
+    # A special terminal which is a `;` symbol. This is needed because reparsing
+    # causes `;` symbols in parse trees to be interpreted as actual semicolons
+    # in the macros that use them. This is why reparsing is being removed, and
+    # in the future we shouldn't need awful things like this anymore.
+    \> {^`SEMI`; grammar_symbol} {^toks
+        {^ {^ `;`; 7}; 7}
+    };
+
+    # Similar to SEMI, an alias for a symbol terminal to prevent interpretation
+    # of the contents of the symbol during reparsing.
+    \> {^`SYM`; grammar_symbol} {^toks
+        {^ {^ `\`sym\``; 7}; 7}
+    };
+
+    # A terminal grammar_symbol which is a symbol that otherwise has special
+    # meaning in context, if not escaped with \.
+    \> {^`\\` `\`sym\``; grammar_symbol} {^toks
+        {
+            n_ref{^ ^};
+            n n_ref;
+            n_ref 0;
+
+            sym{^ ^};
+            ^toks {^tok
+                {
+                    0{^{{
+                        n_ref 1
+                    }}};
+                    1{^{{
+                        sym {(^tok)};
+                        n_ref 2
+                    }}};
+
+                    n[] []
+                }[]
+            };
+
+           {^ `{` `grammar_symbol` `->` `{` {^ (sym[]); grammar_symbol} `}``}`; grammar_symbol }
+        }[]
+    };
+
+    # A non-terminal which only matches symbols, since writing the symbol
+    # terminal symbol `\`\`` in a parse tree is complicated by the fact that it
+    # will be un-``-quoted by reparsing during the expansion of the parse tree
+    # macros.
+    #
+    # Again, this is ugly complexity that is only needed due to reparsing.
+    \> {^`\`sym\``; symbol} {^toks
+        {
+            sym{^ ^};
+            ^toks {^tok
+                sym{(^tok)}
+            };
+            {^{^(sym[]); 7}; 6}
+        }[]
+    };
+
+    \> {^{grammar_symbol}; grammar_symbols} {^toks
+        {
+            n_ref{^ ^};
+            n n_ref;
+            n_ref 0;
+
+            head{^ ^};
+            ^toks {^tok
+                {
+                    0{^{{
+                        head {{(^tok) ^; 7}};
+                        n_ref 1
+                    }}};
+
+                    n[] []
+                }[]
+            };
+
+            {^ `(``^` (head[])`)`; 7 }
+        }[]
+    };
+
+    \> {^{grammar_symbols} {grammar_symbol}; grammar_symbols} {^toks
+        {
+            n_ref{^ ^};
+            n n_ref;
+            n_ref 0;
+
+            head{^ ^};
+            tail{^ ^};
+            ^toks {^tok
+                {
+                    0{^{{
+                        head {{(^tok) ^; 7}};
+                        n_ref 1
+                    }}};
+                    1{^{{
+                        tail {{(^tok) ^; 7}};
+                        n_ref 2
+                    }}};
+
+                    n[] []
+                }[]
+            };
+
+            {^ `(`(head[]) (tail[])`)`; 7 }
+        }[]
+    };
+
+    ############################################################################
+    # parse trees
+    #
+
+    \> {^ {7} `->` `{` {grammar_symbols} `}`; 7} {^toks
+        {
+            n_ref{^ ^};
+            n n_ref;
+            n_ref 0;
+
+            nt{^ ^};
+            syms{^ ^};
+            ^toks {^tok
+                {
+                    0{^{{
+                        nt {(^tok)};
+                        n_ref 1
+                    }}};
+                    1{^{{
+                        n_ref 2
+                    }}};
+                    2{^{{
+                        n_ref 3
+                    }}};
+                    3{^{{
+                        syms {{(^tok) ^; 7}};
+                        n_ref 4
+                    }}};
+                    4{^{{
+                        n_ref 5
+                    }}};
+
+                    n[] []
+                }[]
+            };
+
+            {^ `{` (syms[]) `;` (nt[]) `}`; 7 }
+        }[]
+    };
+
+    # A parse tree with an altered non-terminal. `n => T` has non-terminal `n`
+    # and the same children as the parse tree `T`.
+    \> {^{7} `=>` {7}; 7} {^toks
+        {
+            n_ref{^ ^};
+            n n_ref;
+            n_ref 0;
+
+            nt{^ ^};
+            tree{^ ^};
+            ^toks {^tok
+                {
+                    0{^{{
+                        nt {(^tok)};
+                        n_ref 1
+                    }}};
+                    1{^{{
+                        n_ref 2
+                    }}};
+                    2{^{{
+                        tree {(^tok)};
+                        n_ref 3
+                    }}};
+
+                    n[] []
+                }[]
+            };
+
+            {^ `{` `(`(tree[])`)` `^` `;` (nt[]) `}`; 7 }
+        }[]
+    };
+
+    # Iterate over a parse tree.
+    \> {^`for` `^tok` `in` {6} `{`{1}`}`; 3} {^toks
+         {
+            n_ref{^ ^};
+            n n_ref;
+            n_ref 0;
+
+            msg_name{^ ^};
+            tree{^ ^};
+            body{^ ^};
+            ^toks {^tok
+                {
+                    0{^{{
+                        n_ref 1
+                    }}};
+                    1{^{{
+                        msg_name{(^tok)};
+                        n_ref 2
+                    }}};
+                    2{^{{
+                        n_ref 3
+                    }}};
+                    3{^{{
+                        tree{(^tok)};
+                        n_ref 4
+                    }}};
+                    4{^{{
+                        n_ref 5
+                    }}};
+                    5{^{{
+                        body{(^tok)};
+                        n_ref 6
+                    }}};
+                    7{^{{
+                        n_ref 7
+                    }}};
+
+                    n[] []
+                }[]
+            };
+
+            {^ (tree[]) `{` (msg_name[]) (body[]) `}`; 1 }
+        }[]
+    };
+
+    .
+}

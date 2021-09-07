@@ -3526,12 +3526,13 @@ static Status ParseStream(
                         BLIMP_UNEXPECTED_TOKEN,
                         "unexpected token `%s'", tree.token->name);
                 } else {
-                    // Otherwise, include the precedence of the unexpected
+                    // Otherwise, include the name of the unexpected
                     // non-terminal.
+                    const char *name = *(const char **)Vector_Index(
+                        &grammar->non_terminal_strings, tree.symbol.non_terminal);
                     ErrorFrom(blimp, tree.range,
                         BLIMP_UNEXPECTED_TOKEN,
-                        "unexpected expression with precedence %zu",
-                        tree.symbol.non_terminal);
+                        "unexpected expression with non-terminal %s", name);
                 }
                 goto error;
             }
