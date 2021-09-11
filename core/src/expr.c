@@ -315,9 +315,12 @@ void PrintClosure(FILE *f, const Expr *expr, DeBruijnMap *scopes)
                 fputs(expr->symbol->name, f);
                 break;
             case EXPR_BLOCK:
-                fputs("{^", f);
-                fputs(expr->block.msg_name->name, f);
-                fputc(' ', f);
+                fputc('{', f);
+                if (Expr_MessageCaptured((Expr *)expr) != NO) {
+                    fputs("{^", f);
+                    fputs(expr->block.msg_name->name, f);
+                    fputc(' ', f);
+                }
 
                 DBMap_Push(scopes, (void *)expr->block.msg_name);
                 PrintClosure(f, expr->block.code, scopes);
@@ -340,12 +343,15 @@ void PrintClosure(FILE *f, const Expr *expr, DeBruijnMap *scopes)
                 fputc(')', f);
                 break;
             case EXPR_MSG: {
-                const Symbol *msg_name = DBMap_Resolve(scopes, expr->msg.index);
                 fputc('^', f);
-                if (msg_name) {
-                    fputs(msg_name->name, f);
-                } else {
-                    fputc('?', f);
+                if (expr->msg.index != 0) {
+                    const Symbol *msg_name = DBMap_Resolve(
+                        scopes, expr->msg.index);
+                    if (msg_name) {
+                        fputs(msg_name->name, f);
+                    } else {
+                        fputc('?', f);
+                    }
                 }
                 break;
             }

@@ -166,6 +166,9 @@ static Status CompileStmt(
             if (Block_UsesScope(stmt) == NO) {
                 flags |= BLOCK_LAMBDA;
             }
+            if (Expr_MessageCaptured(stmt) != NO) {
+                flags |= BLOCK_MESSAGE_CAPTURED;
+            }
             if (Expr_UsesMessage(stmt) != NO) {
                 flags |= BLOCK_USES_MESSAGE;
             }

@@ -310,7 +310,12 @@ void BlimpObject_Print(FILE *f, const Object *obj)
                 }
             }
 
-            fprintf(f, "{^%s ", ((BlockObject *)obj)->msg_name->name);
+            BlockObject *block = (BlockObject *)obj;
+            if (!(block->flags & BLOCK_MESSAGE_CAPTURED)) {
+                fprintf(f, "{");
+            } else {
+                fprintf(f, "{^%s ", ((BlockObject *)obj)->msg_name->name);
+            }
             PrintClosure(
                 f, Bytecode_Expr(((BlockObject *)obj)->code), &scopes);
             fprintf(f, "}");

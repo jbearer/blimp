@@ -423,6 +423,7 @@ typedef enum BlockFlags {
     BLOCK_USES_MESSAGE = 0x4,
     BLOCK_PURE         = 0x8,
     BLOCK_NOT_AFFINE   = 0x10,
+    BLOCK_MESSAGE_CAPTURED = 0x20,
 } BlockFlags;
 
 typedef struct {

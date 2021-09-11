@@ -12,9 +12,10 @@ static Status NewAnalysis(Blimp *blimp, Analysis **analysis)
     (*analysis)->uses_scope = MAYBE;
 
     (*analysis)->captures_parents_message = NO;
-        // This property can be decided statically, so its value should never be
-        // MAYBE. We initialize it to NO, and change it to YES if we ever see
-        // the message get captured.
+    (*analysis)->message_captured = NO;
+        // These properties can be decided statically, so its value should never
+        // be MAYBE. We initialize them to NO, and change them to YES if we ever
+        // see the message get captured.
     (*analysis)->uses_message = NO;
         // We initialize `uses_message` to NO, since the message is definitely
         // not used if we don't find a static reference to it in the code. If we
@@ -145,6 +146,7 @@ static Status AnalyzeStmt(Blimp *blimp, Expr *expr, DeBruijnMap *scopes)
                     // We cannot speak to affine-ness, since it is always
                     // possible for this child block to be evaluated more than
                     // once.
+                owner->message_captured = YES;
             }
 
             if (0 < expr->msg.index && expr->msg.index <= DBMap_Size(scopes)) {
@@ -318,6 +320,15 @@ Tristate Expr_CapturesParentsMessage(Expr *expr)
         return MAYBE;
     } else {
         return expr->analysis->captures_parents_message;
+    }
+}
+
+Tristate Expr_MessageCaptured(Expr *expr)
+{
+    if (expr->analysis == NULL) {
+        return MAYBE;
+    } else {
+        return expr->analysis->message_captured;
     }
 }
 
