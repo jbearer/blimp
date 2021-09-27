@@ -930,33 +930,55 @@ typedef struct {
 } BlimpGrammarSymbol;
 
 /**
+ * \brief A section of parsed input.
+ *
  * A BlimpParseTree structure represents a section of parsed input in a
  * structured form which corresponds to the hierarchy of grammar productions
  * used to parse the input.
- *
- * A BlimpParseTree has a BlimpGrammarSymbol `symbol`, which is the symbol that
- * matched the entirety of the input. This can be a terminal, in which case the
- * entirety of the input must have been a single token, and that token is stored
- * in the `token` field. Or `symbol` can be a non-terminal, in which case the
- * input was first divided into one or more smaller parse trees, whose own
- * symbols in sequence matched one of the productions for `symbol`. In this
- * case, the smaller parse trees are contained in the array `sub_trees`.
  */
 typedef struct BlimpParseTree {
-    BlimpGrammarSymbol symbol;
-    union {
-        /// Valid if `symbol` is a terminal.`
-        const BlimpSymbol *token;
-
-        /// Valid if `symbol` is a non-terminal.
-        struct {
-            struct BlimpParseTree *sub_trees;
-                ///< malloc()-allocated array of sub-trees.
-            size_t num_sub_trees;
-        };
-    };
+    BlimpGrammarSymbol grammar_symbol;
+        ///< The symbol the parser used to match the input.
+    const BlimpSymbol *symbol;
+        ///< `bl:mp`-facing, BlimpSymbol representation of `grammar_symbol`.
+    struct BlimpParseTree *sub_trees;
+        ///< malloc()-allocated array of sub-trees.
+    size_t num_sub_trees;
+        ///< \brief Length of `sub_trees`.
+        ///
+        /// For terminals, `num_sub_trees` is 0. For non-terminals, it is
+        /// non-zero.
     BlimpSourceRange range;
+        ///< Range in a source file corresponding to the parsed input.
 } BlimpParseTree;
+
+/**
+ * Construct a new parse tree from a symbol and a list of sub-trees.
+ *
+ * \param blimp
+ * \param symbol
+ *      The BlimpSymbol representing the grammar symbol of this parse tree.
+ *      `symbol` will be converted to either a non-terminal or terminal
+ *      BlimpGrammarSymbol, depending on whether the newly constructed parse
+ *      tree has any sub-trees.
+ * \param children
+ *      The sub-trees of the new parse tree. `children` must be an array of size
+ *      `num_children`, and it must be allocated on the heap using malloc().
+ *      After BlimpParseTree_Init() returns succesfully, the new parse tree
+ *      takes ownership of `children`, and `children` should no longer be used
+ *      outside the context of that parse tree.
+ * \param range
+ *      Optional source range for the new tree.
+ * \param[out] tree
+ *      The new parse tree.
+ */
+BlimpStatus BlimpParseTree_Init(
+    Blimp *blimp,
+    const BlimpSymbol *symbol,
+    BlimpParseTree *children,
+    size_t num_children,
+    const BlimpSourceRange *range,
+    BlimpParseTree *tree);
 
 /**
  * \brief Convert a BlimpParseTree to a BlimpExpr.

@@ -10,11 +10,11 @@
 #   K -> {term} {K}
 #
 # Actually this represents the + operator rather than the Kleene star *, but it
-# is equivalent to KK*, which is close enough.
+# is equivalent to (term)(term)*, which is close enough.
 #
 # Productions which are intended to be used with `__kleene_for` must return a
 # parse tree of a specific form: an outer parse tree with a single child, which
-# in turn contains once child for each term in the sequence. With such a parse
+# in turn contains one child for each term in the sequence. With such a parse
 # tree, the recursive structure of these sequences has been linearized into a
 # single, shallow parse tree with many children, rather than a deep parse tree
 # with only one or two children at each level. This allows for easier iteration.
@@ -32,7 +32,7 @@
 #
 # This macro takes such a parse tree object and a block, and applies the block
 # to each term in the inner parse tree.
-\> {^`__kleene_for` {6} {7}; 3} {^toks
+\> {^{`__kleene_for`} {^{``}; 6} {^{``}; 7}; 3} {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -58,9 +58,9 @@
             }[]
         };
 
-        {^ (terms[]) `{` `^term`
-            `^term` (do[])
-          `}`;
+        {^ (terms[]) {`{`} {`^term`}
+            {`^term`} (do[])
+          {`}`};
           3
         }
     }[]
@@ -68,11 +68,13 @@
 
 # A non-terminal which just reduces symbols. This is just because it's slightly
 # nicer to write {symbol} than `\`sym\``.
-\> {^`\`sym\``; symbol} {^toks
+\> {^{`\`sym\``}; symbol} {^toks
     {
         sym{^ ^};
-        ^toks{^tok sym{(^tok)}};
-        {^(sym[]); 7}
+        ^toks{^sym
+            sym{(^sym[])}
+        };
+        {^{^{sym[]}; 7}; 6}
     }[]
 };
 
@@ -86,16 +88,20 @@
 #
 
 # Terminal symbols.
-\> {^{symbol}; grammar_symbol}  {^toks
+\> {^{^{``}; symbol}; grammar_symbol}  {^toks
     {
         sym{^ ^};
-        ^toks{^tok sym{(^tok)}};
-        sym[]
+        ^toks{^sub_tree
+            ^sub_tree {^sym
+                sym{(^sym)}
+            }
+        };
+        {^ {`{`} (sym[]) {`}`}; 6}
     }[]
 };
 
 # Non-terminal symbols.
-\> {^ < {symbol} >; grammar_symbol} {^toks
+\> {^ {<} {^{``}; symbol} {>}; grammar_symbol} {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -105,12 +111,18 @@
         ^toks {^tok
             {
                 _0{^{{
-                    # '
+                    # <
                     n_ref _1
                 }}};
                 _1{^{{
-                    nt {(^tok)};
+                    (^tok) {^sym
+                        nt{(^sym)}
+                    };
                     n_ref _2
+                }}};
+                _2{^{{
+                    # >
+                    n_ref _3
                 }}};
 
                 n[] []
@@ -118,9 +130,10 @@
         };
 
         # Return a parse tree object with the given non-terminal; that is, a
-        # block which simply returns the non-terminal symbol. This is how we
-        # represent non-terminals in low-level, built-in macro definitions.
-        {^ `{`; (nt[]) ^; ^ `}`; 6}
+        # block with a single child and which returns the non-terminal. This is
+        # how we represent non-terminals in low-level, built-in macro
+        # definitions.
+        {^ {`{`} {`^`} {`{`} {``} {`}`} {`;`} (nt[]) {`}`}; 6}
     }[]
 };
 
@@ -140,7 +153,7 @@
 #
 
 # No-name patterns.
-\> {^{grammar_symbol}; pattern} {^toks
+\> {^{^{``}; grammar_symbol}; pattern} {^toks
     {
         ret{^ ^};
 
@@ -150,7 +163,7 @@
         # of that sub-tree.
         ^toks {^sym
             ret{
-                {^{^ _; ^sym ^; 7}; 6}
+                {^{^ {_}; ^sym ^; 7}; 6}
             }
         };
         ret[]
@@ -158,7 +171,7 @@
 };
 
 # Named patterns.
-\> {^{symbol} `@` {grammar_symbol}; pattern} {^toks
+\> {^{^{``}; symbol} {`@`} {^{``}; grammar_symbol}; pattern} {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -189,12 +202,12 @@
 };
 
 # A singleton Kleene sequence of patterns.
-\> {^{pattern}; patterns} {^toks
+\> {^{^{``}; pattern}; patterns} {^toks
     {^ {(^toks) ^; 7}; 6}
 };
 
 # A non-trivial Kleene sequence of patterns.
-\> {^{pattern} {patterns}; patterns} {^toks
+\> {^{^{``}; pattern} {^{``}; patterns}; patterns} {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -230,7 +243,7 @@
 # Macro definitions
 #
 
-\> {^ `syntax` `\`sym\`` `->` {patterns} `{` {1} `}`; 3} {^toks
+\> {^ {`syntax`} {`\`sym\``} {`->`} {^{``}; patterns} {`{`} {^{``}; 1} {`}`}; 3} {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -311,36 +324,36 @@
         # generates code for the following sub-tree.
         curr_tok_ref{^ ^};
         curr_tok curr_tok_ref;
-        curr_tok_ref {{^`^toks`; 7}};
+        curr_tok_ref {{^{`^toks`}; 7}};
             # `curr_tok` should always represent the sequence of tokens not yet
             # visited. Initialize it to the whole sequence, and each time we
             # advance by one we will add an application of `__pat_tail` to
             # represent the next sub-tree.
         next_tok{^} {
             {^curr
-                curr_tok_ref {{^ __pat_tail ^curr; 7}};
-                {^ `__pat_head` ^curr; 1}
+                curr_tok_ref {{^ {`__pat_tail`} ^curr; 7}};
+                {^ {`__pat_head`} ^curr; 1}
             } (curr_tok[])
         };
 
         {^out
-            ^`{` `\\>` `{`;
+            ^{`{`} {`\\>`} {`{`};
                 visit_patterns (patterns[]) {^sym{^binder
-                    ^out `^`; ^out ^sym; ^out `;`
+                    ^out {`^`} ^sym {`;`}
                 }};
                 ^(nt[]);
-            ^`}`;
+            ^{`}`};
 
-            ^`{` `^toks`;
-                ^ `{`;
+            ^{`{`} {`^toks`};
+                ^ {`{`};
                     # This block will receive the output of the user's handler
                     # (which is a list of parse trees) and feed each output tree
                     # to the output stream.
-                    ^ `{` `^list`
-                        `{`
-                            `(` `^list` `)` `each` `^` `;` `1`
-                        `}`
-                    `}` `(`
+                    ^ {`{`} {`^list`}
+                        {`{`}
+                            {`(`} {`^list`} {`)`} {`each`} {`^`} {`;`} {`1`}
+                        {`}`}
+                    {`}`} {`(`}
                         # Depending on whether the standard library has already
                         # been imported, we need to call the user's handler
                         # slightly differently. If std has already been imported
@@ -355,7 +368,7 @@
                         # handler almost certainly depends on standard library
                         # features. We will use the state of the symbol
                         # `__std_imported` to determine what to do.
-                        `__std_imported` `{`
+                        {`__std_imported`} {`{`}
                             # If the standard library has not been imported and
                             # evaluated, then __std_imported will be undefined,
                             # and this block will execute. The argument (which
@@ -366,8 +379,8 @@
                             # handler. This block will be invoked immediately
                             # when it receives (and ignores) the block
                             # representing the second case of this conditional.
-                            `{`
-                                `(` `import` `std_idempotent` `)` `;`
+                            {`{`}
+                                {`(`} {`import`} {`std_idempotent`} {`)`} {`;`}
                                     # We import std_idempotent, not std, because
                                     # it is only safe to import the parts of the
                                     # library which are idempotent at parse time
@@ -382,32 +395,32 @@
                                     # we are in now), not at the global scope,
                                     # where it would potentially clash with
                                     # future imports of `std`.
-                                `__call` `{`;
+                                {`__call`} {`{`};
                                     visit_patterns (patterns[]) {^sym{^binder
-                                        ^out ^binder `:=` `(` (next_tok[]) `)` `;`
+                                        ^out ^binder {`:=`} {`(`} (next_tok[]) {`)`} {`;`}
                                     }};
-                                    curr_tok_ref {{^`^toks`; 7}};
+                                    curr_tok_ref {{^{`^toks`}; 7}};
                                         # Reset `curr_tok` after traversing the
                                         # list of patterns.
-                                    ^`(`(handler[])`)`
-                                `}`
-                            `}`
-                        `}` `{`
+                                    ^{`(`}(handler[]){`)`}
+                                {`}`}
+                            {`}`}
+                        {`}`} {`{`}
                             # If the standard library has already been imported
                             # and evaluated, then __std_imported will be defined
                             # to ignore its first argument (the block above) and
                             # execute its second, where we simply invoke the
                             # handler.
-                            `__call` `{`;
+                            {`__call`} {`{`};
                                 visit_patterns (patterns[]) {^sym{^binder
-                                    ^out ^binder `:=` `(` (next_tok[]) `)` `;`
+                                    ^out ^binder {`:=`} {`(`} (next_tok[]) {`)`} {`;`}
                                 }};
-                                ^`(`(handler[])`)`
-                            `}`
-                        `}`
-                    `)`;
-                ^`}` `[]`;
-            ^`}` `}`;
+                                ^{`(`}(handler[]){`)`}
+                            {`}`}
+                        {`}`}
+                    {`)`};
+                ^{`}`} {`[]`};
+            ^{`}`} {`}`};
 
             1
         }
@@ -424,11 +437,49 @@
 # expects the handler to return a list of terms.
 #
 
-\> {^{7}; terms} {^toks
+# Literal terms (which we convert to terminal parse trees).
+\> {^{^{``}; symbol}; term}  {^toks
+    {
+        sym{^ ^};
+        ^toks{^sub_tree
+            ^sub_tree {^sym
+                sym{(^sym)}
+            }
+        };
+        {^ {`{`} (sym[]) {`}`}; 6}
+    }[]
+};
+
+# Interpolated expressions as terms representing sub-trees.
+\> {^{`$`} {^{``}; 7}; term} {^toks
+    {
+        n_ref{^ ^};
+        n n_ref;
+        n_ref _0;
+
+        term{^ ^};
+        ^toks {^tok
+            {
+                _0{^{{
+                    n_ref _1
+                }}};
+                _1{^{{
+                    term{(^tok)};
+                    n_ref _2
+                }}};
+                n[] []
+            }[]
+        };
+
+        term[]
+    }[]
+};
+
+\> {^{^{``}; term}; terms} {^toks
     {^ {(^toks) ^; 7}; 6}
 };
 
-\> {^{7} {terms}; terms} {^toks
+\> {^{^{``}; term} {^{``}; terms}; terms} {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -460,7 +511,7 @@
     }[]
 };
 
-\> {^`"` {terms} `"`; 3} {^toks
+\> {^{`"`} {^{``}; terms} {`"`}; 3} {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -505,14 +556,14 @@
         }};
 
         {^out
-            ^`[`;
+            ^{`[`};
                 visit_terms (terms[]) {^term{^sep
                     ^sep {
-                        (^out `,`)
+                        (^out {`,`})
                     };
                     ^out {(^term) ^; 7}
                 }};
-            ^`]`;
+            ^{`]`};
             3
         }
     }[]

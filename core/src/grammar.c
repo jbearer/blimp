@@ -6,12 +6,6 @@
 // Lexer API
 //
 
-static Status GetToken(Blimp *blimp, const char *string, Token *tok)
-{
-    TRY(TokenTrie_GetToken(&blimp->tokens, string, tok));
-    return BLIMP_OK;
-}
-
 static Status CreateToken(Blimp *blimp, const char *string, Token *tok)
 {
     TRY(TokenTrie_InsertToken(&blimp->tokens, string, tok));
@@ -44,16 +38,11 @@ static Status GetNonTerminal(
     return BLIMP_OK;
 }
 
-typedef struct {
-    const Symbol *non_terminal_symbol;
-    ParseTree tree;
-} ParseTreeArg;
-
-static void ParseTreeFinalizer(void *p)
+static void ParseTreeFinalizer(void *arg)
 {
-    ParseTreeArg *arg = (ParseTreeArg *)p;
-    ParseTree_Destroy(&arg->tree);
-    free(arg);
+    ParseTree *tree = (ParseTree *)arg;
+    ParseTree_Destroy(tree);
+    free(tree);
 }
 
 // Method for a parse tree extension object. This object represents a parse tree
@@ -70,69 +59,56 @@ static Status ParseTreeMethod(
 {
     (void)context;
 
-    ParseTreeArg *arg;
-    CHECK(BlimpObject_ParseExtension(receiver, NULL, (void **)&arg));
+    ParseTree *tree;
+    CHECK(BlimpObject_ParseExtension(receiver, NULL, (void **)&tree));
 
-    size_t num_trees = arg->tree.num_sub_trees;
-    ParseTree *trees = arg->tree.sub_trees;
+    size_t num_trees = tree->num_sub_trees;
+    ParseTree *sub_trees = tree->sub_trees;
 
     // Send each sub-tree to the `message`.
-    for (ParseTree *tree = trees; tree < trees + num_trees; ++tree) {
-        // Get an object representing the sub-tree `tree`. This will be either a
-        // symbol or a smaller parse tree extension object, depending on whether
-        // `tree` is a terminal or a non-terminal with its own parse tree.
-        Object *sub_tree;
-        if (tree->symbol.is_terminal) {
-            sub_tree = (Object *)tree->token;
-        } else {
-            // Allocate an argument for ParseTreeMethod() for the sub-tree.
-            ParseTreeArg *sub_arg;
-            TRY(Malloc(blimp, sizeof(ParseTreeArg), &sub_arg));
-            if (Grammar_GetNonTerminalSymbol(
-                    &blimp->grammar,
-                    tree->symbol.non_terminal,
-                    &sub_arg->non_terminal_symbol
-                ) != BLIMP_OK)
-            {
-                free(sub_arg);
-                return Reraise(blimp);
-            }
-            // We give the sub-tree object a copy of the sub-trees of this parse
-            // tree, since, while unlikely, the visitor to which we are going to
-            // send the sub-tree may save a reference to it which lives longer
-            // than the ParseTree `tree`.
-            if (ParseTree_Copy(blimp, tree, &sub_arg->tree) != BLIMP_OK) {
-                free(sub_arg);
-                return Reraise(blimp);
-            }
+    for (ParseTree *sub_tree = sub_trees;
+         sub_tree < sub_trees + num_trees;
+         ++sub_tree)
+    {
+        // Get an object representing the sub-tree `sub_tree`. We give the
+        // sub-tree object a copy of the `sub_tree` since, while unlikely, the
+        // visitor to which we are going to send the sub-tree may save a
+        // reference to it which lives longer than the ParseTree `tree`.
+        ParseTree *sub_arg;
+        TRY(Malloc(blimp, sizeof(ParseTree), &sub_arg));
+        if (ParseTree_Copy(blimp, sub_tree, sub_arg) != BLIMP_OK) {
+            free(sub_arg);
+            return Reraise(blimp);
+        }
 
-            // Create a parse tree extension object representing the sub-tree.
-            if (BlimpObject_NewExtension(
-                    blimp,
-                    (Object *)blimp->global,
-                    sub_arg,
-                    ParseTreeMethod,
-                    ParseTreeFinalizer,
-                    &sub_tree
-                ) != BLIMP_OK)
-            {
-                ParseTree_Destroy(&sub_arg->tree);
-                free(sub_arg);
-                return Reraise(blimp);
-            }
+        // Create a parse tree extension object representing the sub-tree.
+        Object *sub_tree_obj;
+        if (BlimpObject_NewExtension(
+                blimp,
+                (Object *)blimp->global,
+                sub_arg,
+                ParseTreeMethod,
+                ParseTreeFinalizer,
+                &sub_tree_obj
+            ) != BLIMP_OK)
+        {
+            ParseTree_Destroy(sub_arg);
+            free(sub_arg);
+            return Reraise(blimp);
         }
 
         // Send the sub-tree to the `message`.
-        if (Blimp_Send(blimp, (Object *)blimp->global, message, sub_tree, NULL)
-                != BLIMP_OK)
+        if (Blimp_Send(
+                blimp, (Object *)blimp->global, message, sub_tree_obj, NULL)
+            != BLIMP_OK)
         {
-            BlimpObject_Release(sub_tree);
+            BlimpObject_Release(sub_tree_obj);
             return Reraise(blimp);
         }
-        BlimpObject_Release(sub_tree);
+        BlimpObject_Release(sub_tree_obj);
     }
 
-    return BlimpObject_NewSymbol(blimp, arg->non_terminal_symbol, result);
+    return BlimpObject_NewSymbol(blimp, tree->symbol, result);
 }
 
 static Status ObjectToParseTree(Blimp *blimp, Object *obj, ParseTree *tree);
@@ -169,9 +145,8 @@ static Status ParseTreeVisitor(
     TRY(Vector_PushBack(trees, &tree));
 
     *result = BlimpObject_Borrow(receiver);
-        // The return value here will most likely be ignored by the parse tree
-        // object which invoked this visitor, but we need to return something,
-        // so arbitrarily return the receiver.
+        // Return the receiver so the user can chain message sends to easily
+        // send a sequence of sub-trees to the receiver.
     return BLIMP_OK;
 }
 
@@ -180,7 +155,7 @@ static Status ParseTreeVisitor(
 // represents a valid parse tree.
 static Status ObjectToParseTree(Blimp *blimp, Object *obj, ParseTree *tree)
 {
-    ParseTreeArg *arg;
+    ParseTree *arg;
     BlimpMethod method;
     if (BlimpObject_ParseExtension(obj, &method, (void **)&arg) == BLIMP_OK &&
         method == ParseTreeMethod)
@@ -198,37 +173,15 @@ static Status ObjectToParseTree(Blimp *blimp, Object *obj, ParseTree *tree)
         //  2. Parse tree extensions conform to the parse tree protocol in the
         //     expected way, so that visiting them and rebuilding the parse tree
         //     should always yield the original parse tree.
-        tree->symbol.is_terminal = false;
-        if (Grammar_GetNonTerminal(
-                &blimp->grammar,
-                arg->non_terminal_symbol,
-                &tree->symbol.non_terminal) != BLIMP_OK)
-        {
-            goto error;
-        }
-        if (ParseTree_Copy(blimp, &arg->tree, tree) != BLIMP_OK) {
+        if (ParseTree_Copy(blimp, arg, tree) != BLIMP_OK) {
             goto error;
         }
         return BLIMP_OK;
     }
 
-    if (Object_Type(obj) == OBJ_SYMBOL) {
-        // Symbols represent terminals and vice versa.
-        Token tok;
-        if (GetToken(blimp, ((const Symbol *)obj)->name, &tok) != BLIMP_OK) {
-            goto error;
-        }
-
-        tree->symbol = (GrammarSymbol){.is_terminal=true, .terminal=tok.type};
-        tree->token = tok.symbol;
-        return BLIMP_OK;
-    }
-
-    // Any non-symbol object represents a non-trivial parse tree, whose
-    // sub-trees can be traversed by sending it a visitor. We will use a
-    // ParseTreeVisitor to collect ParseTrees for each of the sub-trees in the
-    // vector `trees`, and then we will parse that sequence of parse trees into
-    // one larger tree.
+    // Use a ParseTreeVisitor to collect ParseTrees for each of the sub-trees of
+    // this object in the vector `trees`. We will collect that sequence of parse
+    // trees into one larger tree.
     Vector/*<ParseTree>*/ *trees;
     TRY(Malloc(blimp, sizeof(Vector), &trees));
         // Allocate `trees` on the heap because the object we pass it to might
@@ -250,11 +203,11 @@ static Status ObjectToParseTree(Blimp *blimp, Object *obj, ParseTree *tree)
     }
 
     // Send the visitor to the object to collect its sub-trees, and get the
-    // non-terminal to parse, which is the return value of the parse tree
+    // grammar symbol of the object, which is the return value of the parse tree
     // object.
-    const Symbol *nt;
+    const Symbol *symbol;
     if (Blimp_SendAndParseSymbol(
-            blimp, (Object *)blimp->global, obj, visitor, &nt)
+            blimp, (Object *)blimp->global, obj, visitor, &symbol)
         != BLIMP_OK)
     {
         BlimpObject_Release(visitor);
@@ -262,46 +215,28 @@ static Status ObjectToParseTree(Blimp *blimp, Object *obj, ParseTree *tree)
     }
 
     // Collect the parsed sub-trees into a new parse tree.
-    tree->symbol.is_terminal = false;
-    if (Grammar_GetNonTerminal(&blimp->grammar, nt, &tree->symbol.non_terminal)
-            != BLIMP_OK)
-    {
-        BlimpObject_Release(visitor);
-        goto error;
-    }
-    Vector_MoveOut(trees, &tree->num_sub_trees, (void **)&tree->sub_trees);
-
+    ParseTree *sub_trees;
+    size_t num_sub_trees;
+    Vector_MoveOut(trees, &num_sub_trees, (void **)&sub_trees);
     BlimpObject_Release(visitor);
         // Release `visitor` _after_ moving the `trees` vector to
-        // `tree->sub_trees`, as the finalizer might destroy the `trees` vector.
-
-    return BLIMP_OK;
+        // `sub_trees`, as the finalizer might destroy the `trees` vector.
+    return ParseTree_Init(
+        blimp, symbol, sub_trees, num_sub_trees, NULL, tree);
 
 error:
     // Make sure `tree` is a valid parse tree even if we failed.
-    tree->symbol = (GrammarSymbol){.is_terminal=true, .terminal=TOK_INVALID};
-    TRY(Blimp_GetSymbol(blimp, "", &tree->token));
+    TRY(Blimp_GetSymbol(blimp, "", &symbol));
+    TRY(ParseTree_Init(blimp, symbol, NULL, 0, NULL, tree));
     return Reraise(blimp);
 }
 
 // Extract a ParseTree from an Object which conforms to the parse tree protocol.
 static Status ParseObject(Blimp *blimp, Object *obj, ParseTree *tree)
 {
-    if (Object_Type(obj) == OBJ_SYMBOL) {
-        // Symbols represent terminals.
-        Token tok;
-        TRY(GetToken(blimp, ((const Symbol *)obj)->name, &tok));
-
-        tree->symbol = (GrammarSymbol){.is_terminal=true, .terminal=tok.type};
-        tree->token = tok.symbol;
-        return BLIMP_OK;
-    }
-
-    // Any non-symbol object represents a non-trivial parse tree, whose
-    // sub-trees can be traversed by sending it a visitor. We will use a
-    // ParseTreeVisitor to collect ParseTrees for each of the sub-trees in the
-    // vector `trees`, and then we will parse that sequence of parse trees into
-    // one larger tree.
+    // Use a ParseTreeVisitor to collect ParseTrees for each of the sub-trees
+    // into the vector `trees`. We will then parse that sequence of parse trees
+    // into one larger tree.
     Vector/*<ParseTree>*/ *trees;
     TRY(Malloc(blimp, sizeof(Vector), &trees));
         // Allocate `trees` on the heap because the object we pass it to might
@@ -323,46 +258,54 @@ static Status ParseObject(Blimp *blimp, Object *obj, ParseTree *tree)
     }
 
     // Send the visitor to the object to collect its sub-trees, and get the
-    // non-terminal to parse, which is the return value of the parse tree
-    // object.
-    const Symbol *nt_symbol;
+    // grammar symbol of the parse tree, which is the return value of the parse
+    // tree object.
+    const Symbol *symbol;
     if (Blimp_SendAndParseSymbol(
-            blimp, (Object *)blimp->global, obj, visitor, &nt_symbol)
+            blimp, (Object *)blimp->global, obj, visitor, &symbol)
         != BLIMP_OK)
     {
         BlimpObject_Release(visitor);
         goto error;
     }
 
-    // Parse the sequence of sub-trees we collected into one larger tree.
-    NonTerminal nt;
-    if (Grammar_GetNonTerminal(&blimp->grammar, nt_symbol, &nt) != BLIMP_OK) {
+    if (Vector_Empty(trees)) {
+        // No sub-trees, this object represents a terminal. We do not need to
+        // reparse terminals, we can just construct them directly.
+        return ParseTree_Init(blimp, symbol, NULL, 0, NULL, tree);
+    } else {
+        // This object represents a non-terminal via a sequence of sub-trees
+        // which must be reparsed to create a single tree.
+        NonTerminal nt;
+        if (Grammar_GetNonTerminal(&blimp->grammar, symbol, &nt) != BLIMP_OK) {
+            BlimpObject_Release(visitor);
+            goto error;
+        }
+        if (Reparse(trees, &blimp->grammar, nt, NULL, tree) != BLIMP_OK) {
+            BlimpObject_Release(visitor);
+            goto error;
+        }
         BlimpObject_Release(visitor);
-        goto error;
-    }
-    if (Reparse(trees, &blimp->grammar, nt, NULL, tree) != BLIMP_OK) {
-        BlimpObject_Release(visitor);
-        goto error;
-    }
-    BlimpObject_Release(visitor);
-        // Release `visitor` _after_ the call to Reparse() above, as the
-        // finalizer might destroy the `trees` vector.
+            // Release `visitor` _after_ the call to Reparse() above, as the
+            // finalizer might destroy the `trees` vector.
 
-    assert(!tree->symbol.is_terminal);
-    assert(tree->symbol.non_terminal == nt);
+        assert(!tree->grammar_symbol.is_terminal);
+        assert(tree->grammar_symbol.non_terminal == nt);
 
-    return BLIMP_OK;
+        return BLIMP_OK;
+    }
 
 error:
     // Make sure `tree` is a valid parse tree even if we failed.
-    tree->symbol = (GrammarSymbol){.is_terminal=true, .terminal=TOK_INVALID};
-    TRY(Blimp_GetSymbol(blimp, "", &tree->token));
+    TRY(Blimp_GetSymbol(blimp, "", &symbol));
+    TRY(ParseTree_Init(blimp, symbol, NULL, 0, NULL, tree));
     return Reraise(blimp);
 }
 
 typedef struct {
     Object *handler;
     const Symbol *non_terminal_symbol;
+    SourceRange *macro_def_range;
 } MacroArg;
 
 // Handler called when a macro is reduced.
@@ -372,28 +315,31 @@ static Status MacroHandler(ParserContext *ctx, ParseTree *tree)
     Object *handler = arg->handler;
 
     // Create the argument for a parse tree extension object which we will use
-    // to convey the input sub-trees to the handler object.
-    ParseTreeArg *input_arg;
-    TRY(Malloc(ctx->blimp, sizeof(ParseTreeArg), &input_arg));
-    input_arg->non_terminal_symbol = arg->non_terminal_symbol;
-    // We give the parse tree object a copy of the input trees, since, while
-    // unlikely, the macro handler may save a reference to the parse tree which
-    // lives longer than the input sub-trees.
-    if (ParseTree_Copy(ctx->blimp, tree, &input_arg->tree) != BLIMP_OK) {
+    // to convey the input sub-trees to the handler object. We give the parse
+    // tree object a copy of the input trees, since, while unlikely, the macro
+    // handler may save a reference to the parse tree which lives longer than
+    // the input sub-trees.
+    ParseTree *input_arg;
+    TRY(Malloc(ctx->blimp, sizeof(ParseTree), &input_arg));
+    if (ParseTree_Copy(ctx->blimp, tree, input_arg) != BLIMP_OK) {
         free(input_arg);
         return Reraise(ctx->blimp);
     }
 
     // Create the parse tree extension object representing the input trees.
     Object *input_tree;
-    TRY(BlimpObject_NewExtension(
-        ctx->blimp,
-        (Object *)ctx->blimp->global,
-        input_arg,
-        ParseTreeMethod,
-        ParseTreeFinalizer,
-        &input_tree
-    ));
+    if (BlimpObject_NewExtension(
+            ctx->blimp,
+            (Object *)ctx->blimp->global,
+            input_arg,
+            ParseTreeMethod,
+            ParseTreeFinalizer,
+            &input_tree
+        ) != BLIMP_OK)
+    {
+        ParseTree_Destroy(input_arg);
+        free(input_arg);
+    }
 
     // Send the input tree to the macro handler, resulting in an Object
     // representing the output parse tree. This result object (`output_tree`)
@@ -436,7 +382,7 @@ static Status MacroHandler(ParserContext *ctx, ParseTree *tree)
     // that it can later be used where the macro non-terminal is expected when
     // it is reparsed as a sub-tree of another macro expansion. When we remove
     // reparsing, we should also fix this behavior.
-    if (tree->symbol.is_terminal) {
+    if (tree->grammar_symbol.is_terminal) {
         // Because of the hack described above, we are setting the symbol of the
         // parse tree to a specific non-terminal, and therefore the parse tree
         // must be a non-terminal. We cannot change a terminal parse tree to a
@@ -450,136 +396,64 @@ static Status MacroHandler(ParserContext *ctx, ParseTree *tree)
     TRY(Grammar_GetNonTerminal(
         &ctx->blimp->grammar,
         arg->non_terminal_symbol,
-        &tree->symbol.non_terminal));
+        &tree->grammar_symbol.non_terminal));
 
-    return BLIMP_OK;
-}
-
-static Status IgnorerMethod(
-    Blimp *blimp,
-    Object *context,
-    Object *receiver,
-    Object *message,
-    Object **result)
-{
-    (void)blimp;
-    (void)context;
-    (void)message;
-
-    *result = BlimpObject_Borrow(receiver);
-    return BLIMP_OK;
-}
-
-// Method for an extension object which visits a stream of symbols (of the kind
-// required on the left-hand side of a macro definition), converts them to
-// GrammarSymbols, and collects the results in a vector.
-static Status SymbolVisitor(
-    Blimp *blimp,
-    BlimpObject *context,
-    BlimpObject *receiver,
-    BlimpObject *message,
-    BlimpObject **result)
-{
-    (void)context;
-
-    Vector/*<GrammarSymbol>*/ *symbols;
-    TRY(BlimpObject_ParseExtension(receiver, NULL, (void **)&symbols));
-
-    if (Object_Type(message) == OBJ_SYMBOL) {
-        // If the grammar symbol is also a symbol object, it represents a
-        // terminal.
-        const Symbol *sym = (const Symbol *)message;
-
-        // Figure out what kind of token matches `sym`, creating a new keyword
-        // if necessary.
-        Token tok;
-        TRY(CreateToken(blimp, sym->name, &tok));
-
-        TRY(Vector_PushBack(symbols, &(GrammarSymbol) {
-            .is_terminal = true,
-            .terminal = tok.type,
-        }));
-    } else {
-        // Otherwise, we treat the object as a parse tree representing a non-
-        // terminal. We only care about the precedence of the parse tree (it
-        // will match any non-terminal with the same precedence) so we send it a
-        // message to get its return value, which is a symbol representing the
-        // non-terminal.
-
-        // Create an extension object to send to the parse tree. The parse tree
-        // will try to output sub-trees by sending them to the extension; we'll
-        // use an extension object that just ignores them, since we only care
-        // about the return value of the parse tree.
-        Object *ignorer;
-        TRY(BlimpObject_NewExtension(
-            blimp,
-            (Object *)blimp->global,
-            NULL,
-            IgnorerMethod,
-            NULL,
-            &ignorer
-        ));
-
-        // Send the ignorer to the parse tree and get the return value.
-        const Symbol *nt_sym;
-        if (Blimp_SendAndParseSymbol(
-                blimp, (Object *)blimp->global, message, ignorer, &nt_sym)
-            != BLIMP_OK)
-        {
-            BlimpObject_Release(ignorer);
-            return Reraise(blimp);
-        }
-        BlimpObject_Release(ignorer);
-
-        // Convert the symbol to the internal representation of a non-terminal.
-        NonTerminal nt;
-        TRY(Grammar_GetNonTerminal(&blimp->grammar, nt_sym, &nt));
-
-        TRY(Vector_PushBack(symbols, &(GrammarSymbol) {
-            .is_terminal = false,
-            .non_terminal = nt,
-        }));
-    }
-
-    *result = BlimpObject_Borrow(receiver);
     return BLIMP_OK;
 }
 
 Status DefineMacro(
-    Blimp *blimp, Object *production, Object *handler, const Symbol **nt_sym)
+    Blimp *blimp,
+    Object *production,
+    Object *handler,
+    const SourceRange *range,
+    const Symbol **nt_sym)
 {
-    // Use a symbol visitor to extract a list of GrammarSymbols from
-    // `production`.
-    Vector/*<GrammarSymbol>*/ symbols;
-    Vector_Init(blimp, &symbols, sizeof(GrammarSymbol), NULL);
-    Object *symbol_visitor;
-    if (BlimpObject_NewExtension(
-            blimp,
-            (Object *)blimp->global,
-            &symbols,
-            SymbolVisitor,
-            NULL,
-            &symbol_visitor
-        ) != BLIMP_OK)
-    {
-        Vector_Destroy(&symbols);
-        return Reraise(blimp);
+    // Convert the production into a ParseTree in order to extract a
+    // non-terminal symbol and a list of grammar symbols for the new production.
+    ParseTree tree;
+    TRY(ObjectToParseTree(blimp, production, &tree));
+    if (tree.grammar_symbol.is_terminal) {
+        // The production of a macro definition must be a non-terminal parse
+        // tree, because we cannot define new rules for how terminals are
+        // parsed.
+        //
+        // In the future, it may be useful to lift this restriction by creating
+        // an injection from terminals to generated non-terminals, so that we
+        // can define terminals dynamically. The capability of using a
+        // non-trivial parse tree as a terminal will be useful, for example, for
+        // handling object literals in macro definition productions, since
+        // object literals are terminals generated by a non-trivial parse trees
+        // of the form (! <expr>).
+        return Blimp_ErrorMsg(blimp, BLIMP_INVALID_PARSE_TREE,
+            "the production of a macro definition must be a non-temrinal");
     }
+    *nt_sym = tree.symbol;
 
-    // Send the visitor to the production parse tree and get the return value,
-    // which is the non-terminal of the production.
-    if (Blimp_SendAndParseSymbol(
-            blimp,
-            (Object *)blimp->global,
-            production,
-            symbol_visitor,
-            nt_sym)
-        != BLIMP_OK)
-    {
-        Vector_Destroy(&symbols);
-        return Reraise(blimp);
+    // Extract the list of grammar symbols for the new production.
+    Vector symbols;
+    Vector_Init(blimp, &symbols, sizeof(GrammarSymbol), NULL);
+    for (size_t i = 0; i < tree.num_sub_trees; ++i) {
+        ParseTree *sub_tree = &tree.sub_trees[i];
+        GrammarSymbol *symbol;
+        if (Vector_EmplaceBack(&symbols, (void **)&symbol) != BLIMP_OK) {
+            Vector_Destroy(&symbols);
+            return Reraise(blimp);
+        }
+        *symbol = sub_tree->grammar_symbol;
+        if (symbol->is_terminal) {
+            // If the gramamr symbol is a terminal, it may represent a new
+            // terminal which has not yet been added to the lexer. Add it now.
+            if (CreateTerminal(
+                    blimp,
+                    sub_tree->symbol->name,
+                    &symbol->terminal
+                ) != BLIMP_OK)
+            {
+                Vector_Destroy(&symbols);
+                return Reraise(blimp);
+            }
+        }
     }
-    BlimpObject_Release(symbol_visitor);
 
     // Collect information needed by MacroHandler().
     MacroArg *handler_arg;
@@ -589,6 +463,15 @@ Status DefineMacro(
     }
     handler_arg->handler = BlimpObject_Borrow(handler);
     handler_arg->non_terminal_symbol = *nt_sym;
+    if (range != NULL) {
+        if (Malloc(blimp, sizeof(SourceRange), &handler_arg->macro_def_range)
+                != BLIMP_OK)
+        {
+            Vector_Destroy(&symbols);
+            return Reraise(blimp);
+        }
+        *handler_arg->macro_def_range = *range;
+    }
 
     // Add a new production which will be handled by `handler`.
     NonTerminal nt;
@@ -647,7 +530,8 @@ static Status PrecedenceHandler(ParserContext *ctx, ParseTree *tree)
     }
 
     const Symbol *nt_sym;
-    Status ret = DefineMacro(ctx->blimp, production_obj, handler_obj, &nt_sym);
+    Status ret = DefineMacro(
+        ctx->blimp, production_obj, handler_obj, ctx->range, &nt_sym);
 
     BlimpObject_Release(production_obj);
     BlimpObject_Release(handler_obj);
@@ -835,8 +719,8 @@ static inline bool SubTreeIsTerminal(
     const ParseTree *tree, size_t index, Terminal t)
 {
     const ParseTree *sub_tree = SubTree(tree, index);
-    if (sub_tree->symbol.is_terminal) {
-        return sub_tree->symbol.terminal == t;
+    if (sub_tree->grammar_symbol.is_terminal) {
+        return sub_tree->grammar_symbol.terminal == t;
     } else if (sub_tree->num_sub_trees == 1) {
         return SubTreeIsTerminal(sub_tree, 0, t);
     } else {
@@ -848,8 +732,8 @@ static inline const Symbol *SubToken(
     const ParseTree *tree, size_t index)
 {
     const ParseTree *sub_tree = SubTree(tree, index);
-    if (sub_tree->symbol.is_terminal) {
-        return sub_tree->token;
+    if (sub_tree->grammar_symbol.is_terminal) {
+        return sub_tree->symbol;
     } else {
         assert(sub_tree->num_sub_trees == 1);
         return SubToken(sub_tree, 0);
@@ -886,7 +770,7 @@ static Status ParseTreeToNode(
     node->left = NULL;
     node->right = NULL;
 
-    if (tree->symbol.is_terminal) {
+    if (tree->num_sub_trees == 0) {
         // Terminals have no sub-trees.
         node->type = PARSE_TREE_TERMINAL;
         return BLIMP_OK;
@@ -985,7 +869,7 @@ static Status ParseTreeNodeToExpr(
 
     switch (node->type) {
         case PARSE_TREE_TERMINAL:
-            return BlimpExpr_NewSymbol(blimp, tree->token, expr);
+            return BlimpExpr_NewSymbol(blimp, tree->symbol, expr);
         case PARSE_TREE_TRIVIAL:
             *expr = left;
             return BLIMP_OK;

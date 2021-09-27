@@ -372,22 +372,16 @@ static Status ParseTreePrinter(
 static BlimpStatus PrintParseTree(
     Blimp *blimp, BlimpObject *context, BlimpObject *tree)
 {
-    const BlimpSymbol *sym;
-    if (BlimpObject_ParseSymbol(tree, &sym) == BLIMP_OK) {
-        printf("%s", BlimpSymbol_GetName(sym));
-        return BLIMP_OK;
-    }
-
     BlimpObject *printer;
     TRY(BlimpObject_NewExtension(
         blimp, context, NULL, ParseTreePrinter, NULL, &printer));
 
     printf("(");
-    const BlimpSymbol *nt;
-    if (Blimp_SendAndParseSymbol(blimp, context, tree, printer, &nt)
+    const BlimpSymbol *symbol;
+    if (Blimp_SendAndParseSymbol(blimp, context, tree, printer, &symbol)
             == BLIMP_OK)
     {
-        printf("; %s", BlimpSymbol_GetName(nt));
+        printf("; %s", BlimpSymbol_GetName(symbol));
     }
     printf(")");
 

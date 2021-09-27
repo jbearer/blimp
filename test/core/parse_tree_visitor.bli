@@ -1,0 +1,15 @@
+__visit_parse_tree{^} {^tree{^visitor
+    ^tree {^child
+        if_terminal_ref{^ ^};
+        if_terminal if_terminal_ref;
+        if_terminal_ref {^t{^f ^t[]}};
+        __sym{^} (^child {
+            if_terminal_ref {^t{^f ^f[]}}
+        });
+        if_terminal {
+            (^visitor) (__sym[])
+        } {
+            (^visitor) ^child
+        }
+    }
+}}

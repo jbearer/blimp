@@ -398,7 +398,7 @@
 // reducing and reaches a shift, accept, or error action. However, the
 // performance challenges that come with doing this many times for each token we
 // parse make things somewhat more complicated. The optimizations are discussed
-// in detail in Matcher_Accept, which implements the algorithm.
+// in detail in TerminalExpected, which implements the algorithm.
 //
 
 #include "hash_map.h"
@@ -464,7 +464,7 @@ static Status PseudoHandler(ParserContext *ctx, ParseTree *tree)
 {
     (void)ctx;
 
-    assert(!tree->symbol.is_terminal);
+    assert(!tree->grammar_symbol.is_terminal);
     assert(tree->num_sub_trees > 0);
 
     // Make a copy of the nested parse tree represented by the pseudo-terminal.
@@ -2783,43 +2783,16 @@ static inline const char *Lexer_LookAheadChars(const Lexer *lex)
     return Vector_Data(&lex->look_ahead_chars);
 }
 
-// A matcher encapsulates a path through a TokenTrie. It can be used to traverse
-// a trie and extract a single result at the end.
-typedef struct {
-    TrieNode *curr;
-    size_t curr_len;
-    TrieNode *match;
-    size_t match_len;
-    const StateMachine *machine;
-    const Vector/*<size_t>*/ *stack;
-} Matcher;
-
-static inline void Matcher_Init(
-    Matcher *m,
-    TrieNode *root,
-    const StateMachine *machine,
-    const Vector/*<size_t>*/ *stack)
+static bool TerminalExpected(
+    const StateMachine *m, const Vector/*<size_t>*/ *stack, Terminal t)
 {
-    m->curr = root;
-    m->curr_len = 1;
-        // The first character of input determines what root node to use, so by
-        // the time we have a root, we have already seen at least 1 character.
-    m->match = NULL;
-    m->match_len = 0;
-    m->machine = machine;
-    m->stack = stack;
-}
-
-// Is the matcher currently in an accepting state?
-static bool Matcher_Accept(const Matcher *m)
-{
-    if (m->curr->terminal == TOK_INVALID) {
+    if (t == TOK_INVALID) {
         return false;
     }
-    if (m->curr->terminal == TOK_WHITESPACE) {
+    if (t == TOK_WHITESPACE) {
         return true;
     }
-    if (StateMachine_IsPseudoTerminal(m->machine, m->curr->terminal)) {
+    if (StateMachine_IsPseudoTerminal(m, t)) {
         return false;
     }
 
@@ -2865,10 +2838,10 @@ static bool Matcher_Accept(const Matcher *m)
     // always pointing at consistent data.
     //
     // Start the machine from the state which is currently on top of the stack.
-    const size_t *sp = Vector_RIndex(m->stack, 0);
-    const State *state = StateMachine_GetState(m->machine, *sp);
+    const size_t *sp = Vector_RIndex(stack, 0);
+    const State *state = StateMachine_GetState(m, *sp);
     while (true) {
-        Action action = state->actions[m->curr->terminal];
+        Action action = state->actions[t];
         switch (Action_Type(action)) {
             case SHIFT:
             case ACCEPT:
@@ -2903,10 +2876,10 @@ static bool Matcher_Accept(const Matcher *m)
         // in the state we were in before we transitioned based on all of those
         // sub-trees. Now we once again transition out of that state, this time
         // on the non-terminal that the reduction just produced.
-        const State *tmp_state = StateMachine_GetState(m->machine, *sp);
+        const State *tmp_state = StateMachine_GetState(m, *sp);
         assert(tmp_state->gotos[production->non_terminal] != (size_t)-1);
         state = StateMachine_GetState(
-            m->machine, tmp_state->gotos[production->non_terminal]);
+            m, tmp_state->gotos[production->non_terminal]);
         ++sp;
             // Instead of actually pushing the new state onto the stack, which
             // would corrupt the real stack, we just increment the stack pointer
@@ -2918,6 +2891,33 @@ static bool Matcher_Accept(const Matcher *m)
     }
 }
 
+// A matcher encapsulates a path through a TokenTrie. It can be used to traverse
+// a trie and extract a single result at the end.
+typedef struct {
+    TrieNode *curr;
+    size_t curr_len;
+    TrieNode *match;
+    size_t match_len;
+    const StateMachine *machine;
+    const Vector/*<size_t>*/ *stack;
+} Matcher;
+
+static inline void Matcher_Init(
+    Matcher *m,
+    TrieNode *root,
+    const StateMachine *machine,
+    const Vector/*<size_t>*/ *stack)
+{
+    m->curr = root;
+    m->curr_len = 1;
+        // The first character of input determines what root node to use, so by
+        // the time we have a root, we have already seen at least 1 character.
+    m->match = NULL;
+    m->match_len = 0;
+    m->machine = machine;
+    m->stack = stack;
+}
+
 // Advance the Matcher one character further down the trie. Returns `true` if
 // the Matcher might accept more characters.
 static inline bool Matcher_Next(Matcher *m, int c)
@@ -2926,7 +2926,7 @@ static inline bool Matcher_Next(Matcher *m, int c)
         return false;
     }
 
-    if (Matcher_Accept(m)) {
+    if (TerminalExpected(m->machine, m->stack, m->curr->terminal)) {
         // If we are currently in an accepting state (including tokens which we
         // will accept internally but then skip, such as whitespace), record the
         // possible match.
@@ -3048,35 +3048,59 @@ static inline void Lexer_Commit(Lexer *lex)
 // Parsing
 //
 
+Status ParseTree_Init(
+    Blimp *blimp,
+    const Symbol *symbol,
+    ParseTree *children,
+    size_t num_children,
+    const SourceRange *range,
+    ParseTree *tree)
+{
+    // Convert the symbol to a grammar symbol based on whether it is expected to
+    // be a terminal or a non-terminal.
+    tree->grammar_symbol.is_terminal = num_children == 0;
+    if (tree->grammar_symbol.is_terminal) {
+        Token tok;
+        TRY(TokenTrie_GetToken(&blimp->tokens, symbol->name, &tok));
+        tree->grammar_symbol.terminal = tok.type;
+    } else {
+        TRY(Grammar_GetNonTerminal(
+            &blimp->grammar, symbol, &tree->grammar_symbol.non_terminal));
+    }
+
+    tree->symbol = symbol;
+    tree->sub_trees = children;
+    tree->num_sub_trees = num_children;
+    if (range != NULL) {
+        tree->range = *range;
+    } else {
+        tree->range = (SourceRange){0};
+    }
+    return BLIMP_OK;
+}
+
 void ParseTree_Destroy(ParseTree *tree)
 {
-    if (!tree->symbol.is_terminal) {
-        for (size_t i = 0; i < tree->num_sub_trees; ++i) {
-            ParseTree_Destroy(&tree->sub_trees[i]);
-        }
-        free(tree->sub_trees);
+    for (size_t i = 0; i < tree->num_sub_trees; ++i) {
+        ParseTree_Destroy(&tree->sub_trees[i]);
     }
+    free(tree->sub_trees);
 }
 
 Status ParseTree_Copy(Blimp *blimp, const ParseTree *from, ParseTree *to)
 {
+    to->grammar_symbol = from->grammar_symbol;
     to->symbol = from->symbol;
     to->range = from->range;
-    if (from->symbol.is_terminal) {
-        to->token = from->token;
-    } else {
-        to->num_sub_trees = from->num_sub_trees;
-        to->sub_trees = malloc(from->num_sub_trees*sizeof(ParseTree));
-        if (to->sub_trees == NULL) {
-            return Error(blimp, BLIMP_OUT_OF_MEMORY);
-        }
-        for (size_t i = 0; i < from->num_sub_trees; ++i) {
-            if (ParseTree_Copy(blimp, &from->sub_trees[i], &to->sub_trees[i])
-                    != BLIMP_OK)
-            {
-                free(to->sub_trees);
-                return Reraise(blimp);
-            }
+    to->num_sub_trees = from->num_sub_trees;
+
+    TRY(Malloc(blimp, from->num_sub_trees*sizeof(ParseTree), &to->sub_trees));
+    for (size_t i = 0; i < from->num_sub_trees; ++i) {
+        if (ParseTree_Copy(blimp, &from->sub_trees[i], &to->sub_trees[i])
+                != BLIMP_OK)
+        {
+            free(to->sub_trees);
+            return Reraise(blimp);
         }
     }
 
@@ -3085,7 +3109,6 @@ Status ParseTree_Copy(Blimp *blimp, const ParseTree *from, ParseTree *to)
 
 ParseTree *SubTree(const ParseTree *tree, size_t index)
 {
-    assert(!tree->symbol.is_terminal);
     assert(index < tree->num_sub_trees);
     return &tree->sub_trees[index];
 }
@@ -3191,9 +3214,11 @@ static Status ParseTreeStream_Peek(
             }
 
             // Convert the peeked Token to a ParseTree with a Terminal symbol.
-            tree->symbol = (GrammarSymbol){
+            tree->grammar_symbol = (GrammarSymbol){
                 .is_terminal = true, .terminal = tok.type};
-            tree->token = tok.symbol;
+            tree->symbol = tok.symbol;
+            tree->sub_trees = NULL;
+            tree->num_sub_trees = 0;
             tree->range = tok.range;
             return BLIMP_OK;
         }
@@ -3207,13 +3232,29 @@ static Status ParseTreeStream_Peek(
                     Vector_Index(stream->vector.trees, stream->vector.offset),
                     tree
                 ));
+
+                // Mimic the behavior of the lexer, where TOK_SYMBOL acts as a
+                // fallback. If we were given an unexpected terminal, but we are
+                // expecting a symbol, convert the terminal to a symbol.
+                //
+                // Note that we don't actually have to check if a symbol is
+                // expected. We can be optimistic, and if it is not expected,
+                // the parser will generate an error message using the normal
+                // unexpected token error path.
+                if (tree->grammar_symbol.is_terminal &&
+                    !TerminalExpected(m, stack, tree->grammar_symbol.terminal))
+                {
+                    tree->grammar_symbol.terminal = TOK_SYMBOL;
+                }
             } else {
                 // Otherwise, return EOF.
-                tree->symbol = (GrammarSymbol) {
+                tree->grammar_symbol = (GrammarSymbol) {
                     .is_terminal = true,
                     .terminal = TOK_EOF,
                 };
-                tree->token = NULL;
+                tree->symbol = NULL;
+                tree->sub_trees = NULL;
+                tree->num_sub_trees = 0;
                 tree->range = (SourceRange){0};
             }
             return BLIMP_OK;
@@ -3308,8 +3349,8 @@ static Status ParseStream(
         }
 
         Action action;
-        if (tree.symbol.is_terminal) {
-            action = state->actions[tree.symbol.terminal];
+        if (tree.grammar_symbol.is_terminal) {
+            action = state->actions[tree.grammar_symbol.terminal];
         } else {
             // If the input is a non-terminal, we need to convert it to a
             // terminal so we can look up the appropriate Action. We do this by
@@ -3317,7 +3358,9 @@ static Status ParseStream(
             // pseudo-terminals created by the addition of pseudo-productions
             // during the construction of the state machine.
             action = state->actions[
-                StateMachine_PseudoTerminal(&m, tree.symbol.non_terminal)];
+                StateMachine_PseudoTerminal(
+                    &m, tree.grammar_symbol.non_terminal)
+            ];
         }
 
         switch (Action_Type(action)) {
@@ -3334,7 +3377,7 @@ static Status ParseStream(
                 // Update the count of `tree.symbol` symbols in the
                 // `output_precedences` multiset.
                 if (OrderedMultiset_Insert(
-                        &output_precedences, &tree.symbol) != BLIMP_OK)
+                        &output_precedences, &tree.grammar_symbol) != BLIMP_OK)
                 {
                     goto error;
                 }
@@ -3367,11 +3410,20 @@ static Status ParseStream(
                 const Production *production =
                     (const Production *)Action_Data(action);
 
-                GrammarSymbol symbol = {
+                GrammarSymbol grammar_symbol = {
                     .is_terminal = false,
                     .non_terminal = production->non_terminal,
                 };
+                // Get the bl:mp-facing symbol corresponding to this
+                // production's grammar symbol.
+                const Symbol *symbol;
+                if (Grammar_GetNonTerminalSymbol(
+                        grammar, production->non_terminal, &symbol) != BLIMP_OK)
+                {
+                    goto error;
+                }
                 ParseTree fragment = {
+                    .grammar_symbol = grammar_symbol,
                     .symbol = symbol,
                     .num_sub_trees = production->num_symbols,
                     .sub_trees = malloc(
@@ -3402,7 +3454,7 @@ static Status ParseStream(
                      ++consumed)
                 {
                     OrderedMultiset_Remove(
-                        &output_precedences, &consumed->symbol);
+                        &output_precedences, &consumed->grammar_symbol);
                 }
 
                 // Call the handler to get a larger parse tree.
@@ -3429,7 +3481,7 @@ static Status ParseStream(
 
                 // Add the symbol we just reduced to `output_precedences`.
                 if (OrderedMultiset_Insert(
-                        &output_precedences, &symbol) != BLIMP_OK)
+                        &output_precedences, &grammar_symbol) != BLIMP_OK)
                 {
                     goto error;
                 }
@@ -3469,8 +3521,8 @@ static Status ParseStream(
 
             case ACCEPT: {
                 // Get the result from the parse tree.
-                assert(tree.symbol.is_terminal);
-                assert(tree.symbol.terminal == TOK_EOF);
+                assert(tree.grammar_symbol.is_terminal);
+                assert(tree.grammar_symbol.terminal == TOK_EOF);
                 assert(Vector_Length(&output) == 1);
                 Vector_PopBack(&output, result);
 
@@ -3492,24 +3544,25 @@ static Status ParseStream(
                             ? "shift-reduce"
                             : "reduce-reduce";
 
-                    if (tree.symbol.is_terminal) {
+                    if (tree.grammar_symbol.is_terminal) {
                         // If the input that caused the error is a terminal,
                         // include it in the error message.
                         ErrorFrom(blimp, tree.range,
                             BLIMP_AMBIGUOUS_PARSE,
                             "ambiguous parse at input `%s' (%s conflict). "
                             "Perhaps you need to add parentheses?",
-                            tree.token->name, conflict
+                            tree.symbol->name, conflict
                         );
                     } else {
                         ErrorFrom(blimp, tree.range,
                             BLIMP_AMBIGUOUS_PARSE,
                             "ambiguous parse at expression with precedence %zu "
                             "(%s conflict). Perhaps you need to add "
-                            "parentheses?", tree.symbol.non_terminal, conflict);
+                            "parentheses?",
+                            tree.grammar_symbol.non_terminal, conflict);
                     }
-                } else if (tree.symbol.is_terminal &&
-                           tree.symbol.terminal == grammar->eof_terminal)
+                } else if (tree.grammar_symbol.is_terminal &&
+                           tree.grammar_symbol.terminal == grammar->eof_terminal)
                 {
                     // If this is not a grammar conflict (it's just an
                     // unexpected input) and the unexpected symbol was EOF, we
@@ -3519,17 +3572,18 @@ static Status ParseStream(
                     ErrorFrom(blimp, tree.range,
                         BLIMP_UNEXPECTED_EOF,
                         "unexpected end of input");
-                } else if (tree.symbol.is_terminal) {
+                } else if (tree.grammar_symbol.is_terminal) {
                     // If the unexpected input was a terminal, include it in the
                     // output.
                     ErrorFrom(blimp, tree.range,
                         BLIMP_UNEXPECTED_TOKEN,
-                        "unexpected token `%s'", tree.token->name);
+                        "unexpected token `%s'", tree.symbol->name);
                 } else {
                     // Otherwise, include the name of the unexpected
                     // non-terminal.
                     const char *name = *(const char **)Vector_Index(
-                        &grammar->non_terminal_strings, tree.symbol.non_terminal);
+                        &grammar->non_terminal_strings,
+                        tree.grammar_symbol.non_terminal);
                     ErrorFrom(blimp, tree.range,
                         BLIMP_UNEXPECTED_TOKEN,
                         "unexpected expression with non-terminal %s", name);

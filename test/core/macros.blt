@@ -44,9 +44,9 @@ import parse_tree;
     };
 
     # We have to define this for precedence levels 3 and 4 (Stmt and StmtNoMsg)
-    # since the production does not start with a message name token and can be used
-    # in either context. This is a horrible mess and should be fixed by improving
-    # the built-in grammar.
+    # since the production does not start with a message name token and can be
+    # used in either context. This is a horrible mess and should be fixed by
+    # improving the built-in grammar.
     \>  4 -> {`\\\\>` <6> <6>} {^toks
         3 => (^toks)
     };
@@ -177,7 +177,7 @@ _ -> {`@term`} @@term {7 -> {7}};
     1 -> {
         `\\\\>` `7` `->` `{` `defined_in_expansion` `}` `{`
             `7` `->` `{` `foo` `}`
-        `}` SEMI
+        `}` (`;`)
         `defined_in_expansion`
     }
 };
@@ -198,9 +198,9 @@ _ -> {`@term`} @@term {7 -> {7}};
 
 \\> 7 -> {`define_in_expansion2`} {
     1 -> {
-        `\\\\>` `7` `->` `{`  \`+` \`+` `}` `{`
+        `\\\\>` `7` `->` `{` `+` `+` `}` `{`
             `7` `->` `{``bar``}`
-        `}` SEMI
+        `}` (`;`)
         `+` `+`
     }
 };
@@ -215,9 +215,9 @@ _ -> {`@term`} @@term {7 -> {7}};
 
 \\> 7 -> {`define_in_expansion3`} {
     1 -> {
-        `\\\\>` `3` `->` `{``<``7``>` \`\`-\```}` `{`
+        `\\\\>` `3` `->` `{``<``7``>` `-``}` `{`
             `7` `->` `{``foo``}`
-        `}` SEMI
+        `}` (`;`)
         `bar``-`
     }
 };
@@ -232,9 +232,9 @@ _ -> {`@term`} @@term {7 -> {7}};
 # lexed, so we can use it as a normal symbol.
 \\> 7  -> {`define_in_expansion4`} {
     1 -> {
-        `\\\\>` `3` `->` `{``<``7``>` \`\`*\```}` `{`
+        `\\\\>` `3` `->` `{``<``7``>` `*``}` `{`
             `7` `->` `{``foo``}`
-        `}` SEMI
+        `}` (`;`)
         `bar` `*`
     }
 };
@@ -280,7 +280,7 @@ _ -> {`@term`} @@term {7 -> {7}};
     value_ref{^ ^};
     value{^ref
         value_ref{(^ref)};
-        value_ref[] {undefined}
+        value_ref[] {{undefined}}
     };
 
     {^old_value
@@ -288,7 +288,7 @@ _ -> {`@term`} @@term {7 -> {7}};
             value_ref[] {(^tok)}
         };
 
-        1 -> {(^old_value)}
+        1 -> {{(^old_value)}}
     } (value[])
 };
 
@@ -540,7 +540,7 @@ import macro_module;
 
         fst{^ ^};
         for ^sym in syms {
-            # ^sym looks like (((symbol ; 7) ; 6) ; 3)
+            # ^sym looks like ((((symbol) ; 7) ; 6) ; 3)
             for ^6 in ^sym {
                 for ^7 in ^6 {
                     for ^sym in ^7 {
@@ -549,7 +549,7 @@ import macro_module;
                 }
             }
         };
-        1 -> {{fst[]}}
+        1 -> {(fst[])}
     }[]
 };
 
@@ -685,7 +685,7 @@ import macro_module;
             }[]
         };
 
-        6 -> {{7 -> {(sym[])}}}
+        6 -> {{7 => (sym[])}}
     }[]
 };
 

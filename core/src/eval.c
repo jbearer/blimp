@@ -593,21 +593,25 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
             }
 
             case INSTR_OBJI: {
-                OBJI *instr = (OBJI *)ip;
+                if (use_result) {
+                    OBJI *instr = (OBJI *)ip;
 
-                if (instr->object != NULL) {
-                    BlimpObject_Borrow(instr->object);
-                }
-
-                if (ObjectStack_Push(
-                        blimp, &blimp->result_stack, instr->object) != BLIMP_OK)
-                {
                     if (instr->object != NULL) {
-                        BlimpObject_Release(instr->object);
+                        BlimpObject_Borrow(instr->object);
                     }
-                    goto error;
-                }
 
+                    if (ObjectStack_Push(
+                            blimp,
+                            &blimp->result_stack,
+                            instr->object)
+                        != BLIMP_OK)
+                    {
+                        if (instr->object != NULL) {
+                            BlimpObject_Release(instr->object);
+                        }
+                        goto error;
+                    }
+                }
                 break;
             }
 
@@ -867,7 +871,9 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                 // Define the macro and get the symbol for the non-terminal of
                 // the production.
                 const Symbol *nt;
-                if (DefineMacro(blimp, production, handler, &nt) != BLIMP_OK) {
+                if (DefineMacro(
+                        blimp, production, handler, NULL, &nt) != BLIMP_OK)
+                {
                     BlimpObject_Release(production);
                     BlimpObject_Release(handler);
                     goto error;

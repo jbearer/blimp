@@ -73,7 +73,11 @@
 PRIVATE Status DefaultGrammar(Blimp *blimp, Grammar *grammar);
 PRIVATE Status ParseTreeToExpr(Blimp *blimp, ParseTree *tree, Expr **expr);
 PRIVATE Status DefineMacro(
-    Blimp *blimp, Object *production, Object *handler, const Symbol **nt_sym);
+    Blimp *blimp,
+    Object *production,
+    Object *handler,
+    const SourceRange *range,
+    const Symbol **nt_sym);
 
 #endif
 

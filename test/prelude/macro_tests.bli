@@ -33,7 +33,7 @@ syntax 7 -> test4 <7> {
 #
 
 syntax 7 -> `<+` arg@<3> `+>` {
-    "($arg)"
+    " $($arg) "
 };
 
 !expect_eq <+foo+> foo;
@@ -73,7 +73,7 @@ syntax 7 -> test6 {
 #
 
 syntax 7 -> quotes_in_def2 {
-    "`{` `foo` `}`"
+    " `{` `foo` `}` "
 };
 
 !expect_eq (quotes_in_def2 []) foo;

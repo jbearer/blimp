@@ -153,6 +153,7 @@ typedef struct {
     struct GrammarListener *listeners;
 } Grammar;
 
+#define ParseTree_Init BlimpParseTree_Init
 PRIVATE void ParseTree_Destroy(ParseTree *tree);
 PRIVATE Status ParseTree_Copy(
     Blimp *blimp, const ParseTree *from, ParseTree *to);

@@ -151,8 +151,8 @@ static BlimpStatus ImportHandler(BlimpParserContext *ctx, BlimpParseTree *tree)
 {
     const char **path = (const char **)ctx->arg;
 
-    assert(tree->sub_trees[1].symbol.is_terminal);
-    const BlimpSymbol *module = tree->sub_trees[1].token;
+    assert(tree->sub_trees[1].grammar_symbol.is_terminal);
+    const BlimpSymbol *module = tree->sub_trees[1].symbol;
 
     BlimpParseTree parsed;
     if (BlimpModule_StaticImport(
@@ -322,12 +322,8 @@ BlimpStatus BlimpModule_Import(
 BlimpStatus BlimpModule_StaticImport(
     Blimp *blimp, const char *module, const char **path, BlimpParseTree *result)
 {
-    const BlimpSymbol *prec3_sym;
-    if (Blimp_GetSymbol(blimp, "3", &prec3_sym) != BLIMP_OK) {
-        return Blimp_Reraise(blimp);
-    }
-    BlimpNonTerminal prec3;
-    if (Blimp_GetNonTerminal(blimp, prec3_sym, &prec3) != BLIMP_OK) {
+    const BlimpSymbol *prec3;
+    if (Blimp_GetSymbol(blimp, "3", &prec3) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
 
@@ -400,23 +396,28 @@ BlimpStatus BlimpModule_StaticImport(
                 }
 
                 // Now we can construct the send:
-                result->symbol = (BlimpGrammarSymbol) {
-                    .is_terminal = false,
-                    .non_terminal = prec3,
-                };
-                result->num_sub_trees = 2;
-                result->sub_trees = malloc(2*sizeof(BlimpParseTree));
-                if (result->sub_trees == NULL) {
+                BlimpParseTree *sub_trees = malloc(2*sizeof(BlimpParseTree));
+                if (sub_trees == NULL) {
+                    return Blimp_Error(blimp, BLIMP_OUT_OF_MEMORY);
+                }
+                if (BlimpParseTree_Init(
+                        blimp, import_extension, NULL, 0, NULL, &sub_trees[0])
+                    != BLIMP_OK)
+                {
                     return Blimp_Reraise(blimp);
                 }
-                result->sub_trees[0] = (BlimpParseTree) {
-                    .symbol = {.is_terminal=true, .terminal=sym_terminal},
-                    .token = import_extension,
-                };
-                result->sub_trees[1] = (BlimpParseTree) {
-                    .symbol = {.is_terminal=true, .terminal=sym_terminal},
-                    .token = path_sym,
-                };
+                if (BlimpParseTree_Init(
+                        blimp, path_sym, NULL, 0, NULL, &sub_trees[1])
+                    != BLIMP_OK)
+                {
+                    return Blimp_Reraise(blimp);
+                }
+                if (BlimpParseTree_Init(
+                        blimp, prec3, sub_trees, 2, NULL, result)
+                    != BLIMP_OK)
+                {
+                    return Blimp_Reraise(blimp);
+                }
 
                 return BLIMP_OK;
             }
