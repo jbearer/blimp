@@ -4,6 +4,8 @@
 #include "interrupt.h"
 #include "readline.h"
 
+#define READLINE_INTERRUPTED ((char *)1)
+
 #ifdef HAVE_READLINE
 
 #include <readline/history.h>
@@ -50,7 +52,9 @@ char *Readline(const char *prompt)
 {
     sigjmp_buf env;
     if (sigsetjmp(env, true)) {
+        // End the line and return a sentinel if interrupted.
         putchar('\n');
+        return READLINE_INTERRUPTED;
     }
 
     PushInterruptHandler(InterruptReadline, &env);
@@ -188,17 +192,24 @@ Expr *Readline_ReadExpr(
     Expr *expr;
     while (true) {
         // Read until we get a non-empty line or end-of-file.
-        while ((line = Readline(prompt)) != NULL && !*line) {
-            free(line);
+        while (
+            (line = Readline(prompt)) != NULL &&
+            // Skip this line if it is blank or if we got interrupted.
+            (line == READLINE_INTERRUPTED || !*line))
+        {
+            if (line != READLINE_INTERRUPTED) {
+                free(line);
 
-            if (blank_line_repeats) {
-                // If we are treating blank lines as a repeat of the last expression
-                // entered, look up the last entry from the history.
-                HIST_ENTRY *entry = LastHistory();
-                if (entry != NULL) {
-                    if (entry->line && *entry->line) {
-                        line = strdup(entry->line);
-                        break;
+                if (blank_line_repeats) {
+                    // If we are treating blank lines as a repeat of the last
+                    // expression entered, look up the last entry from the
+                    // history.
+                    HIST_ENTRY *entry = LastHistory();
+                    if (entry != NULL) {
+                        if (entry->line && *entry->line) {
+                            line = strdup(entry->line);
+                            break;
+                        }
                     }
                 }
             }
@@ -228,16 +239,13 @@ Expr *Readline_ReadExpr(
                     // Return NULL to indicate end-of-file.
                     free(input);
                     return NULL;
-                } else if (!*line) {
-                    // If the user hits return twice (that is, enters a blank
-                    // line) we assume they really to enter their input as is,
-                    // even if it causes a parse error.
-                    free(line);
-                    free(input);
-                    Blimp_DumpLastError(blimp, stdout);
-
-                    // Start from scratch, trying to read a new expression.
+                } else if (line == READLINE_INTERRUPTED) {
+                    // If we were interrupted by Ctrl+C, cancel the expression
+                    // we are in the middle of parsing and start over from the
+                    // beginning, asking for another expression.
                     return Readline_ReadExpr(blimp, prompt, blank_line_repeats);
+                } else if (!*line) {
+                    continue;
                 }
 
                 // Add the new line to the input.

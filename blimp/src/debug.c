@@ -331,8 +331,11 @@ Status Debugger_Repl(Debugger *db)
                 // loop until we get another resume command.
             Blimp_FreeStackTrace(db->blimp, db->trace);
 
-            // Reattach as we return to user code.
-            Debugger_DropIn(db);
+            // Reattach as we return to user code, unless the user gave the
+            // `detach` commmand.
+            if (db->blimp != NULL) {
+                Debugger_DropIn(db);
+            }
             return BLIMP_OK;
         }
     }
