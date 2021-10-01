@@ -10,4 +10,4 @@ ref {^
 
 # Use the reference to set the value of `symbol`.
 ref {foo};
-!expect_eq (symbol[]) foo
+:expect_eq (symbol[]) foo

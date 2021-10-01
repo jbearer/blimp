@@ -14,9 +14,9 @@ new{^{
 
     c[];
 
-    !expect_eq (c[]) 1;
+    :expect_eq (c[]) 1;
         # Check that the instance variable got set as expected.
-    !expect_eq (x[]) 0
+    :expect_eq (x[]) 0
         # Check that it didn't capture our `x`.
 }[];
 .

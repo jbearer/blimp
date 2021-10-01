@@ -2,6 +2,6 @@
 
 loop{^} loop;
 
-!expect_error {
+:expect_error {
     loop[]
 }

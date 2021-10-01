@@ -14,7 +14,7 @@
 
 import union_find;
 
-!benchmark{n{^ 10}; ops{^ 2000}; tracing_union_find} {
+:benchmark{n{^ 10}; ops{^ 2000}; tracing_union_find} {
     __push_stack_frame[];
 
     # Create 1000 nodes.
@@ -2026,8 +2026,8 @@ import union_find;
     .
 };
 
-!gc_collect;
-!gc_print_stats;
-!gc_check_collect;
+:gc_collect;
+:gc_print_stats;
+:gc_check_collect;
 
 .

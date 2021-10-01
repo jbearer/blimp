@@ -3,17 +3,17 @@ import std;
 s := (__struct[]);
 
 # Fields are always accessible, but default to `undefined`.
-!expect_eq ($s foo) undefined;
-!expect_eq $(($s)@foo) undefined;
+:expect_eq ($s foo) undefined;
+:expect_eq $(($s)@foo) undefined;
 
 # Check that we can set a field and get its value back.
 ($s)@foo := bar;
-!expect_eq ($s foo) bar;
-!expect_eq $(($s)@foo) bar;
+:expect_eq ($s foo) bar;
+:expect_eq $(($s)@foo) bar;
 
 # Check that we can set a field which has not been initialized.
 ($s)@bar := baz;
-!expect_eq ($s bar) baz;
-!expect_eq $(($s)@bar) baz;
+:expect_eq ($s bar) baz;
+:expect_eq $(($s)@bar) baz;
 
 .

@@ -3,17 +3,17 @@
         x{^ {y}};
         x[]
     }};
-    !expect_eq (non_capturing[]) y;
+    :expect_eq (non_capturing[]) y;
 
     # Check that assigning to `x` in the scope did not assign to `x` in the
     # outer scope.
     x {^ {z}};
-    !expect_eq (x[]) z;
+    :expect_eq (x[]) z;
 
     # Check that the scope `non_capturing`, which already has its own version of
     # `x`, does not share with a newly defined outer `x`.
-    !expect_eq (non_capturing[]) y;
-    !expect_eq (x[]) z;
+    :expect_eq (non_capturing[]) y;
+    :expect_eq (x[]) z;
 
     # Check that once `x` has been defined globally, subsequent scopes which
     # reference `x` will get the global version (i.e. shadowing is no longer
@@ -21,9 +21,9 @@
     capturing {^ {
         x{^ {w}}
     }};
-    !expect_eq (capturing[]]) z;
-    !expect_eq (x[]) z;
+    :expect_eq (capturing[]]) z;
+    :expect_eq (x[]) z;
 
     # Check that we can read a variable from the outer scope in an inner scope.
-    !expect_eq ({ x[] }[]]) z
+    :expect_eq ({ x[] }[]]) z
 }[]

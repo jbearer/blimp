@@ -10,6 +10,6 @@ __bind class method {^self
 
 instance{^} (__new class[]);
 
-!benchmark{n{^ 100000}; dispatch_class} {
+:benchmark{n{^ 100000}; dispatch_class} {
     instance method
 }

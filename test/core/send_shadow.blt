@@ -1,6 +1,6 @@
 # What happens when two message names shadow?
 {^msg
     {^msg
-        !expect_eq ^msg bar
+        :expect_eq ^msg bar
     } bar
 } foo

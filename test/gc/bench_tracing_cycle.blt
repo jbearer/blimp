@@ -14,7 +14,7 @@ node{^
     }
 };
 
-!benchmark{n{^ 5000}; ops{^ 10}; tracing_cycle} {
+:benchmark{n{^ 5000}; ops{^ 10}; tracing_cycle} {
     __push_stack_frame[];
 
     # Create 10 nodes.
@@ -58,7 +58,7 @@ node{^
     .
 };
 
-!gc_collect;
-!gc_print_stats;
-!gc_check_collect;
+:gc_collect;
+:gc_print_stats;
+:gc_check_collect;
 .

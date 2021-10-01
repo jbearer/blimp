@@ -3,7 +3,7 @@ import std;
 __call {
     local := x;
 
-    !benchmark{n{^ 250000}; deref_local} {
+    :benchmark{n{^ 250000}; deref_local} {
         $local
     }
 }

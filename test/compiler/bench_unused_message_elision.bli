@@ -1,6 +1,6 @@
 work{^} {.};
 
-!benchmark{n{^}100; ops{^}10; sequence_using_sends} {
+:benchmark{n{^}100; ops{^}10; sequence_using_sends} {
     {{.}} (work[]) (
     {{.}} (work[]) (
     {{.}} (work[]) (
@@ -14,7 +14,7 @@ work{^} {.};
     ))))))))
 };
 
-!benchmark{n{^}100; ops{^}10; sequence_using_semis} {
+:benchmark{n{^}100; ops{^}10; sequence_using_semis} {
     work[];
     work[];
     work[];

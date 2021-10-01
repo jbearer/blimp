@@ -30,12 +30,12 @@ long_lived {^{
     }[]
 }};
 
-!benchmark{n{^ 100000}; erc_locals_named} {
+:benchmark{n{^ 100000}; erc_locals_named} {
     long_lived[]
 };
 
-!gc_print_stats;
-!expect_lt (!gc_unreachable) 100;
+:gc_print_stats;
+:expect_lt (:gc_unreachable) 100;
     # We may leak up to 100 objects which got entangled with the long long-lived
     # object. After that, nothing should be leaked.
 .

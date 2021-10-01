@@ -8,6 +8,6 @@ scope{^ref {
 ref{^ (scope[])};
 ref .;
 
-!gc_expect_clean;
+:gc_expect_clean;
 
 .

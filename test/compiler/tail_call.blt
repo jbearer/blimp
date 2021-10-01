@@ -7,7 +7,6 @@ direct_tail_call{^} {^n
 };
 
 nested_tail_call{^} {^n
-    print ^n;
     (^n == 0) if_true {
         .
     } {

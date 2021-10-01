@@ -27,6 +27,6 @@ foo{parent_ref_ref ^};
 
 # Check that the value of `foo` in the global scope is the value assigned using
 # `child_ref`.
-!expect_eq (foo[]) baz;
+:expect_eq (foo[]) baz;
 
 .

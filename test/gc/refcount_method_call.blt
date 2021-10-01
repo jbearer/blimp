@@ -2,6 +2,6 @@
 
 {.}{.};
 
-!gc_expect_clean;
+:gc_expect_clean;
 
 .

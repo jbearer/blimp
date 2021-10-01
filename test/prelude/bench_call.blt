@@ -1,5 +1,5 @@
 import std;
 
-!benchmark{n{^ 250000}; call} {
+:benchmark{n{^ 250000}; call} {
     __call{.}
 }

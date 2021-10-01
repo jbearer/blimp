@@ -2,7 +2,7 @@ import std;
 
 __push_stack_frame[];
 
-!benchmark{n{^ 250000}; assign_local} {
+:benchmark{n{^ 250000}; assign_local} {
     local := x
 };
 

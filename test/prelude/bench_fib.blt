@@ -2,12 +2,12 @@ import std;
 import `system.types`;
 
 test_fib := (function([fib, mkint]) {
-    !expect ($fib($mkint 0) == ($mkint 1));
-    !expect ($fib($mkint 1) == ($mkint 1));
-    !expect ($fib($mkint 2) == ($mkint 2));
-    !expect ($fib($mkint 3) == ($mkint 3));
-    !expect ($fib($mkint 4) == ($mkint 5));
-    !expect ($fib($mkint 5) == ($mkint 8));
+    :expect ($fib($mkint 0) == ($mkint 1));
+    :expect ($fib($mkint 1) == ($mkint 1));
+    :expect ($fib($mkint 2) == ($mkint 2));
+    :expect ($fib($mkint 3) == ($mkint 3));
+    :expect ($fib($mkint 4) == ($mkint 5));
+    :expect ($fib($mkint 5) == ($mkint 8));
     .
 });
 
@@ -49,15 +49,15 @@ fib_native := (function(n) {
 
 $test_fib([($fib_native),native_int]);
 
-!benchmark{n{^ 100}; fib_rec} {
+:benchmark{n{^ 100}; fib_rec} {
     $fib_rec(9)
 };
 
-!benchmark{n{^ 1000}; fib_iter} {
+:benchmark{n{^ 1000}; fib_iter} {
     $fib_iter(9)
 };
 
-!benchmark{n{^ 1000}; fib_iter} {
+:benchmark{n{^ 1000}; fib_iter} {
     $fib_native(9)
 };
 

@@ -1,7 +1,7 @@
 #: -fno-gc-tracing
 
 import union_find;
-!gc_expect_clean;
+:gc_expect_clean;
 
 
 a := (node[]);
@@ -13,7 +13,7 @@ union ($a) ($b);
 a := .;
 b := .;
 
-!gc_print_stats;
-!gc_expect_clean;
+:gc_print_stats;
+:gc_expect_clean;
 
 .

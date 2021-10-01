@@ -4,5 +4,5 @@
         ^ref{(^ref)}
     };
     { x[] {1} }[];
-    !expect_eq (x[]) 1
+    :expect_eq (x[]) 1
 }[]

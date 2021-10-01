@@ -110,7 +110,7 @@ __list_nil{^} ({
 __bind __list_node __init {^self{^value
     ^self next (__cell[]);
     ^self next {__list_nil};
-    ^self value (__cell[]):
+    ^self value (__cell[]);
     ^self value {(^value)}
 }};
 

@@ -12,7 +12,7 @@
 # completely anonymous. This means that it never becomes entangled with the
 # long-lived object, making it slightly easier to collect.
 
-!benchmark{n{^ 500000}; erc_locals_anon} {
+:benchmark{n{^ 500000}; erc_locals_anon} {
     {
         # Create a local variable which is an immediate child of this block. We
         # first initialize `direct_local` to a reference to itself, and then we
@@ -30,7 +30,7 @@
     }[]
 };
 
-!gc_print_stats;
-!gc_expect_clean;
+:gc_print_stats;
+:gc_expect_clean;
 
 .

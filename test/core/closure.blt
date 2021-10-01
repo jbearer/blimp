@@ -6,4 +6,4 @@ closure {
     } arg)
 };
 
-!expect_eq (closure[]) arg
+:expect_eq (closure[]) arg

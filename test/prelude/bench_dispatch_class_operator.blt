@@ -12,6 +12,6 @@ __bind class method {^self
 
 instance{^} (__new class[]);
 
-!benchmark{n{^ 100000}; dispatch_class_operator} {
+:benchmark{n{^ 100000}; dispatch_class_operator} {
     instance method
 }

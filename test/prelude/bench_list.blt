@@ -11,11 +11,11 @@ i := 0;
 
 i := 0;
 1000+1 times {
-    !expect (($(($l)@($i))) == ($i));
+    :expect (($(($l)@($i))) == ($i));
     i := ($i + 1)
 };
 
-!benchmark{n{^ 10}; list_index} {
+:benchmark{n{^ 10}; list_index} {
     ($(($l)@(1000)))
 };
 
@@ -24,7 +24,7 @@ i := 0;
 # reaches the 1000th element. This should be significantly slower than
 # `list_index`; otherwise, having the O(log(n)) index in addition to the linked
 # list structure is not gaining anything.
-!benchmark{n{^ 10}; list_index_iter} {
+:benchmark{n{^ 10}; list_index_iter} {
     elem{^ ^};
     i := 0;
     ($l) each {^elem
@@ -36,7 +36,7 @@ i := 0;
     elem[]
 };
 
-!benchmark{n{^ 1}; ops{^ 1000}; list_iter} {
+:benchmark{n{^ 1}; ops{^ 1000}; list_iter} {
     ($l) each {^}
 };
 
@@ -45,7 +45,7 @@ i := 0;
 # This should be significantly slower than `list_iter`; otherwise, having the
 # linked list structure in addition to the O(log(n)) index is not gaining
 # anything.
-!benchmark{n{^ 1}; ops{^ 1000}; list_iter_indices} {
+:benchmark{n{^ 1}; ops{^ 1000}; list_iter_indices} {
     i := 0;
     $l length times {
         $(($l)@($i));

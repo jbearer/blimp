@@ -7,7 +7,7 @@ import parse_tree;
 a{^} {foo};
 foo{^} {bar};
 
-!expect_eq (a+b) bar;
+:expect_eq (a+b) bar;
     # Should lex: a + b.
     #
     # If lookahead erroneously consumes characters, we will get: a b (where the

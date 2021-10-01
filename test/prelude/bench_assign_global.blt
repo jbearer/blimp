@@ -2,6 +2,6 @@ import std;
 
 global := x;
 
-!benchmark{n{^ 250000}; assign_global} {
+:benchmark{n{^ 250000}; assign_global} {
     global := x
 }

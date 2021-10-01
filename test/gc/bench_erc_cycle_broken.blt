@@ -20,7 +20,7 @@ node{^
     }
 };
 
-!benchmark{n{^ 5000}; ops{^ 10}; erc_cycle_broken} {
+:benchmark{n{^ 5000}; ops{^ 10}; erc_cycle_broken} {
     __push_stack_frame[];
 
     # Create 10 nodes.
@@ -67,8 +67,8 @@ node{^
     .
 };
 
-!gc_print_stats;
-!gc_expect_clean;
+:gc_print_stats;
+:gc_expect_clean;
     # Since eventually all cycles are broken, reference counting should clean up
     # perfectly. The only allocated objects should be reachable ones.
 .

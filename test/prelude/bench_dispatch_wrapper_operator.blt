@@ -8,6 +8,6 @@ __bind class method {^arg
 
 instance{^} (__wrap class[]);
 
-!benchmark{n{^ 100000}; dispatch_wrapper_operator} {
+:benchmark{n{^ 100000}; dispatch_wrapper_operator} {
     instance method
 }

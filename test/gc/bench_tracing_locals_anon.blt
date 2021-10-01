@@ -8,7 +8,7 @@
 # version of the test, otherwise ERC isn't gaining us anything compared to
 # tracing.
 
-!benchmark{n{^ 500000}; tracing_locals_anon} {
+:benchmark{n{^ 500000}; tracing_locals_anon} {
     {
         # Create a local variable which is an immediate child of this block. We
         # first initialize `direct_local` to a reference to itself, and then we
@@ -26,7 +26,7 @@
     }[]
 };
 
-!gc_collect;
-!gc_print_stats;
-!gc_check_collect;
+:gc_collect;
+:gc_print_stats;
+:gc_check_collect;
 .

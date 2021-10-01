@@ -56,7 +56,7 @@ dfs{^
     }
 };
 
-!benchmark{n{^ 10000}; erc_tree} {
+:benchmark{n{^ 10000}; erc_tree} {
     # We'll build the following tree:
     #                   a
     #                  / \
@@ -80,8 +80,8 @@ dfs{^
     }
 };
 
-!gc_print_stats;
-!gc_expect_clean;
+:gc_print_stats;
+:gc_expect_clean;
 
 .
 

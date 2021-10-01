@@ -18,19 +18,19 @@ foo{
 
     # Now initialize `foo` in the child scope.
     child_ref {bar};
-    !expect_eq (foo[]) bar;
+    :expect_eq (foo[]) bar;
 
     # Now initialize `foo` with a different value in the global scope. This
     # should do the assignment in the global scope, so should not affect `foo`
     # in the child scope.
     parent_ref {baz};
-    !expect_eq (foo[]) bar;
+    :expect_eq (foo[]) bar;
 
     .
 }[];
 
 # Check that the value of `foo` in the global scope is the value assigned using
 # `parent_ref`.
-!expect_eq (foo[]) baz;
+:expect_eq (foo[]) baz;
 
 .

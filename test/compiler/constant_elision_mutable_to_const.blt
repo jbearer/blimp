@@ -25,12 +25,12 @@ scope{^} {
 # `scope` with an instruction that just sends directly to the {foo} object
 # referred to by `const1`. This will cause problems later...
 mutable_ref const1;
-!expect_eq (scope[]) foo;
+:expect_eq (scope[]) foo;
 
 # ...when we change `mutable` to point to `const2` and try to run `scope` again.
 # Now the result should be `bar`, but if we incorrectly specialized `scope` in
 # the previous step, the result will not change; it will still be `foo`.
 mutable_ref const2;
-!expect_eq (scope[]) bar;
+:expect_eq (scope[]) bar;
 
 .

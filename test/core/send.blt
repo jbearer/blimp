@@ -1,6 +1,6 @@
-!expect_eq ({^msg
+:expect_eq ({^msg
     # Check that ^msg is correct.
-    !expect_eq ^msg arg;
+    :expect_eq ^msg arg;
 
     # Return something.
     foobar
@@ -9,7 +9,7 @@
 # Test nested arguments
 {^first
     {^second
-        !expect_eq ^first foo;
-        !expect_eq ^second bar
+        :expect_eq ^first foo;
+        :expect_eq ^second bar
     }
 } foo bar

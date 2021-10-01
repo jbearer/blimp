@@ -8,7 +8,7 @@
 # counting version of the test, otherwise reference counting isn't gaining us
 # anything compared to tracing.
 
-!benchmark{n{^ 1000000}; tracing_cycle_self} {
+:benchmark{n{^ 1000000}; tracing_cycle_self} {
     {^value
         # value is a setter function for a field `value:self`. We set this
         # field to point at `value` itself, creating a self-loop.
@@ -18,7 +18,7 @@
     }
 };
 
-!gc_collect;
-!gc_print_stats;
-!gc_check_collect;
+:gc_collect;
+:gc_print_stats;
+:gc_check_collect;
 .

@@ -14,7 +14,7 @@ node{^
     }
 };
 
-!benchmark{n{^ 5000}; ops{^ 25}; k_5} {
+:benchmark{n{^ 5000}; ops{^ 25}; k_5} {
     __push_stack_frame[];
 
     # Create 5 nodes.
@@ -62,7 +62,7 @@ node{^
     .
 };
 
-!gc_collect;
-!gc_print_stats;
-!gc_check_collect;
+:gc_collect;
+:gc_print_stats;
+:gc_check_collect;
 .

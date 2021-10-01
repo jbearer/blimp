@@ -20,7 +20,7 @@ node{^
     }
 };
 
-!benchmark{n{^ 5000}; obs{^ 10}; tracing_cycle_broken} {
+:benchmark{n{^ 5000}; obs{^ 10}; tracing_cycle_broken} {
     __push_stack_frame[];
 
     # Create 10 nodes.
@@ -67,7 +67,7 @@ node{^
     .
 };
 
-!gc_collect;
-!gc_print_stats;
-!gc_check_collect;
+:gc_collect;
+:gc_print_stats;
+:gc_check_collect;
 .

@@ -2,11 +2,11 @@
 
 import std;
 
-!gc_expect_clean;
+:gc_expect_clean;
 __push_stack_frame[];
 __pop_stack_frame[];
-!gc_print_stats;
-!gc_expect_clean;
+:gc_print_stats;
+:gc_expect_clean;
 
 x := 0;
 
@@ -25,7 +25,7 @@ __push_stack_frame[];
 }[];
 __pop_stack_frame[];
 
-!gc_print_stats;
-!gc_expect_clean;
+:gc_print_stats;
+:gc_expect_clean;
 
 .

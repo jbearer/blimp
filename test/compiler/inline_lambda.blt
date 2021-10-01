@@ -7,7 +7,7 @@ var{ref ^};
 #   {^x (^x foo)} {^}
 # to
 #   foo
-!expect_eq foo (
+:expect_eq foo (
     {^x
         ^x foo
     } {^}
@@ -17,7 +17,7 @@ var{ref ^};
 #   {^x ({^} ^x)} foo
 # to
 #   foo
-!expect_eq foo (
+:expect_eq foo (
     {^x
         {^} ^x
     } foo
@@ -27,7 +27,7 @@ var{ref ^};
 #   {^x (^x)} foo
 # to
 #   foo
-!expect_eq foo (
+:expect_eq foo (
     {^x
         ^x
     } foo
@@ -42,20 +42,20 @@ ref (
         {(^x)}
     } foo
 );
-!expect_eq (var[]) foo;
+:expect_eq (var[]) foo;
 
 # Apply anonymous block which captures argument.
 #   {^x ({(^x)} {^})} foo
 # to
 #   foo
-!expect_eq foo (
+:expect_eq foo (
     {^x
         {(^x)} {^}
     } foo
 );
 
 # Scope used (prevents inlining).
-!expect_eq foo (
+:expect_eq foo (
     {^x
         tmp{^} {(^x)};
         tmp[]
@@ -70,11 +70,11 @@ ref (
         } foo
     }
 );
-!expect_eq (var[]) foo;
+:expect_eq (var[]) foo;
 
 # Inline in a block where the result is ignored.
 ref ({
-    !expect_eq foo (
+    :expect_eq foo (
         {^x
             ^x
         } foo
@@ -95,7 +95,7 @@ ref (
         } y
     } x
 );
-!expect_eq (var[]) x;
+:expect_eq (var[]) x;
 ref (
     {^x
         {^y
@@ -105,10 +105,10 @@ ref (
         } y
     } x
 );
-!expect_eq (var[]) y;
+:expect_eq (var[]) y;
 
 # Multiple levels of inlining.
-!expect_eq foo (
+:expect_eq foo (
     {^x
         {^y
             {
@@ -120,7 +120,7 @@ ref (
 
 # Applying a lambda which uses its scope. This should prevent inlining, but
 # should still work correctly.
-!expect_eq foo (
+:expect_eq foo (
     {^x
         local{^} {(^x)};
         local[]

@@ -13,7 +13,7 @@
     };
 
     tests{^} {
-        !expect_eq (foo true) bar
+        :expect_eq (foo true) bar
     };
 
     # Run twice, once to force specialization and again to run the optimized

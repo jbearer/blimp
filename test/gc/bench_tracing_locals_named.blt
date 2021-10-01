@@ -30,11 +30,11 @@ long_lived {^{
     }[]
 }};
 
-!benchmark{n{^ 100000}; tracing_locals_named} {
+:benchmark{n{^ 100000}; tracing_locals_named} {
     long_lived[]
 };
 
-!gc_collect;
-!gc_print_stats;
-!gc_check_collect;
+:gc_collect;
+:gc_print_stats;
+:gc_check_collect;
 .

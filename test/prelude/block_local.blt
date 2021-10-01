@@ -6,8 +6,8 @@ import std;
 __call {
     {
         a := x;
-        !expect_eq ($a) x
+        :expect_eq ($a) x
     }[];
 
-    !expect_eq ($a) x
+    :expect_eq ($a) x
 }

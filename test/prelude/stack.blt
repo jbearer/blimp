@@ -3,7 +3,7 @@ import std;
 # Assign to a mutable global variable.
 global := bar;
 global := baz;
-!expect_eq ($global) baz;
+:expect_eq ($global) baz;
 
 
 # Reassign to a global variable in a stack frame.
@@ -11,7 +11,7 @@ global := bar;
 __call {
     global := baz
 };
-!expect_eq ($global) baz;
+:expect_eq ($global) baz;
 
 # Two different local variables with the same name.
 __call {
@@ -19,10 +19,10 @@ __call {
 
     __call {
         local := baz;
-        !expect_eq ($local) baz
+        :expect_eq ($local) baz
     };
 
-    !expect_eq ($local) bar
+    :expect_eq ($local) bar
 };
 
 .

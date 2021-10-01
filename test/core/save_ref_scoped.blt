@@ -16,9 +16,9 @@ ref {^
 ref {foo};
 
 # Check that symbol was set in `scope`.
-!expect_eq (scope[]) foo;
+:expect_eq (scope[]) foo;
 
 # Check that symbol was not set in the global scope.
 symbol { ^{bar} };
-!expect_eq (symbol[]) bar
+:expect_eq (symbol[]) bar
 

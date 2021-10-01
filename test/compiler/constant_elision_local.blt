@@ -18,11 +18,11 @@ f{^} {^val
     }[]
 };
 
-!expect_eq (f foo) foo;
+:expect_eq (f foo) foo;
     # Cause the inner scope above to be executed with a value of `foo`. If the
     # optimizer is misbehaving, this will cause the parent scope to reference a
     # specialization procedure where `foo` is hardcoded into the bytecode.
-!expect_eq (f bar) bar;
+:expect_eq (f bar) bar;
     # If the optimizer bug described above happened, then `f bar` will return
     # `foo`, not `bar`, because `foo` is now hardcoded.
 

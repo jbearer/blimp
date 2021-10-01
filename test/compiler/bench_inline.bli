@@ -1,22 +1,22 @@
-!benchmark{n{^}1000000; inline_lambda_arg_receiver} {
+:benchmark{n{^}1000000; inline_lambda_arg_receiver} {
     {^x
         ^x foo
     } {^}
 };
 
-!benchmark{n{^}1000000; inline_lambda_arg_message} {
+:benchmark{n{^}1000000; inline_lambda_arg_message} {
     {^x
         {^} ^x
     } foo
 };
 
-!benchmark{n{^}1000000; inline_lambda_arg_return} {
+:benchmark{n{^}1000000; inline_lambda_arg_return} {
     {^x
         ^x
     } foo
 };
 
-!benchmark{n{^}1000000; inline_lambda_closure} {
+:benchmark{n{^}1000000; inline_lambda_closure} {
     {^x
         {^y
             {
@@ -26,7 +26,7 @@
     } x
 };
 
-!benchmark{n{^}1000000; inline_lambda_nested} {
+:benchmark{n{^}1000000; inline_lambda_nested} {
     {^x
         {^y
             {
@@ -38,13 +38,13 @@
 
 {
     const_local{^} {foo};
-    !benchmark{n{^}1000000; inline_const_local} {
+    :benchmark{n{^}1000000; inline_const_local} {
         const_local[]
     }
 }[];
 
 const_global{^} {foo};
-!benchmark{n{^}1000000; inline_const_global} {
+:benchmark{n{^}1000000; inline_const_global} {
     const_global[]
 };
 
