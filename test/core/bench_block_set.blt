@@ -1007,7 +1007,7 @@ scope{^{{
     .
 }}};
 
-!benchmark{n{^ 1000}; ops{^ 1000}; block_set} {
+:benchmark{n{^ 1000}; ops{^ 1000}; block_set} {
     scope[] []
 };
 

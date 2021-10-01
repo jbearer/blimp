@@ -115,7 +115,7 @@ static Status AnalyzeExpr(Blimp *blimp, Expr *expr, DeBruijnMap *scopes)
 static Status AnalyzeStmt(Blimp *blimp, Expr *expr, DeBruijnMap *scopes)
 {
     switch (expr->tag) {
-        case EXPR_SYMBOL:
+        case EXPR_OBJECT:
             return BLIMP_OK;
 
         case EXPR_MSG: {
@@ -220,9 +220,11 @@ Tristate Expr_EvaluatesToSymbol(Expr *expr, const Symbol **sym)
     } else if (expr->next == NULL) {
         // A single statement evaluates to a symbol if it is a symbol literal or
         // a macro expression.
-        if (expr->tag == EXPR_SYMBOL) {
+        if (expr->tag == EXPR_OBJECT &&
+            Object_Type(expr->object) == OBJ_SYMBOL)
+        {
             if (sym != NULL) {
-                *sym = expr->symbol;
+                *sym = (const Symbol *)expr->object;
             }
             return YES;
         } else if (expr->tag == EXPR_MACRO) {
@@ -272,7 +274,7 @@ Tristate Block_IsPure(Expr *expr)
 Tristate Stmt_IsPure(Expr *stmt)
 {
     switch (stmt->tag) {
-        case EXPR_SYMBOL:
+        case EXPR_OBJECT:
         case EXPR_BLOCK:
         case EXPR_MSG:
             return YES;

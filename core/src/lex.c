@@ -340,6 +340,11 @@ Status TokenTrie_Init(Blimp *blimp, TokenTrie *trie)
     TRY(NewTrieNode(trie->blimp, tok_eof));
     (*tok_eof)->terminal = TOK_EOF;
 
+    // Add a state to handle TOK_BANG.
+    TrieNode **tok_bang = &trie->nodes['!'];
+    TRY(NewTrieNode(trie->blimp, tok_bang));
+    (*tok_bang)->terminal = TOK_BANG;
+
     return BLIMP_OK;
 }
 

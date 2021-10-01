@@ -17,6 +17,17 @@ static inline Status Emit_SYMI(
     return Bytecode_Append(code, (Instruction *)&instr);
 }
 
+static inline Status Emit_OBJI(
+    Bytecode *code, ResultType result_type, Object *obj)
+{
+    OBJI instr = {
+        {INSTR_OBJI, result_type, sizeof(instr)},
+        BlimpObject_Borrow(obj)
+    };
+
+    return Bytecode_Append(code, (Instruction *)&instr);
+}
+
 static inline Status Emit_BLOCKI(
     Bytecode *code,
     ResultType result_type,
@@ -149,8 +160,12 @@ static Status CompileStmt(
     }
 
     switch (stmt->tag) {
-        case EXPR_SYMBOL:
-            TRY(Emit_SYMI(code, result_type, stmt->symbol));
+        case EXPR_OBJECT:
+            if (Object_Type(stmt->object) == OBJ_SYMBOL) {
+                TRY(Emit_SYMI(code, result_type, (const Symbol *)stmt->object));
+            } else {
+                TRY(Emit_OBJI(code, result_type, stmt->object));
+            }
             break;
         case EXPR_BLOCK: {
             // Compile the body of the block into its own separate

@@ -687,13 +687,13 @@ Blimp *TestBlimp_New(Test *test)
         return NULL;
     }
 
-    // Bind the TestBlimp to the global symbol `!'.
-    const BlimpSymbol *bang;
-    if (Blimp_GetSymbol(blimp, "!", &bang) != BLIMP_OK) {
+    // Bind the TestBlimp to the global symbol `:'.
+    const BlimpSymbol *colon;
+    if (Blimp_GetSymbol(blimp, ":", &colon) != BLIMP_OK) {
         Blimp_Delete(blimp);
         return NULL;
     }
-    if (BlimpObject_Set(Blimp_GlobalObject(blimp), bang, obj) != BLIMP_OK) {
+    if (BlimpObject_Set(Blimp_GlobalObject(blimp), colon, obj) != BLIMP_OK) {
         Blimp_Delete(blimp);
         return NULL;
     }

@@ -10,10 +10,10 @@ foo{
 
 # Set the value through the first reference.
 ref1 {bar};
-!expect_eq (foo[]) bar;
+:expect_eq (foo[]) bar;
 
 # Set the value through the second reference.
 ref2 {baz};
-!expect_eq (foo[]) baz;
+:expect_eq (foo[]) baz;
 
 .

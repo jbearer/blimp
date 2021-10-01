@@ -108,7 +108,8 @@ static Status ParseTreeMethod(
         BlimpObject_Release(sub_tree_obj);
     }
 
-    return BlimpObject_NewSymbol(blimp, tree->symbol, result);
+    *result = BlimpObject_Borrow(tree->symbol);
+    return BLIMP_OK;
 }
 
 static Status ObjectToParseTree(Blimp *blimp, Object *obj, ParseTree *tree);
@@ -205,10 +206,9 @@ static Status ObjectToParseTree(Blimp *blimp, Object *obj, ParseTree *tree)
     // Send the visitor to the object to collect its sub-trees, and get the
     // grammar symbol of the object, which is the return value of the parse tree
     // object.
-    const Symbol *symbol;
-    if (Blimp_SendAndParseSymbol(
-            blimp, (Object *)blimp->global, obj, visitor, &symbol)
-        != BLIMP_OK)
+    Object *symbol;
+    if (Blimp_Send(blimp, (Object *)blimp->global, obj, visitor, &symbol)
+            != BLIMP_OK)
     {
         BlimpObject_Release(visitor);
         goto error;
@@ -226,7 +226,7 @@ static Status ObjectToParseTree(Blimp *blimp, Object *obj, ParseTree *tree)
 
 error:
     // Make sure `tree` is a valid parse tree even if we failed.
-    TRY(Blimp_GetSymbol(blimp, "", &symbol));
+    TRY(Blimp_GetSymbol(blimp, "", (const Symbol **)&symbol));
     TRY(ParseTree_Init(blimp, symbol, NULL, 0, NULL, tree));
     return Reraise(blimp);
 }
@@ -260,10 +260,9 @@ static Status ParseObject(Blimp *blimp, Object *obj, ParseTree *tree)
     // Send the visitor to the object to collect its sub-trees, and get the
     // grammar symbol of the parse tree, which is the return value of the parse
     // tree object.
-    const Symbol *symbol;
-    if (Blimp_SendAndParseSymbol(
-            blimp, (Object *)blimp->global, obj, visitor, &symbol)
-        != BLIMP_OK)
+    Object *symbol;
+    if (Blimp_Send(blimp, (Object *)blimp->global, obj, visitor, &symbol)
+            != BLIMP_OK)
     {
         BlimpObject_Release(visitor);
         goto error;
@@ -275,9 +274,14 @@ static Status ParseObject(Blimp *blimp, Object *obj, ParseTree *tree)
         return ParseTree_Init(blimp, symbol, NULL, 0, NULL, tree);
     } else {
         // This object represents a non-terminal via a sequence of sub-trees
-        // which must be reparsed to create a single tree.
+        // which must be reparsed to create a single tree. Non-terminals are
+        // required to be symbols.
+        const Symbol *sym;
+        if (BlimpObject_ParseSymbol(symbol, &sym) != BLIMP_OK) {
+            goto error;
+        }
         NonTerminal nt;
-        if (Grammar_GetNonTerminal(&blimp->grammar, symbol, &nt) != BLIMP_OK) {
+        if (Grammar_GetNonTerminal(&blimp->grammar, sym, &nt) != BLIMP_OK) {
             BlimpObject_Release(visitor);
             goto error;
         }
@@ -297,7 +301,7 @@ static Status ParseObject(Blimp *blimp, Object *obj, ParseTree *tree)
 
 error:
     // Make sure `tree` is a valid parse tree even if we failed.
-    TRY(Blimp_GetSymbol(blimp, "", &symbol));
+    TRY(Blimp_GetSymbol(blimp, "", (const Symbol **)&symbol));
     TRY(ParseTree_Init(blimp, symbol, NULL, 0, NULL, tree));
     return Reraise(blimp);
 }
@@ -359,9 +363,23 @@ static Status MacroHandler(ParserContext *ctx, ParseTree *tree)
     }
     BlimpObject_Release(input_tree);
 
+    // We are going to replace the input tree with a newly parsed output tree,
+    // but first save the source range of the input tree, so we can later attach
+    // it to the output tree. Macro expansions should be tagged to the location
+    // in the source file where the macro was triggered.
+    //
+    // Note that we can improve error messages by _additionally_ tagging the
+    // output tree with the location of the macro _definition_, or with a full
+    // macro backtrace, but parse trees do not yet support multiple source
+    // ranges.
+    SourceRange range = tree->range;
+
     // Parse the output Object.
     ParseTree_Destroy(tree);
     TRY(ParseObject(ctx->blimp, output_tree, tree));
+
+    // Restore the source range.
+    tree->range = range;
 
     // The symbol of the resulting parse tree will be whatever the output of the
     // macro handler reduced to. But the invocation of the macro is supposed to
@@ -398,6 +416,7 @@ static Status MacroHandler(ParserContext *ctx, ParseTree *tree)
         arg->non_terminal_symbol,
         &tree->grammar_symbol.non_terminal));
 
+
     return BLIMP_OK;
 }
 
@@ -427,7 +446,8 @@ Status DefineMacro(
         return Blimp_ErrorMsg(blimp, BLIMP_INVALID_PARSE_TREE,
             "the production of a macro definition must be a non-temrinal");
     }
-    *nt_sym = tree.symbol;
+    assert(Object_Type(tree.symbol) == OBJ_SYMBOL);
+    *nt_sym = (const Symbol *)tree.symbol;
 
     // Extract the list of grammar symbols for the new production.
     Vector symbols;
@@ -441,13 +461,23 @@ Status DefineMacro(
         }
         *symbol = sub_tree->grammar_symbol;
         if (symbol->is_terminal) {
-            // If the gramamr symbol is a terminal, it may represent a new
+            // For the time being, we require the terminal to be a Symbol.
+            // Eventually, we may be able to remove this somewhat arbitrary
+            // restriction and allow terminals in macro definitions to be
+            // arbitrary Objects, though some design work is needed to decide
+            // exactly what this should mean.
+            const Symbol *term_sym;
+            if (BlimpObject_ParseSymbol(sub_tree->symbol, &term_sym)
+                    != BLIMP_OK)
+            {
+                Vector_Destroy(&symbols);
+                return Reraise(blimp);
+            }
+
+            // If the grammar symbol is a terminal, it may represent a new
             // terminal which has not yet been added to the lexer. Add it now.
-            if (CreateTerminal(
-                    blimp,
-                    sub_tree->symbol->name,
-                    &symbol->terminal
-                ) != BLIMP_OK)
+            if (CreateTerminal(blimp, term_sym->name, &symbol->terminal)
+                    != BLIMP_OK)
             {
                 Vector_Destroy(&symbols);
                 return Reraise(blimp);
@@ -579,13 +609,22 @@ Status DefaultGrammar(Blimp *blimp, Grammar *grammar)
 
     // Add non-terminals used by the default productions to the parser, in order
     // of increasing precedence:
-    NonTerminal NT_Expr, NT_ExprNoMsg, NT_Stmt, NT_StmtNoMsg, NT_Semi, NT_Term,
-        NT_TermNoMsg;
-    TRY(GetNonTerminal(grammar,"5", &NT_Semi));
+    NonTerminal NT_Expr, NT_ExprNoMsg, NT_Stmt, NT_StmtNoMsg, NT_Custom,
+        NT_CustomNoMsg, NT_Semi, NT_Term, NT_TermNoMsg;
     TRY(GetNonTerminal(grammar,"1", &NT_Expr));
     TRY(GetNonTerminal(grammar,"2", &NT_ExprNoMsg));
     TRY(GetNonTerminal(grammar,"3", &NT_Stmt));
     TRY(GetNonTerminal(grammar,"4", &NT_StmtNoMsg));
+    TRY(GetNonTerminal(grammar,"5", &NT_Semi));
+    // It's useful to have precedences in between the statement grammar (3, 4)
+    // and the term grammar (6, 7). The user cannot define new left-recursive
+    // forms at precedence 5 or lower, because there will always be statements
+    // (3) and semi-colons (5) on the parser stack, and so new forms with a
+    // lower precedence initial symbol will not be added to the parser state. On
+    // the other hand, terms cannot be left-recursive at all, since they are the
+    // highest precedence level, and that would create ambiguity.
+    TRY(GetNonTerminal(grammar,"custom1", &NT_Custom));
+    TRY(GetNonTerminal(grammar,"custom2", &NT_CustomNoMsg));
     TRY(GetNonTerminal(grammar,"6", &NT_Term));
     TRY(GetNonTerminal(grammar,"7", &NT_TermNoMsg));
 
@@ -602,21 +641,25 @@ Status DefaultGrammar(Blimp *blimp, Grammar *grammar)
     TRY(ADD_GRAMMAR_RULE(grammar, ExprNoMsg, (NT(StmtNoMsg)),
         NULL, NULL));
 
-    // Stmt[NoMsg] = Stmt[NoMsg] Term
-    TRY(ADD_GRAMMAR_RULE(grammar, Stmt, (NT(Stmt), NT(Term)),
+    // Stmt[NoMsg] = Stmt[NoMsg] Custom
+    TRY(ADD_GRAMMAR_RULE(grammar, Stmt, (NT(Stmt), NT(Custom)),
         NULL, NULL));
-    TRY(ADD_GRAMMAR_RULE(grammar, StmtNoMsg, (NT(StmtNoMsg), NT(Term)),
+    TRY(ADD_GRAMMAR_RULE(grammar, StmtNoMsg, (NT(StmtNoMsg), NT(Custom)),
         NULL, NULL));
-    //      \> Term Term
-    TRY(ADD_GRAMMAR_RULE(grammar, Stmt, (T(MACRO), NT(Term), NT(Term)),
+    //      \> Stmt Custom
+    TRY(ADD_GRAMMAR_RULE(grammar, Stmt, (T(MACRO), NT(Stmt), NT(Custom)),
         PrecedenceHandler, NULL));
-    TRY(ADD_GRAMMAR_RULE(grammar, StmtNoMsg, (T(MACRO), NT(Term), NT(Term)),
+    TRY(ADD_GRAMMAR_RULE(grammar, StmtNoMsg, (T(MACRO), NT(Stmt), NT(Custom)),
         PrecedenceHandler, NULL));
-    //      \ term
-    TRY(ADD_GRAMMAR_RULE(grammar, Stmt, (NT(Term)),
+    //      \ Custom[NoMsg]
+    TRY(ADD_GRAMMAR_RULE(grammar, Stmt, (NT(Custom)),
         NULL, NULL));
-    TRY(ADD_GRAMMAR_RULE(grammar, StmtNoMsg, (NT(TermNoMsg)),
+    TRY(ADD_GRAMMAR_RULE(grammar, StmtNoMsg, (NT(CustomNoMsg)),
         NULL, NULL));
+
+    // Custom[NoMsg] = Term[NoMsg]
+    TRY(ADD_GRAMMAR_RULE(grammar, Custom, (NT(Term)), NULL, NULL));
+    TRY(ADD_GRAMMAR_RULE(grammar, CustomNoMsg, (NT(TermNoMsg)), NULL, NULL));
 
     // Semi = ";"
     TRY(ADD_GRAMMAR_RULE(grammar, Semi, (T(SEMI)),
@@ -635,6 +678,9 @@ Status DefaultGrammar(Blimp *blimp, Grammar *grammar)
     TRY(ADD_GRAMMAR_RULE(grammar, TermNoMsg, (T(LBRACE), T(MSG_NAME), NT(Expr), T(RBRACE)),
         NULL, NULL));
     TRY(ADD_GRAMMAR_RULE(grammar, TermNoMsg, (T(LBRACE), NT(ExprNoMsg), T(RBRACE)),
+        NULL, NULL));
+    //      \ "!" expr
+    TRY(ADD_GRAMMAR_RULE(grammar, TermNoMsg, (T(BANG), NT(Term)),
         NULL, NULL));
     //      \ symbol
     TRY(ADD_GRAMMAR_RULE(grammar, TermNoMsg, (T(SYMBOL)),
@@ -733,7 +779,8 @@ static inline const Symbol *SubToken(
 {
     const ParseTree *sub_tree = SubTree(tree, index);
     if (sub_tree->grammar_symbol.is_terminal) {
-        return sub_tree->symbol;
+        assert(Object_Type(sub_tree->symbol) == OBJ_SYMBOL);
+        return (const Symbol *)sub_tree->symbol;
     } else {
         assert(sub_tree->num_sub_trees == 1);
         return SubToken(sub_tree, 0);
@@ -869,7 +916,7 @@ static Status ParseTreeNodeToExpr(
 
     switch (node->type) {
         case PARSE_TREE_TERMINAL:
-            return BlimpExpr_NewSymbol(blimp, tree->symbol, expr);
+            return BlimpExpr_NewObject(blimp, tree->symbol, expr);
         case PARSE_TREE_TRIVIAL:
             *expr = left;
             return BLIMP_OK;

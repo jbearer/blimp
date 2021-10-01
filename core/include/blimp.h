@@ -939,7 +939,7 @@ typedef struct {
 typedef struct BlimpParseTree {
     BlimpGrammarSymbol grammar_symbol;
         ///< The symbol the parser used to match the input.
-    const BlimpSymbol *symbol;
+    struct BlimpObject *symbol;
         ///< `bl:mp`-facing, BlimpSymbol representation of `grammar_symbol`.
     struct BlimpParseTree *sub_trees;
         ///< malloc()-allocated array of sub-trees.
@@ -974,7 +974,7 @@ typedef struct BlimpParseTree {
  */
 BlimpStatus BlimpParseTree_Init(
     Blimp *blimp,
-    const BlimpSymbol *symbol,
+    struct BlimpObject *symbol,
     BlimpParseTree *children,
     size_t num_children,
     const BlimpSourceRange *range,
@@ -1384,6 +1384,14 @@ BlimpObject *Blimp_GlobalObject(Blimp *blimp);
  * \brief Print a legible representation of `obj` to a file.
  */
 void BlimpObject_Print(FILE *file, const BlimpObject *obj);
+
+/**
+ * \brief Write a human-readable representation of `obj` to `file`.
+ *
+ * This function expresses an object textually using the language of the
+ * semi-formal semantic model for bl:mp (/docs/semantics.rkt).
+ */
+void BlimpObject_Dump(FILE *file, const BlimpObject *obj);
 
 /**
  * \brief Retrieve the type-specific properties of a block object.

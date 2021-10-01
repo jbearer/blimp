@@ -2,7 +2,7 @@
 
 # Message send benchmark. Sends a trivial messag 1 million times.
 
-!benchmark{n{^ 1000000}; send} {
+:benchmark{n{^ 1000000}; send} {
     {.}{.}
 };
 

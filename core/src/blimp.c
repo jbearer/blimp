@@ -337,6 +337,55 @@ void BlimpObject_Print(FILE *f, const Object *obj)
     }
 }
 
+void BlimpObject_Dump(FILE *f, const Object *obj) {
+    Blimp *blimp = Object_Blimp(obj);
+
+    switch (Object_Type(obj)) {
+        case OBJ_SYMBOL:
+            fprintf(f, "|%s|", ((const Symbol *)obj)->name);
+            break;
+        case OBJ_BLOCK: {
+            DeBruijnMap scopes;
+            DBMap_Init(blimp, &scopes);
+
+            for (const ScopedObject *cur = (const ScopedObject *)obj;
+                 cur != NULL;
+                 cur = cur->parent)
+            {
+                size_t i = 0;
+                if (Object_Type((Object *)cur) == OBJ_BLOCK) {
+                    BlockObject *block = (BlockObject *)cur;
+                    DBMap_Shift(&scopes, (void *)block->msg_name);
+                    ++i;
+                }
+
+                for (; i < cur->owned_captures; ++i) {
+                    DBMap_Shift(&scopes, NULL);
+                }
+            }
+
+            BlockObject *block = (BlockObject *)obj;
+            fprintf(f, "(obj |^%s|", block->msg_name->name);
+            DumpClosure(f, Bytecode_Expr(block->code), &scopes);
+            fprintf(f, ")");
+
+            DBMap_Destroy(&scopes);
+            break;
+        }
+        case OBJ_EXTENSION:
+            fprintf(f, "(extension)");
+            break;
+        case OBJ_REFERENCE:
+            fprintf(f, "(ref %s)", ((ReferenceObject *)obj)->symbol->name);
+            break;
+        case OBJ_GLOBAL:
+            fprintf(f, "(global)");
+            break;
+        default:
+            assert(false);
+    }
+}
+
 Status BlimpObject_ParseBlock(const Object *obj, Bytecode **code)
 {
     if (Object_Type(obj) != OBJ_BLOCK) {

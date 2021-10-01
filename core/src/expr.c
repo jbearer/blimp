@@ -16,9 +16,7 @@ static Status Expr_New(Blimp *blimp, ExprType type, Expr **expr)
 
 Status BlimpExpr_NewSymbol(Blimp *blimp, const Symbol *sym, Expr **expr)
 {
-    TRY(Expr_New(blimp, EXPR_SYMBOL, expr));
-    (*expr)->symbol = sym;
-    return BLIMP_OK;
+    return BlimpExpr_NewObject(blimp, (Object *)sym, expr);
 }
 
 Status BlimpExpr_NewBlock(
@@ -59,7 +57,7 @@ Status BlimpExpr_NewMacro(
 Status BlimpExpr_NewMsgName(Blimp *blimp, const Symbol *name, Expr **expr)
 {
     TRY(Expr_New(blimp, EXPR_MSG_NAME, expr));
-    (*expr)->symbol = name;
+    (*expr)->msg_name = name;
     return BLIMP_OK;
 }
 
@@ -70,14 +68,20 @@ Status BlimpExpr_NewMsgIndex(Blimp *blimp, size_t index, Expr **expr)
     return BLIMP_OK;
 }
 
+Status BlimpExpr_NewObject(Blimp *blimp, Object *object, Expr **expr)
+{
+    TRY(Expr_New(blimp, EXPR_OBJECT, expr));
+    (*expr)->object = BlimpObject_Borrow(object);
+    return BLIMP_OK;
+}
+
 Status BlimpExpr_ParseSymbol(Expr *expr, const Symbol **sym)
 {
-    if (expr->tag != EXPR_SYMBOL) {
+    if (expr->tag != EXPR_OBJECT) {
         return Blimp_Error(expr->blimp, BLIMP_MUST_BE_SYMBOL);
     }
 
-    *sym = expr->symbol;
-    return BLIMP_OK;
+    return BlimpObject_ParseSymbol(expr->object, sym);
 }
 
 static Status ResolveExpr(Blimp *blimp, Expr *expr, DeBruijnMap *scopes);
@@ -85,7 +89,7 @@ static Status ResolveExpr(Blimp *blimp, Expr *expr, DeBruijnMap *scopes);
 static Status ResolveStmt(Blimp *blimp, Expr *stmt, DeBruijnMap *scopes)
 {
     switch (stmt->tag) {
-        case EXPR_SYMBOL:
+        case EXPR_OBJECT:
         case EXPR_MSG:
             return BLIMP_OK;
         case EXPR_SEND:
@@ -107,7 +111,7 @@ static Status ResolveStmt(Blimp *blimp, Expr *stmt, DeBruijnMap *scopes)
             DBMap_Pop(scopes);
             return BLIMP_OK;
         case EXPR_MSG_NAME: {
-            const Symbol *sym = stmt->symbol;
+            const Symbol *sym = stmt->msg_name;
             stmt->tag = EXPR_MSG;
             if (DBMap_Index(
                     scopes,
@@ -182,13 +186,13 @@ void Blimp_FreeExpr(Expr *expr)
 
         // Free subexpressions.
         switch (expr->tag) {
-            case EXPR_SYMBOL:
-                // Do nothing. Symbols are global, and they don't get cleaned up
-                // until the entire bl:mp is destroyed.
+            case EXPR_OBJECT:
+                BlimpObject_Release(expr->object);
                 break;
             case EXPR_BLOCK:
-                // We don't have to clean up the `msg_name` symbol, for the same
-                // reason as above.
+                // We don't have to clean up the `msg_name` symbol. Symbols are
+                // global, and they don't get cleaned up until the entire bl:mp
+                // is destroyed.
                 Blimp_FreeExpr(expr->block.code);
                 break;
             case EXPR_SEND:
@@ -241,7 +245,7 @@ static void DumpSymbol(FILE *file, const Symbol *sym)
     fputs("}|", file);
 }
 
-static void DumpExpr(FILE *file, const Expr *expr, DeBruijnMap *scopes)
+void DumpClosure(FILE *file, const Expr *expr, DeBruijnMap *scopes)
 {
     size_t seq_length = 0;
     while (expr) {
@@ -251,8 +255,10 @@ static void DumpExpr(FILE *file, const Expr *expr, DeBruijnMap *scopes)
         }
 
         switch (expr->tag) {
-            case EXPR_SYMBOL:
-                DumpSymbol(file, expr->symbol);
+            case EXPR_OBJECT:
+                fputs("(value ", file);
+                BlimpObject_Dump(file, expr->object);
+                fputc(')', file);
                 break;
             case EXPR_BLOCK:
                 fputs("(block ^", file);
@@ -260,23 +266,23 @@ static void DumpExpr(FILE *file, const Expr *expr, DeBruijnMap *scopes)
                 fputc(' ', file);
 
                 DBMap_Push(scopes, (void *)expr->block.msg_name);
-                DumpExpr(file, expr->block.code, scopes);
+                DumpClosure(file, expr->block.code, scopes);
                 DBMap_Pop(scopes);
 
                 fputc(')', file);
                 break;
             case EXPR_SEND:
                 fputc('(', file);
-                DumpExpr(file, expr->send.receiver, scopes);
+                DumpClosure(file, expr->send.receiver, scopes);
                 fputc(' ', file);
-                DumpExpr(file, expr->send.message, scopes);
+                DumpClosure(file, expr->send.message, scopes);
                 fputc(')', file);
                 break;
             case EXPR_MACRO:
                 fputs("(macro ", file);
-                DumpExpr(file, expr->macro.production, scopes);
+                DumpClosure(file, expr->macro.production, scopes);
                 fputc(' ', file);
-                DumpExpr(file, expr->macro.handler, scopes);
+                DumpClosure(file, expr->macro.handler, scopes);
                 fputc(')', file);
                 break;
             case EXPR_MSG:
@@ -303,7 +309,7 @@ void Blimp_DumpExpr(Blimp *blimp, FILE *file, const Expr *expr)
 {
     DeBruijnMap scopes;
     DBMap_Init(blimp, &scopes);
-    DumpExpr(file, expr, &scopes);
+    DumpClosure(file, expr, &scopes);
     DBMap_Destroy(&scopes);
 }
 
@@ -311,8 +317,8 @@ void PrintClosure(FILE *f, const Expr *expr, DeBruijnMap *scopes)
 {
     while (expr) {
         switch (expr->tag) {
-            case EXPR_SYMBOL:
-                fputs(expr->symbol->name, f);
+            case EXPR_OBJECT:
+                BlimpObject_Print(f, expr->object);
                 break;
             case EXPR_BLOCK:
                 fputc('{', f);

@@ -9,18 +9,18 @@ The `bl:mp` test runner, `blimp-test`, interprets "`bl:mp` test" files, denoted 
 
   Function                | Description
 :------------------------:|:-------------------------------------------------------------------
-| `!expect bool`          | Causes a test failure if `bool` does not evaluate to `true`.
-| `!expect_eq a b`        | Causes a test failure if `a` and `b` do not evaluate to the same symbol.
-| `!expect_lt a b`        | Checks that a numeric symbol is less than another numeric symbol.
-| `!expect_percent p a b` | `p`, `a`, and `b` should be numeric symbols, with `0 <= p <= 1`. Checks that the `a` is approximately equal to `b` within a margin of `p`%.
-| `!expect_error { ... }` | Causes a test failure unless the block fails to evaluate.
-| `!benchmark { [options]; name } { ... } ` | Runs a block many times and displays performance statistics.
-| `!gc_print_stats`       | Prints GC statistics.
-| `!gc_unreachable`       | Returns a symbol representing the number of unreachable allocated objects.
-| `!gc_expect_clean`      | Checks that all allocated objects are reachable.
-| `!gc_check_collect`     | Triggers a garbage collection sweep and then checks that all allocated objects are reachable.
-| `!gc_collect`           | Triggers a garbage collection sweep.
-| `!print_code`           | Prints the bytecode for the program.
+| `:expect bool`          | Causes a test failure if `bool` does not evaluate to `true`.
+| `:expect_eq a b`        | Causes a test failure if `a` and `b` do not evaluate to the same symbol.
+| `:expect_lt a b`        | Checks that a numeric symbol is less than another numeric symbol.
+| `:expect_percent p a b` | `p`, `a`, and `b` should be numeric symbols, with `0 <= p <= 1`. Checks that the `a` is approximately equal to `b` within a margin of `p`%.
+| `:expect_error { ... }` | Causes a test failure unless the block fails to evaluate.
+| `:benchmark { [options]; name } { ... } ` | Runs a block many times and displays performance statistics.
+| `:gc_print_stats`       | Prints GC statistics.
+| `:gc_unreachable`       | Returns a symbol representing the number of unreachable allocated objects.
+| `:gc_expect_clean`      | Checks that all allocated objects are reachable.
+| `:gc_check_collect`     | Triggers a garbage collection sweep and then checks that all allocated objects are reachable.
+| `:gc_collect`           | Triggers a garbage collection sweep.
+| `:print_code`           | Prints the bytecode for the program.
 
 In addition, test programs can also use the commands provided by the REPL (prefixed with `?`).
 
@@ -40,4 +40,4 @@ The `blimp-test` runner has a number of command line arguments which can be used
 Individual tests can also override the options passed via the command line using a special pragma: if the first line of a `.blt` file starts with `#:`, the test runner will interpret the remainder of that line as options which should override the global options just for that test. For example, to disable the Racket semantics for a particular test, add the line `#: --skip-racket` at the start of the test file. Or, to disable a test, you can add a filter that you know does not match the name of the test. For example: `#: -F"skipped: pending feature XYZ"`.
 
 ## performance tests
-Tests which use the `!benchmark` intrinsic are performances tests. When run with `--verbose=stats`, these tests will print out a summary of their performance on the benchmark. In addition, `--perf-report=FILE` can be used to print a summary of all the benchmarks in a given test run to a file. These files can then be compared using `perf_compare.py` to check for performance regressions.
+Tests which use the `:benchmark` intrinsic are performances tests. When run with `--verbose=stats`, these tests will print out a summary of their performance on the benchmark. In addition, `--perf-report=FILE` can be used to print a summary of all the benchmarks in a given test run to a file. These files can then be compared using `perf_compare.py` to check for performance regressions.

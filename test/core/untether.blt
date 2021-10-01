@@ -1,0 +1,35 @@
+# We can "time travel" by making effects from lexically later parts of the
+# program happen at parse time, and thus before lexically earlier effects that
+# happen at run time.
+:expect_eq (foo[]) bar;
+!(foo{^} {bar});
+
+# We can embed an object literal in the AST, which will yield the same object
+# each time it is evaluated at run time.
+get_static_cell{^} {
+    !({
+        val{^ref
+            ^ref{undefined};
+            {^M
+                {^old
+                    ^ref {(^M) ^old};
+                    ^old
+                } (val[])
+            }
+        }
+    }[])
+};
+:expect_eq(get_static_cell[]{foo}) undefined;
+:expect_eq(get_static_cell[]{^}) foo;
+
+# Object literals are children of the global scope.
+{
+    !(global1{^} {foo})
+};
+:expect_eq (global1[]) foo;
+!{
+    !(global2{^} {bar})
+}
+:expect_eq (global2[]) bar;
+
+.

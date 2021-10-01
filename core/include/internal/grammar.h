@@ -17,11 +17,24 @@
 // indicate increasing precedence:
 //
 //  Expr -> Stmt ; Expr | Stmt
-//  Stmt -> Stmt Expr | Term
+//  Stmt -> Stmt Custom | Custom
+//  Custom -> Term
 //  Term -> {^msg Expr}
+//        | ! Term
 //        | sym
 //        | ^msg
 //        | ( Expr )
+//
+// Notice that we add one extra precedence level, Custom, between Stmt and Term.
+// While Custom does not have any productions itself besides the trivial one, it
+// is a good precedence level at which users can add their own syntactic forms
+// using macros. This is necessary because users cannot add syntactic forms that
+// start with a non-terminal at the level of Stmt or lower, since Stmt is the
+// precedence of a top-level item, and thus newly defined rules starting with
+// such a low-precedence symbol will never be incorporated into the parser
+// state. It is also cumbersome to add new forms at the Term-level, because
+// Terms cannot be left-recursive (this would create ambiguities due to the
+// presence of the prefix operator !).
 //
 // Unfortunately, the ^msg part of the block syntax is optional, and this
 // complicates everything. Consider {^msg foo}. This could be parsed as a block
@@ -38,13 +51,16 @@
 //             | Stmt
 //  ExprNoMsg -> StmtNoMsg ; Expr
 //             | StmtNoMsg
-//  Stmt      -> Stmt Expr
-//             | Term
-//  StmtNoMsg -> StmtNoMsg Expr
-//             | TermNoMsg
+//  Stmt      -> Stmt Custom
+//             | Custom
+//  StmtNoMsg -> StmtNoMsg Custom
+//             | CustomNoMsg
+//  Custom    -> Term
+//  CustomNoMsg -> TermNoMsg
 //  Term      -> TermNoMsg | ^msg
 //  TermNoMsg -> {^msg Expr}
 //             | {ExprNoMsg}
+//             | ! Expr
 //             | sym
 //             | ( Expr )
 //

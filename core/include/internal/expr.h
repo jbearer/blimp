@@ -7,7 +7,7 @@
 #include "internal/symbol.h"
 
 typedef enum {
-    EXPR_SYMBOL,
+    EXPR_OBJECT,
     EXPR_BLOCK,
     EXPR_SEND,
     EXPR_MACRO,
@@ -41,7 +41,7 @@ struct BlimpExpr {
     Expr *last;
 
     union {
-        const Symbol *symbol;
+        Object *object;
 
         struct {
             const Symbol *msg_name;
@@ -99,6 +99,10 @@ struct BlimpExpr {
                 // lexical child of at least `n + 1` nested scopes.
         } msg;
 
+        const Symbol *msg_name;
+            // An unresolved message name. This will be replaced by `msg` during
+            // BlimpExpr_Resolve().
+
         Token tok;
     };
 };
@@ -107,6 +111,7 @@ PRIVATE Status BlimpExpr_NewMsgName(Blimp *blimp, const Symbol *name, Expr **exp
 PRIVATE Status BlimpExpr_NewMsgIndex(Blimp *blimp, size_t index, Expr **expr);
 PRIVATE Status BlimpExpr_NewMacro(
     Blimp *blimp, Expr *production, Expr *handler, Expr **expr);
+PRIVATE Status BlimpExpr_NewObject(Blimp *blimp, Object *object, Expr **expr);
 
 // Replace any EXPR_MSG_NAME sub-expressions of `expr` with an EXPR_MSG where
 // the `index` indicates the depth relative to the scope whose message name
@@ -114,5 +119,6 @@ PRIVATE Status BlimpExpr_NewMacro(
 PRIVATE Status BlimpExpr_Resolve(Blimp *blimp, Expr *expr);
 
 PRIVATE void PrintClosure(FILE *f, const Expr *expr, DeBruijnMap *scopes);
+PRIVATE void DumpClosure(FILE *f, const Expr *expr, DeBruijnMap *scopes);
 
 #endif

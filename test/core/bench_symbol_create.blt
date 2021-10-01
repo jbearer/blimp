@@ -9,7 +9,7 @@
 # Removed words with non-ASCII letters (e.g. umlauts and accents). Removed
 # "bind", which is not a valid symbol.
 
-!benchmark{n{^ 1000}; ops{^ 80071}; symbol_create} {
+:benchmark{n{^ 1000}; ops{^ 80071}; symbol_create} {
     A;
     a;
     Aachen;

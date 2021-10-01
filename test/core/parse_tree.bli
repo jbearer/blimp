@@ -193,7 +193,7 @@
     # parse trees
     #
 
-    \> {^ {^{``}; 7} {`->`} {`{`} {^{``}; grammar_symbols} {`}`}; 7} {^toks
+    \> {^ {^{``}; 7} {`->`} {`{`} {^{``}; grammar_symbols} {`}`}; custom1} {^toks
         {
             n_ref{^ ^};
             n n_ref;
@@ -231,7 +231,7 @@
 
     # A parse tree with an altered non-terminal. `n => T` has non-terminal `n`
     # and the same children as the parse tree `T`.
-    \> {^{^{``}; 7} {`=>`} {^{``}; 7}; 7} {^toks
+    \> {^{^{``}; 7} {`=>`} {^{``}; 7}; custom1} {^toks
         {
             n_ref{^ ^};
             n n_ref;

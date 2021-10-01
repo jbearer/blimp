@@ -408,6 +408,7 @@
 #include "vector.h"
 
 #include "internal/expr.h"
+#include "internal/grammar.h"
 #include "internal/parse.h"
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -3048,29 +3049,61 @@ static inline void Lexer_Commit(Lexer *lex)
 // Parsing
 //
 
-Status ParseTree_Init(
+static Status ParseTree_InitWithGrammarSymbol(
     Blimp *blimp,
-    const Symbol *symbol,
+    GrammarSymbol grammar_symbol,
+    Object *symbol,
     ParseTree *children,
     size_t num_children,
     const SourceRange *range,
     ParseTree *tree)
 {
-    // Convert the symbol to a grammar symbol based on whether it is expected to
-    // be a terminal or a non-terminal.
-    tree->grammar_symbol.is_terminal = num_children == 0;
-    if (tree->grammar_symbol.is_terminal) {
-        Token tok;
-        TRY(TokenTrie_GetToken(&blimp->tokens, symbol->name, &tok));
-        tree->grammar_symbol.terminal = tok.type;
+    // Check if this is an untether expression. If it is, it takes flight now,
+    // the instant the parse tree is created. Untether parse trees look like
+    //      7 -> {`!` <expr>}
+    if (
+        num_children == 2 &&
+        symbol != NULL &&
+        Object_Type(symbol) == OBJ_SYMBOL &&
+        strcmp("7", ((const Symbol *)symbol)->name) == 0 &&
+        children[0].grammar_symbol.is_terminal &&
+        children[0].grammar_symbol.terminal == TOK_BANG
+    ) {
+        // Construct an expression from the parse tree.
+        Expr *expr;
+        TRY(ParseTreeToExpr(blimp, &children[1], &expr));
+        if (BlimpExpr_Resolve(blimp, expr) != BLIMP_OK) {
+            Blimp_FreeExpr(expr);
+            return Reraise(blimp);
+        }
+
+        // Evaluate the expression to the object which will become the terminal
+        // symbol of the newly constructed parse tree.
+        Object *obj;
+        if (Blimp_Eval(blimp, expr, Blimp_GlobalObject(blimp), &obj)
+                != BLIMP_OK)
+        {
+            Blimp_FreeExpr(expr);
+            return Reraise(blimp);
+        }
+
+        tree->grammar_symbol = (GrammarSymbol) {
+            .is_terminal = true,
+            .terminal = TOK_OBJECT,
+        };
+        tree->symbol = obj;
+        tree->sub_trees = NULL;
+        tree->num_sub_trees = 0;
+
+        Blimp_FreeExpr(expr);
+        free(children);
     } else {
-        TRY(Grammar_GetNonTerminal(
-            &blimp->grammar, symbol, &tree->grammar_symbol.non_terminal));
+        tree->grammar_symbol = grammar_symbol;
+        tree->symbol = symbol != NULL ? BlimpObject_Borrow(symbol) : NULL;
+        tree->sub_trees = children;
+        tree->num_sub_trees = num_children;
     }
 
-    tree->symbol = symbol;
-    tree->sub_trees = children;
-    tree->num_sub_trees = num_children;
     if (range != NULL) {
         tree->range = *range;
     } else {
@@ -3079,18 +3112,58 @@ Status ParseTree_Init(
     return BLIMP_OK;
 }
 
+Status ParseTree_Init(
+    Blimp *blimp,
+    Object *symbol,
+    ParseTree *children,
+    size_t num_children,
+    const SourceRange *range,
+    ParseTree *tree)
+{
+    // Convert the symbol to a grammar symbol based on whether it is expected to
+    // be a terminal or a non-terminal.
+    GrammarSymbol grammar_symbol;
+    grammar_symbol.is_terminal = num_children == 0;
+    if (grammar_symbol.is_terminal) {
+        if (Object_Type(symbol) == OBJ_SYMBOL) {
+            // If the token is a symbol representing the name of a non-terminal,
+            // look up the non-terminal.
+            Token tok;
+            TRY(TokenTrie_GetToken(
+                &blimp->tokens, ((const Symbol *)symbol)->name, &tok));
+            grammar_symbol.terminal = tok.type;
+        } else {
+            // All non-symbol terminals are captured by TOK_OBJECT.
+            grammar_symbol.terminal = TOK_OBJECT;
+        }
+    } else {
+        // Non-terminals must be symbols, so we can look them up in our non-
+        // terminal map.
+        const Symbol *sym;
+        TRY(BlimpObject_ParseSymbol(symbol, &sym));
+        TRY(Grammar_GetNonTerminal(
+            &blimp->grammar, sym, &grammar_symbol.non_terminal));
+    }
+
+    return ParseTree_InitWithGrammarSymbol(
+        blimp, grammar_symbol, symbol, children, num_children, range, tree);
+}
+
 void ParseTree_Destroy(ParseTree *tree)
 {
     for (size_t i = 0; i < tree->num_sub_trees; ++i) {
         ParseTree_Destroy(&tree->sub_trees[i]);
     }
     free(tree->sub_trees);
+    if (tree->symbol != NULL) {
+        BlimpObject_Release(tree->symbol);
+    }
 }
 
 Status ParseTree_Copy(Blimp *blimp, const ParseTree *from, ParseTree *to)
 {
     to->grammar_symbol = from->grammar_symbol;
-    to->symbol = from->symbol;
+    to->symbol = from->symbol != NULL ? BlimpObject_Borrow(from->symbol) : NULL;
     to->range = from->range;
     to->num_sub_trees = from->num_sub_trees;
 
@@ -3214,13 +3287,13 @@ static Status ParseTreeStream_Peek(
             }
 
             // Convert the peeked Token to a ParseTree with a Terminal symbol.
-            tree->grammar_symbol = (GrammarSymbol){
-                .is_terminal = true, .terminal = tok.type};
-            tree->symbol = tok.symbol;
-            tree->sub_trees = NULL;
-            tree->num_sub_trees = 0;
-            tree->range = tok.range;
-            return BLIMP_OK;
+            return ParseTree_InitWithGrammarSymbol(
+                blimp,
+                (GrammarSymbol){ .is_terminal = true, .terminal = tok.type },
+                (Object *)tok.symbol,
+                NULL, 0,
+                &tok.range,
+                tree);
         }
 
         case STREAM_VECTOR: {
@@ -3246,18 +3319,20 @@ static Status ParseTreeStream_Peek(
                 {
                     tree->grammar_symbol.terminal = TOK_SYMBOL;
                 }
+                return BLIMP_OK;
             } else {
                 // Otherwise, return EOF.
-                tree->grammar_symbol = (GrammarSymbol) {
-                    .is_terminal = true,
-                    .terminal = TOK_EOF,
-                };
-                tree->symbol = NULL;
-                tree->sub_trees = NULL;
-                tree->num_sub_trees = 0;
-                tree->range = (SourceRange){0};
+                return ParseTree_InitWithGrammarSymbol(
+                    blimp,
+                    (GrammarSymbol){
+                        .is_terminal = true,
+                        .terminal = TOK_EOF
+                    },
+                    NULL,
+                    NULL, 0,
+                    NULL,
+                    tree);
             }
-            return BLIMP_OK;
         }
 
         default:
@@ -3422,30 +3497,36 @@ static Status ParseStream(
                 {
                     goto error;
                 }
-                ParseTree fragment = {
-                    .grammar_symbol = grammar_symbol,
-                    .symbol = symbol,
-                    .num_sub_trees = production->num_symbols,
-                    .sub_trees = malloc(
-                        production->num_symbols*sizeof(ParseTree))
-                };
-                if (fragment.sub_trees == NULL) {
+
+                // Begin constructing the new parse tree, starting with its
+                // sub-trees.
+                ParseTree *sub_trees = malloc(
+                    production->num_symbols*sizeof(ParseTree));
+                if (sub_trees == NULL) {
                     Error(blimp, BLIMP_OUT_OF_MEMORY);
                     goto error;
                 }
-
                 // Get the parse tree fragments which this reduction will
                 // consume from the parse tree stack.
-                Vector_ContractOut(
-                    &output, production->num_symbols, fragment.sub_trees);
-
+                Vector_ContractOut(&output, production->num_symbols, sub_trees);
                 // Set the source range to encompass the range of all the sub-
                 // trees.
-                fragment.range = (SourceRange) {
-                    .start = SubTree(&fragment, 0)->range.start,
-                    .end = SubTree(
-                        &fragment, production->num_symbols-1)->range.end,
+                SourceRange range = {
+                    .start = sub_trees[0].range.start,
+                    .end = sub_trees[production->num_symbols-1].range.end,
                 };
+                ParseTree fragment;
+                if (ParseTree_Init(
+                        blimp,
+                        (Object *)symbol,
+                        sub_trees,
+                        production->num_symbols,
+                        &range,
+                        &fragment
+                    ) != BLIMP_OK)
+                {
+                    goto error;
+                }
 
                 // Remove the corresponding symbols from `output_precedences`
                 // for each expression consumed from `output`.
@@ -3547,11 +3628,15 @@ static Status ParseStream(
                     if (tree.grammar_symbol.is_terminal) {
                         // If the input that caused the error is a terminal,
                         // include it in the error message.
+                        const char *name =
+                            Object_Type(tree.symbol) == OBJ_SYMBOL
+                                ? ((const Symbol *)tree.symbol)->name
+                                : "<object literal>";
                         ErrorFrom(blimp, tree.range,
                             BLIMP_AMBIGUOUS_PARSE,
                             "ambiguous parse at input `%s' (%s conflict). "
                             "Perhaps you need to add parentheses?",
-                            tree.symbol->name, conflict
+                            name, conflict
                         );
                     } else {
                         ErrorFrom(blimp, tree.range,
@@ -3575,9 +3660,13 @@ static Status ParseStream(
                 } else if (tree.grammar_symbol.is_terminal) {
                     // If the unexpected input was a terminal, include it in the
                     // output.
+                    const char *name =
+                        Object_Type(tree.symbol) == OBJ_SYMBOL
+                            ? ((const Symbol *)tree.symbol)->name
+                            : "<object literal>";
                     ErrorFrom(blimp, tree.range,
                         BLIMP_UNEXPECTED_TOKEN,
-                        "unexpected token `%s'", tree.symbol->name);
+                        "unexpected token `%s'", name);
                 } else {
                     // Otherwise, include the name of the unexpected
                     // non-terminal.

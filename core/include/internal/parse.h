@@ -18,6 +18,8 @@ typedef enum {
     TOK_SYMBOL,
     TOK_EOF,
     TOK_WHITESPACE,
+    TOK_BANG,
+    TOK_OBJECT,
     NUM_BUILT_IN_TOKENS,
 } BuiltInToken;
 

@@ -2012,7 +2012,7 @@ scope{^{
 
 go{^(scope[])};
 
-!benchmark{n{^ 5000}; ops{^ 1000}; block_get} {
+:benchmark{n{^ 5000}; ops{^ 1000}; block_get} {
     go[]
 };
 

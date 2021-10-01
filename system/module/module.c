@@ -152,7 +152,11 @@ static BlimpStatus ImportHandler(BlimpParserContext *ctx, BlimpParseTree *tree)
     const char **path = (const char **)ctx->arg;
 
     assert(tree->sub_trees[1].grammar_symbol.is_terminal);
-    const BlimpSymbol *module = tree->sub_trees[1].symbol;
+    const BlimpSymbol *module;
+    if (BlimpObject_ParseSymbol(tree->sub_trees[1].symbol, &module) != BLIMP_OK)
+    {
+        return Blimp_Reraise(ctx->blimp);
+    }
 
     BlimpParseTree parsed;
     if (BlimpModule_StaticImport(
@@ -401,19 +405,29 @@ BlimpStatus BlimpModule_StaticImport(
                     return Blimp_Error(blimp, BLIMP_OUT_OF_MEMORY);
                 }
                 if (BlimpParseTree_Init(
-                        blimp, import_extension, NULL, 0, NULL, &sub_trees[0])
-                    != BLIMP_OK)
+                        blimp,
+                        (BlimpObject *)import_extension,
+                        NULL,
+                        0,
+                        NULL,
+                        &sub_trees[0]
+                    ) != BLIMP_OK)
                 {
                     return Blimp_Reraise(blimp);
                 }
                 if (BlimpParseTree_Init(
-                        blimp, path_sym, NULL, 0, NULL, &sub_trees[1])
-                    != BLIMP_OK)
+                        blimp,
+                        (BlimpObject *)path_sym,
+                        NULL,
+                        0,
+                        NULL,
+                        &sub_trees[1]
+                    ) != BLIMP_OK)
                 {
                     return Blimp_Reraise(blimp);
                 }
                 if (BlimpParseTree_Init(
-                        blimp, prec3, sub_trees, 2, NULL, result)
+                        blimp, (BlimpObject *)prec3, sub_trees, 2, NULL, result)
                     != BLIMP_OK)
                 {
                     return Blimp_Reraise(blimp);
