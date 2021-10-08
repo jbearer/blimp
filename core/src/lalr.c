@@ -172,10 +172,19 @@
 //
 // Now that we know how to construct states, with their kernels and closures, we
 // need to compute the transitions between them to arrive at a parser automaton.
-// The process is straightforward: begin with the item `S -> ⋅sym` (determined
-// by taking the grammar's unique starting rule and placing a ⋅ at the start of
-// the production). Construct the closure of the state with that kernel. Perhaps
-// it looks something like this:
+// We begin with a starting state for each non-terminal N (other than the start
+// symbol S), whose kernels each contain the single item `S -> ⋅N`. Building all
+// of these starting states into the same automaton allows a single parse table
+// to parse any desired non-terminal just by choosing the appropriate starting
+// state. This is especially important for bl:mp, where macro expansions specify
+// a particular non-terminal by which they should be parsed. Since the same
+// parse table works for all such parse operations, the table (which is
+// expensive to compute) can be effectively cached and reused for all subsequent
+// parses with the same grammar.
+//
+// Now, for each of our starting kernels, we construct the closure of the
+// starting state by the process described above. Perhaps it looks something
+// like this:
 //
 //           -----------
 //          | S -> ⋅A   |
@@ -198,7 +207,7 @@
 // those transitions to shift actions and gotos (as Jackson does) we represent
 // the transitions in the state machine itself as either shift actions (for
 // transitions on terminals) or gotos (for transitions on non-terminals). So, at
-// the end of this phase we actually end up with a partially filled out parser
+// the end of this phase we actually end up with a partially filled out parse
 // table. All of the shifts and gotos are there; all that's missing are the
 // "accept" and "reduce" actions.
 //
@@ -335,13 +344,12 @@
 // thus change the state machine) how can we be sure we aren't changing the
 // meaning of the states on the stack?
 //
-// We do this using precedence. First, the states in the state machine are
-// ordered based on the precedences of the symbols that must be encountered to
-// reach the items in their kernel. The starting state (whose kernel is always
-// {S -> ⋅N} for some non-terminal N) comes first. The remaining states are
-// ordered based on the highest-precedence symbol in the lowest-precedence path
-// from the starting state to each state. We define the precedence `Prec(i)` of
-// a state `i` as the precedence of this symbol.
+// We do this using precedence. The states in the state machine are ordered
+// based on the precedences of the symbols that must be encountered to reach the
+// items in their kernel. Specifically, states are ordered based on the
+// highest-precedence symbol in the lowest-precedence path from the starting
+// state to each state. We define the precedence `Prec(i)` of a state `i` as the
+// precedence of this symbol.
 //
 // This choice of ordering constrains how the state machine can change when new
 // rules are added to the grammar: the addition of a production whose first
@@ -371,6 +379,32 @@
 //        table.
 // Whenever O changes, we check if `max(O) < P`. If it is, we regenerate the
 // parse table from the new grammar and switch to the new parse table.
+//
+// Note that there is some additional complexity involving ordering the starting
+// states of the state machine. Ideally, the starting states would have very low
+// precedence, since one of them will always be on the bottom of the state
+// stack, and thus assigning a high precedence to the starting states would make
+// it impossible to add new rules to the grammar during parsing. However, there
+// is a starting state of the form `S -> N` for each non-terminal `N`, and so
+// adding a new non-terminal `N` (even if the production that created it starts
+// with a high-precedence symbol) would implicitly add a new low-precedence
+// production `S -> N` to the grammar, which would be very difficult to add to
+// the parsing state due to its low precedence.
+//
+// To get around this apparent impasse, starting states occupy a separate,
+// parallel table from normal states, so their precedence is incomparable to
+// that of normal states. Starting states are ordered by increasing precedence,
+// just like normal states, and newly created non-terminals always have higher
+// precedence than any existing non-terminal, so new starting states are always
+// appended to the end of the starting state table. Futher, adding new
+// productions to the state machine cannot change the ordering of the start
+// states, because normal productions occupy an entirely different table. Thus,
+// indices of starting states are stable under any valid addition to the
+// grammar.
+//
+// To manage this additional complexity, there is a StateIndex abstraction,
+// which wraps an index and a tag identifying the table to which the index is
+// relative (the starting state table or the normal state table).
 //
 ////////////////////////////////////////////////////////////////////////////////
 // Dynamic and Context-Sensitive Lexing
@@ -939,7 +973,7 @@ static Status Grammar_FirstSets(
 {
     Blimp *blimp = Grammar_GetBlimp(grammar);
 
-    // Initialize an empty fist set for each non-terminal.
+    // Initialize an empty first set for each non-terminal.
     Vector_Init(blimp, firsts, sizeof(HashSet), (Destructor)HashSet_Destroy);
     TRY(Vector_Reserve(firsts, Grammar_NumNonTerminals(grammar)));
     for (NonTerminal nt = 0; nt < Grammar_NumNonTerminals(grammar); ++nt) {
@@ -1004,38 +1038,13 @@ error:
     return Reraise(blimp);
 }
 
-static Status Grammar_FollowSets(
+static Status Grammar_UpdateFollowSets(
     const Grammar *grammar, Vector/*<HashSet<Terminal>>*/ *follows)
 {
     Blimp *blimp = Grammar_GetBlimp(grammar);
 
     Vector firsts;
     TRY(Grammar_FirstSets(grammar, &firsts));
-
-    // Initialize follow sets for each non-terminal. All sets are initially
-    // empty except for Follow(S) (the follow set of the start symbol) which is
-    // initialized to {$}.
-    Vector_Init(blimp, follows, sizeof(HashSet), (Destructor)HashSet_Destroy);
-    if (Vector_Reserve(follows, Grammar_NumNonTerminals(grammar)) != BLIMP_OK) {
-        Vector_Destroy(&firsts);
-        return Reraise(blimp);
-    }
-    for (NonTerminal nt = 0; nt < Grammar_NumNonTerminals(grammar); ++nt) {
-        HashSet *follow;
-        TRY(Vector_EmplaceBack(follows, (void **)&follow));
-        TRY(HashSet_Init(
-            blimp,
-            follow,
-            sizeof(Terminal),
-            (EqFunc)Terminal_Eq,
-            (HashFunc)Terminal_Hash,
-            NULL
-        ));
-
-        if (nt == START_SYMBOL) {
-            TRY(HashSet_Insert(follow, &grammar->eof_terminal));
-        }
-    }
 
     // We compute the follow sets by iteratively applying the following rules to
     // fixpoint:
@@ -1457,6 +1466,35 @@ static inline bool State_Next(
     return true;
 }
 
+typedef enum {
+    STARTING_STATE,
+    NORMAL_STATE,
+} StateType;
+
+typedef struct {
+    StateType type;
+    size_t index;
+} StateIndex;
+
+static inline int StateIndex_Cmp(StateIndex i1, StateIndex i2) {
+    if (i1.type != i2.type) {
+        return (int)i1.type - (int)i2.type;
+    } else {
+        return (int)i1.index - (int)i2.index;
+    }
+}
+
+static inline bool StateIndex_Eq(StateIndex i1, StateIndex i2) {
+    return StateIndex_Cmp(i1, i2) == 0;
+}
+
+static inline size_t StateIndex_Hash(StateIndex i) {
+    size_t hash = HASH_SEED;
+    Hash_AddInteger(&hash, i.type);
+    Hash_AddInteger(&hash, i.index);
+    return hash;
+}
+
 static Terminal StateMachine_PseudoTerminal(
     const StateMachine *m, NonTerminal nt);
 
@@ -1612,7 +1650,7 @@ err_actions:
 }
 
 typedef struct {
-    size_t from_state;
+    StateIndex from_state;
     GrammarSymbol sym;
     GrammarSymbol max_sym;
     OrderedSet kernel;
@@ -1625,8 +1663,9 @@ static int Transition_Cmp(const Transition *t1, const Transition *t2)
         return cmp;
     }
 
-    if (t1->from_state != t2->from_state) {
-        return (int)t1->from_state - (int)t2->from_state;
+    cmp = StateIndex_Cmp(t1->from_state, t2->from_state);
+    if (cmp != 0) {
+        return cmp;
     }
 
     cmp = GrammarSymbol_Cmp(&t1->sym, &t2->sym);
@@ -1636,7 +1675,7 @@ static int Transition_Cmp(const Transition *t1, const Transition *t2)
 
 static Status State_VisitTransitions(
     State *state,
-    size_t index,
+    StateIndex index,
     const GrammarSymbol *max_sym,
     OrderedSet/*<Transition>*/ *transitions)
 {
@@ -1785,13 +1824,17 @@ static Status State_GetTransition(
     const Grammar *grammar,
     const State *state,
     const GrammarSymbol *sym,
-    size_t *next_state)
+    StateIndex *next_state)
 {
+    // All transitions lead to normal states; there is no way to transition back
+    // into a starting state.
+    next_state->type = NORMAL_STATE;
+
     if (sym->is_terminal) {
         // Shift actions encode state transitions on non-terminals.
         Action shift = State_GetAction(state, sym->terminal);
         if (Action_Type(shift) == SHIFT) {
-            *next_state = Action_Data(shift);
+            next_state->index = Action_Data(shift);
             return BLIMP_OK;
         }
 
@@ -1820,7 +1863,8 @@ static Status State_GetTransition(
         );
     } else {
         // Gotos encode transitions on non-terminals.
-        *next_state = State_GetGoto(state, sym->non_terminal);
+        next_state->index = State_GetGoto(state, sym->non_terminal);
+        assert(next_state->index != (size_t)-1);
         return BLIMP_OK;
     }
 }
@@ -1831,28 +1875,75 @@ static Status State_GetTransition(
 
 struct StateMachine {
     Vector/*<State>*/ states;
+    Vector/*<State>*/ start_states;
     HashMap/*<OrderedSet<Item> *, size_t>*/ index;
-        // Lookup table to find the index of the unique state with a given
-        // kernel.
+        // Lookup table to find the index of the unique NORMAL_STATE state with
+        // a given kernel.
     const Grammar *grammar;
     size_t first_pseudo_terminal;
     size_t num_non_terminals;
     Production *start_production;
 };
 
-static inline State *StateMachine_Begin(const StateMachine *m)
+typedef StateIndex StateMachineIterator;
+
+static inline StateMachineIterator StateMachine_Iterator(const StateMachine *m)
 {
-    return Vector_Begin(&m->states);
+    if (m->num_non_terminals > 1) {
+        // There is at least one non-terminal besides the start symbol, which
+        // means there is at least one starting state.
+        return (StateIndex) {
+            .type = STARTING_STATE,
+                // Iterate over starting states first. After visiting all of
+                // them, we will transition to normal states.
+            .index = 0,
+        };
+    } else {
+        // No starting states, just go straight to normal states.
+        return (StateIndex) {
+            .type = NORMAL_STATE,
+            .index = 0,
+        };
+    }
 }
 
-static inline State *StateMachine_End(const StateMachine *m)
+static inline bool StateMachine_Next(
+    const StateMachine *m, StateMachineIterator *iter, StateIndex *index)
 {
-    return Vector_End(&m->states);
-}
+    if (iter->type == NORMAL_STATE &&
+        iter->index >= Vector_Length(&m->states))
+    {
+        // Since we iterate over starting states first and normal states second,
+        // the termination condition is whether we have exhausted the normal
+        // states.
+        return false;
+    }
 
-static inline State *StateMachine_Next(const StateMachine *m, State *it)
-{
-    return Vector_Next(&m->states, it);
+    *index = *iter;
+        // Visit the current state.
+
+    switch (iter->type) {
+        case STARTING_STATE: {
+            ++iter->index;
+
+            // Starting states are indexed by the top-level non-terminal that
+            // they parse, representing the production `S -> N`, so there is no
+            // starting state for the non-terminal S itself. Thus, the index `i`
+            // really represents the non-terminal `i + 1`.
+            if (iter->index + 1 >= m->num_non_terminals) {
+                iter->type = NORMAL_STATE;
+                iter->index = 0;
+            }
+            break;
+        }
+
+        case NORMAL_STATE: {
+            ++iter->index;
+            break;
+        }
+    }
+
+    return true;
 }
 
 static void StateMachine_Destroy(StateMachine *m)
@@ -1862,14 +1953,22 @@ static void StateMachine_Destroy(StateMachine *m)
     free(m->start_production);
 }
 
-static inline size_t StateMachine_NumStates(const StateMachine *m)
+static inline State *StateMachine_GetState(const StateMachine *m, StateIndex i)
 {
-    return Vector_Length(&m->states);
-}
+    switch (i.type) {
+        case STARTING_STATE: {
+            return Vector_Index(&m->start_states, i.index);
+        }
 
-static inline State *StateMachine_GetState(const StateMachine *m, size_t i)
-{
-    return Vector_Index(&m->states, i);
+        case NORMAL_STATE: {
+            return Vector_Index(&m->states, i.index);
+        }
+
+        default: {
+            assert(false);
+            return NULL;
+        }
+    }
 }
 
 static inline size_t StateMachine_NumTerminals(const StateMachine *m)
@@ -1909,25 +2008,35 @@ static Status StateMachine_NewState(
     OrderedSet *kernel,
     const GrammarSymbol *max_sym,
     OrderedSet/*<Transition>*/ *transitions,
-    size_t *index)
+    StateType type,
+    StateIndex *index)
 {
+    Vector/*<State>*/ *states =
+        type == STARTING_STATE ? &m->start_states : &m->states;
+
     // For the caller's convenience, `index` is optional. For our
     // convenience, we will point it at a local variable if it is NULL so we
     // don't have to do any more NULL checks.
-    size_t local_index;
+    StateIndex local_index;
     if (index == NULL) {
         index = &local_index;
     }
-    *index = Vector_Length(&m->states);
+    index->type = type;
+    index->index = Vector_Length(states);
 
     // Append and initialize the new state.
     State *state;
-    TRY(Vector_EmplaceBack(&m->states, (void **)&state));
+    TRY(Vector_EmplaceBack(states, (void **)&state));
     TRY(State_Init(state, m->grammar, m, kernel));
 
-    // Update the kernel-to-state lookup table.
-    assert(HashMap_Find(&m->index, &state->kernel) == NULL);
-    TRY(HashMap_Update(&m->index, &state->kernel, index));
+    if (type == NORMAL_STATE) {
+        // Update the kernel-to-state lookup table if this is not a starting
+        // state. Starting states are unreachable from other states because the
+        // start non-terminal may not be referenced recursively from other
+        // productions.
+        assert(HashMap_Find(&m->index, &state->kernel) == NULL);
+        TRY(HashMap_Update(&m->index, &state->kernel, &index->index));
+    }
 
     // Add transitions out of this state to the set of transitions that need
     // processing.
@@ -1937,7 +2046,7 @@ static Status StateMachine_NewState(
 }
 
 static Status MakeStateMachine(
-    const Grammar *grammar, NonTerminal start, StateMachine *m)
+    const Grammar *grammar, StateMachine *m)
 {
     Blimp *blimp = Grammar_GetBlimp(grammar);
 
@@ -1952,6 +2061,8 @@ static Status MakeStateMachine(
     ));
     Vector_Init(
         blimp, &m->states, sizeof(State), (Destructor)State_Destroy);
+    Vector_Init(
+        blimp, &m->start_states, sizeof(State), (Destructor)State_Destroy);
     m->grammar = grammar;
     m->first_pseudo_terminal = Grammar_NumTerminals(grammar);
     m->num_non_terminals = Grammar_NumNonTerminals(grammar);
@@ -1964,34 +2075,39 @@ static Status MakeStateMachine(
     OrderedSet_Init(
         blimp, &transitions, sizeof(Transition), (CmpFunc)Transition_Cmp);
 
-    // Create a production S -> start for the initial state.
-    TRY(Malloc(
-        blimp,
-        sizeof(Production) + 1*sizeof(GrammarSymbol),
-        &m->start_production));
-    m->start_production->non_terminal = START_SYMBOL;
-    m->start_production->handler = PseudoHandler;
-    m->start_production->index = 0;
-    m->start_production->num_symbols = 1;
-    m->start_production->symbols[0] = (GrammarSymbol) {
-        .is_terminal = false,
-        .non_terminal = start,
-    };
+    // Create the starting states. For each non-terminal N, we get a starting
+    // state with the kernel S -> N.
+    for (NonTerminal nt = START_SYMBOL + 1; nt < m->num_non_terminals; ++nt) {
+        // Create a production S -> N for the starting state.
+        TRY(Malloc(
+            blimp,
+            sizeof(Production) + 1*sizeof(GrammarSymbol),
+            &m->start_production));
+        m->start_production->non_terminal = START_SYMBOL;
+        m->start_production->handler = PseudoHandler;
+        m->start_production->index = 0;
+        m->start_production->num_symbols = 1;
+        m->start_production->symbols[0] = (GrammarSymbol) {
+            .is_terminal = false,
+            .non_terminal = nt,
+        };
 
-    // Create the starting state from the initial production.
-    OrderedSet initial_kernel;
-    OrderedSet_Init(
-        blimp, &initial_kernel, sizeof(Item), (CmpFunc)Item_Cmp);
-    if (OrderedSet_Insert(
-            &initial_kernel, &(Item){m->start_production, 0})
-        != BLIMP_OK)
-    {
-        goto error;
-    }
-    if (StateMachine_NewState(m, &initial_kernel, NULL, &transitions, NULL)
+        // Create the starting state from the initial production.
+        OrderedSet initial_kernel;
+        OrderedSet_Init(
+            blimp, &initial_kernel, sizeof(Item), (CmpFunc)Item_Cmp);
+        if (OrderedSet_Insert(
+                &initial_kernel, &(Item){m->start_production, 0})
             != BLIMP_OK)
-    {
-        goto error;
+        {
+            goto error;
+        }
+        if (StateMachine_NewState(
+                m, &initial_kernel, NULL, &transitions, STARTING_STATE, NULL)
+            != BLIMP_OK)
+        {
+            goto error;
+        }
     }
 
     // Begin the depth-first traversal.
@@ -2016,12 +2132,20 @@ static Status MakeStateMachine(
             // cause the new state's neighbors to be added to `transitions`,
             // preparing us to continue the depth-first traversal in the next
             // iteration of this loop).
+            StateIndex to;
             if (StateMachine_NewState(
-                    m, kernel, &transition.max_sym, &transitions, &to_index)
-                != BLIMP_OK)
+                    m,
+                    kernel,
+                    &transition.max_sym,
+                    &transitions,
+                    NORMAL_STATE,
+                    &to
+                ) != BLIMP_OK)
             {
                 goto error;
             }
+            assert(to.type == NORMAL_STATE);
+            to_index = to.index;
         }
 
         // Note the transition in the parse table row for the source state.
@@ -2059,7 +2183,7 @@ error:
 // state" together with the symbol uniquely determines the "to state", so we do
 // not store the "to state".
 typedef struct {
-    size_t from_state;
+    StateIndex from_state;
     GrammarSymbol symbol;
 } ExtendedGrammarSymbol;
 
@@ -2069,7 +2193,7 @@ static bool ExtendedGrammarSymbol_Eq(
     void *arg)
 {
     (void)arg;
-    return nt1->from_state == nt2->from_state
+    return StateIndex_Eq(nt1->from_state, nt2->from_state)
         && GrammarSymbol_Eq(&nt1->symbol, &nt2->symbol, NULL);
 }
 
@@ -2079,7 +2203,7 @@ static size_t ExtendedGrammarSymbol_Hash(
     (void)arg;
 
     size_t hash = HASH_SEED;
-    Hash_AddInteger(&hash, nt->from_state);
+    Hash_AddHash(&hash, StateIndex_Hash(nt->from_state));
     Hash_AddHash(&hash, GrammarSymbol_Hash(&nt->symbol, NULL));
     return hash;
 }
@@ -2202,7 +2326,7 @@ static Status ExtendedGrammar_Project(
 
 static Status ExtendedGrammar_ProjectTerminal(
     ExtendedGrammar *grammar,
-    size_t from_state,
+    StateIndex from_state,
     Terminal terminal,
     Terminal *projection)
 {
@@ -2226,7 +2350,7 @@ static Status ExtendedGrammar_ProjectTerminal(
 
 static Status ExtendedGrammar_ProjectNonTerminal(
     ExtendedGrammar *grammar,
-    size_t from_state,
+    StateIndex from_state,
     NonTerminal non_terminal,
     NonTerminal *projection)
 {
@@ -2261,7 +2385,38 @@ static ExtendedGrammarSymbol *ExtendedGrammar_Unproject(
 static inline Status ExtendedGrammar_FollowSets(
     const ExtendedGrammar *grammar, Vector/*<Terminal>*/ *follows)
 {
-    return Grammar_FollowSets(&grammar->projection, follows);
+    Blimp *blimp = Grammar_GetBlimp(&grammar->projection);
+
+    // Initialize follow sets for each non-terminal. All sets are initially
+    // empty except for Follow(S) (the follow set of the start symbol) which is
+    // initialized to {$}.
+    Vector_Init(blimp, follows, sizeof(HashSet), (Destructor)HashSet_Destroy);
+    TRY(Vector_Reserve(
+        follows, Grammar_NumNonTerminals(&grammar->projection)));
+    for (NonTerminal nt = 0;
+         nt < Grammar_NumNonTerminals(&grammar->projection);
+         ++nt)
+    {
+        HashSet *follow;
+        TRY(Vector_EmplaceBack(follows, (void **)&follow));
+        TRY(HashSet_Init(
+            blimp,
+            follow,
+            sizeof(Terminal),
+            (EqFunc)Terminal_Eq,
+            (HashFunc)Terminal_Hash,
+            NULL
+        ));
+
+        ExtendedGrammarSymbol *sym = ExtendedGrammar_Unproject(
+            grammar, &(GrammarSymbol){.is_terminal = false, .non_terminal = nt});
+        assert(!sym->symbol.is_terminal);
+        if (sym->symbol.non_terminal == START_SYMBOL) {
+            TRY(HashSet_Insert(follow, &grammar->projection.eof_terminal));
+        }
+    }
+
+    return Grammar_UpdateFollowSets(&grammar->projection, follows);
 }
 
 static Status MakeExtendedGrammar(
@@ -2298,10 +2453,10 @@ static Status MakeExtendedGrammar(
     // maps to the EOF terminal from `grammar` (since we will need to include
     // the projected EOF terminal when we make follow sets). All that matters
     // here is the Terminal-Terminal mapping. The `from_state` won't be used, so
-    // 0 is fine.
+    // {0} is fine.
     if (ExtendedGrammar_ProjectTerminal(
             extended,
-            0,
+            (StateIndex){0},
             grammar->eof_terminal,
             &extended->projection.eof_terminal
         ) != BLIMP_OK)
@@ -2311,10 +2466,10 @@ static Status MakeExtendedGrammar(
 
     // We derive an extended production from each item in each state in the
     // state machine where the cursor is at the start of the item.
-    for (size_t state_index = 0;
-         state_index < StateMachine_NumStates(m);
-         ++state_index)
-    {
+    StateIndex state_index;
+    for (StateMachineIterator iter = StateMachine_Iterator(m);
+         StateMachine_Next(m, &iter, &state_index);
+    ) {
         State *state = StateMachine_GetState(m, state_index);
 
         Item *item;
@@ -2360,7 +2515,7 @@ static Status MakeExtendedGrammar(
             // Get the extended version of each symbol. We track the state we
             // are currently in, and at each symbol apply the transition from
             // the current state on that symbol to get the next state.
-            size_t curr = state_index;
+            StateIndex curr = state_index;
             production->num_symbols = item->production->num_symbols;
             for (size_t i = 0; i < production->num_symbols; ++i) {
                 const GrammarSymbol *sym = &item->production->symbols[i];
@@ -2424,7 +2579,16 @@ static void DumpExtendedGrammar(
         );
         const char *nt_name = *(const char **)Vector_Index(
             &grammar->non_terminal_strings, nt->symbol.non_terminal);
-        fprintf(file, "%s[%zu] ->", nt_name, nt->from_state);
+        switch (nt->from_state.type) {
+            case STARTING_STATE: {
+                fprintf(file, "%s[S%zu] ->", nt_name, nt->from_state.index);
+                break;
+            }
+            case NORMAL_STATE: {
+                fprintf(file, "%s[%zu] ->", nt_name, nt->from_state.index);
+                break;
+            }
+        }
 
         for (size_t i = 0; i < (*rule)->num_symbols; ++i) {
             const ExtendedGrammarSymbol *sym = ExtendedGrammar_Unproject(
@@ -2437,16 +2601,49 @@ static void DumpExtendedGrammar(
                         table, sym->symbol.terminal);
                     const char *sym_name = *(const char **)Vector_Index(
                         &grammar->non_terminal_strings, nt);
-                    fprintf(file, " %s[%zu]", sym_name, sym->from_state);
+                    switch (sym->from_state.type) {
+                        case STARTING_STATE: {
+                            fprintf(file, " %s[S%zu]",
+                                sym_name, sym->from_state.index);
+                            break;
+                        }
+                        case NORMAL_STATE: {
+                            fprintf(file, " %s[%zu]",
+                                sym_name, sym->from_state.index);
+                            break;
+                        }
+                    }
                 } else {
                     const char *sym_name = *(const char **)Vector_Index(
                         &grammar->terminal_strings, sym->symbol.terminal);
-                    fprintf(file, " %s[%zu]", sym_name, sym->from_state);
+                    switch (sym->from_state.type) {
+                        case STARTING_STATE: {
+                            fprintf(file, " %s[S%zu]",
+                                sym_name, sym->from_state.index);
+                            break;
+                        }
+                        case NORMAL_STATE: {
+                            fprintf(file, " %s[%zu]",
+                                sym_name, sym->from_state.index);
+                            break;
+                        }
+                    }
                 }
             } else {
                 const char *sym_name = *(const char **)Vector_Index(
                     &grammar->non_terminal_strings, sym->symbol.non_terminal);
-                fprintf(file, " %s[%zu]", sym_name, sym->from_state);
+                switch (sym->from_state.type) {
+                    case STARTING_STATE: {
+                        fprintf(file, " %s[S%zu]",
+                            sym_name, sym->from_state.index);
+                        break;
+                    }
+                    case NORMAL_STATE: {
+                        fprintf(file, " %s[%zu]",
+                            sym_name, sym->from_state.index);
+                        break;
+                    }
+                }
             }
         }
 
@@ -2458,12 +2655,10 @@ static void DumpExtendedGrammar(
 // Parse table
 //
 
-static Status MakeParseTable(
-    const Grammar *grammar, NonTerminal start, StateMachine *table)
-{
+static Status MakeParseTable(const Grammar *grammar, StateMachine *table) {
     Blimp *blimp = Grammar_GetBlimp(grammar);
 
-    TRY(MakeStateMachine(grammar, start, table));
+    TRY(MakeStateMachine(grammar, table));
 
     ExtendedGrammar extended_grammar;
     if (MakeExtendedGrammar(grammar, table, &extended_grammar) != BLIMP_OK) {
@@ -2479,10 +2674,11 @@ static Status MakeParseTable(
     }
 
     // Add an ACCEPT action on the $ terminal for each accepting state.
-    for (State *state = StateMachine_Begin(table);
-         state != StateMachine_End(table);
-         state = StateMachine_Next(table, state))
-    {
+    StateIndex i;
+    for (StateMachineIterator iter = StateMachine_Iterator(table);
+         StateMachine_Next(table, &iter, &i);
+    ) {
+        const State *state = StateMachine_GetState(table, i);
         if (State_IsAccepting(state)) {
             SetAction(state->actions, grammar->eof_terminal, ACCEPT, 0);
         }
@@ -2512,7 +2708,7 @@ static Status MakeParseTable(
         const ExtendedGrammarSymbol *final_sym = ExtendedGrammar_Unproject(
             &extended_grammar, &production->symbols[production->num_symbols - 1]);
         State *from_state = StateMachine_GetState(table, final_sym->from_state);
-        size_t state_index = 0;
+        StateIndex state_index = {0};
         if (State_GetTransition(
                 grammar, from_state, &final_sym->symbol, &state_index)
             != BLIMP_OK)
@@ -2525,7 +2721,7 @@ static Status MakeParseTable(
 
         const Production *original_production =
             ExtendedGrammar_UnprojectProduction(&extended_grammar, i);
-        if (original_production->non_terminal == START_SYMBOL) {
+        if (State_IsAccepting(state)) {
             // If this reduction would produce the start symbol, then there's no
             // need to reduce; just accept the input.
             assert(State_GetAction(state, grammar->eof_terminal) == ACCEPT);
@@ -2572,7 +2768,7 @@ static void DumpParseTable(
     size_t num_terminals = StateMachine_NumTerminals(m);
     size_t num_non_terminals = StateMachine_NumNonTerminals(m);
 
-    fprintf(file, "State |");
+    fprintf(file, " State |");
     for (Terminal i = 0; i < num_terminals; ++i) {
         if (StateMachine_IsPseudoTerminal(m, i)) {
             const char *string = *(const char **)Vector_Index(
@@ -2593,9 +2789,13 @@ static void DumpParseTable(
     }
     fprintf(file, "\n");
 
-    for (size_t i = 0; i < StateMachine_NumStates(m); ++i) {
+    StateIndex i;
+    for (StateMachineIterator iter = StateMachine_Iterator(m);
+         StateMachine_Next(m, &iter, &i);
+    ) {
         const State *state = StateMachine_GetState(m, i);
-        fprintf(file, "%-5zu |", i);
+        fprintf(file, "%c%-5zu |",
+            i.type == STARTING_STATE ? 'S' : ' ', i.index);
         for (Terminal t = 0; t < num_terminals; ++t) {
             Action action = state->actions[t];
             switch (Action_Type(action)) {
@@ -2637,7 +2837,7 @@ void Grammar_DumpVitals(FILE *file, const Grammar *grammar)
     StateMachine table;
     ExtendedGrammar extended;
 
-    if (MakeStateMachine(grammar, START_SYMBOL + 1, &table) == BLIMP_OK &&
+    if (MakeStateMachine(grammar, &table) == BLIMP_OK &&
         MakeExtendedGrammar(grammar, &table, &extended) == BLIMP_OK)
     {
         DumpExtendedGrammar(file, grammar, &table, &extended);
@@ -2645,7 +2845,7 @@ void Grammar_DumpVitals(FILE *file, const Grammar *grammar)
     ExtendedGrammar_Destroy(&extended);
     StateMachine_Destroy(&table);
 
-    if (MakeParseTable(grammar, START_SYMBOL + 1, &table) == BLIMP_OK) {
+    if (MakeParseTable(grammar, &table) == BLIMP_OK) {
         DumpParseTable(file, grammar, &table);
     }
     StateMachine_Destroy(&table);
@@ -2785,7 +2985,9 @@ static inline const char *Lexer_LookAheadChars(const Lexer *lex)
 }
 
 static bool TerminalExpected(
-    const StateMachine *m, const Vector/*<size_t>*/ *stack, Terminal t)
+    const StateMachine *m,
+    const Vector/*<StateIndex>*/ *stack,
+    Terminal t)
 {
     if (t == TOK_INVALID) {
         return false;
@@ -2839,7 +3041,7 @@ static bool TerminalExpected(
     // always pointing at consistent data.
     //
     // Start the machine from the state which is currently on top of the stack.
-    const size_t *sp = Vector_RIndex(stack, 0);
+    const StateIndex *sp = Vector_RIndex(stack, 0);
     const State *state = StateMachine_GetState(m, *sp);
     while (true) {
         Action action = state->actions[t];
@@ -2872,6 +3074,7 @@ static bool TerminalExpected(
         // least 1, moving it back into the consistent region.
         assert(production->num_symbols > 0);
         sp -= production->num_symbols;
+        assert(sp >= (StateIndex *)Vector_Begin(stack));
 
         // Popping the states corresponding to the consumed fragments leaves us
         // in the state we were in before we transitioned based on all of those
@@ -2880,7 +3083,12 @@ static bool TerminalExpected(
         const State *tmp_state = StateMachine_GetState(m, *sp);
         assert(tmp_state->gotos[production->non_terminal] != (size_t)-1);
         state = StateMachine_GetState(
-            m, tmp_state->gotos[production->non_terminal]);
+            m,
+            (StateIndex) {
+                NORMAL_STATE,
+                tmp_state->gotos[production->non_terminal]
+            }
+        );
         ++sp;
             // Instead of actually pushing the new state onto the stack, which
             // would corrupt the real stack, we just increment the stack pointer
@@ -2900,14 +3108,14 @@ typedef struct {
     TrieNode *match;
     size_t match_len;
     const StateMachine *machine;
-    const Vector/*<size_t>*/ *stack;
+    const Vector/*<StateIndex>*/ *stack;
 } Matcher;
 
 static inline void Matcher_Init(
     Matcher *m,
     TrieNode *root,
     const StateMachine *machine,
-    const Vector/*<size_t>*/ *stack)
+    const Vector/*<StateIndex>*/ *stack)
 {
     m->curr = root;
     m->curr_len = 1;
@@ -2960,7 +3168,7 @@ static Status Lexer_Lex(
     Lexer *lex,
     Token *tok,
     const StateMachine *m,
-    const Vector *stack,
+    const Vector/*<StateIndex>*/ *stack,
     bool peek)
 {
     InitStaticTokens();
@@ -3259,7 +3467,7 @@ static Status ParseTreeStream_Peek(
     ParseTreeStream *stream,
     ParseTree *tree,
     const StateMachine *m,
-    const Vector/*<size_t>*/ *stack)
+    const Vector/*<StateIndex>*/ *stack)
 {
     Blimp *blimp = ParseTreeStream_GetBlimp(stream);
 
@@ -3343,7 +3551,7 @@ static Status ParseTreeStream_Peek(
 static Status ParseTreeStream_Next(
     ParseTreeStream *stream,
     const StateMachine *m,
-    const Vector/*<size_t>*/ *stack)
+    const Vector/*<StartState>*/ *stack)
 {
     switch (stream->type) {
         case STREAM_LEXER: {
@@ -3378,16 +3586,24 @@ static Status ParseStream(
     void *parser_state,
     ParseTree *result)
 {
+    assert(start > START_SYMBOL);
+
     Blimp *blimp = ParseTreeStream_GetBlimp(stream);
 
     StateMachine m;
-    TRY(MakeParseTable(grammar, start, &m));
+    TRY(MakeParseTable(grammar, &m));
 
     // `stack` is a stack of parser state indices which is modified by SHIFT and
     // REDUCE actions.
     Vector stack;
-    Vector_Init(blimp, &stack, sizeof(size_t), NULL);
-    size_t start_state = 0;
+    Vector_Init(blimp, &stack, sizeof(StateIndex), NULL);
+    StateIndex start_state = {
+        STARTING_STATE,
+        start - 1,
+            // The index of starting states does not include the start symbol
+            // itself. Therefore, the index of the starting state representing
+            // the non-terminal `start` is actually `start - 1`.
+    };
     if (Vector_PushBack(&stack, &start_state) != BLIMP_OK) {
         goto error;
     }
@@ -3416,7 +3632,7 @@ static Status ParseStream(
 
     while (true) {
         const State *state = StateMachine_GetState(
-            &m, *(size_t *)Vector_RIndex(&stack, 0));
+            &m, *(StateIndex *)Vector_RIndex(&stack, 0));
 
         ParseTree tree;
         if (ParseTreeStream_Peek(stream, &tree, &m, &stack) != BLIMP_OK) {
@@ -3458,8 +3674,7 @@ static Status ParseStream(
                 }
 
                 // Push the next state onto the stack.
-                size_t next_state = Action_Data(action);
-                assert(next_state < StateMachine_NumStates(&m));
+                StateIndex next_state = { NORMAL_STATE, Action_Data(action) };
                 if (Vector_PushBack(&stack, &next_state) != BLIMP_OK) {
                     goto error;
                 }
@@ -3473,7 +3688,7 @@ static Status ParseStream(
                     &output_precedences);
                 if (GrammarListener_ShouldUpdate(&listener, max_precedence)) {
                     StateMachine_Destroy(&m);
-                    if (MakeParseTable(grammar, start, &m) != BLIMP_OK) {
+                    if (MakeParseTable(grammar, &m) != BLIMP_OK) {
                         goto error;
                     }
                 }
@@ -3516,8 +3731,9 @@ static Status ParseStream(
                     .end = sub_trees[production->num_symbols-1].range.end,
                 };
                 ParseTree fragment;
-                if (ParseTree_Init(
+                if (ParseTree_InitWithGrammarSymbol(
                         blimp,
+                        grammar_symbol,
                         (Object *)symbol,
                         sub_trees,
                         production->num_symbols,
@@ -3576,10 +3792,13 @@ static Status ParseStream(
                 // out of that state, this time on the non-terminal that the
                 // reduction just produced.
                 const State *tmp_state = StateMachine_GetState(
-                    &m, *(size_t *)Vector_RIndex(&stack, 0));
+                    &m, *(StateIndex *)Vector_RIndex(&stack, 0));
                 assert(tmp_state->gotos[production->non_terminal] != (size_t)-1);
                 if (Vector_PushBack(&stack,
-                        &tmp_state->gotos[production->non_terminal])
+                        &(StateIndex) {
+                            NORMAL_STATE,
+                            tmp_state->gotos[production->non_terminal]
+                        })
                     != BLIMP_OK)
                 {
                     goto error;
@@ -3591,7 +3810,7 @@ static Status ParseStream(
                     &output_precedences);
                 if (GrammarListener_ShouldUpdate(&listener, max_precedence)) {
                     StateMachine_Destroy(&m);
-                    if (MakeParseTable(grammar, start, &m) != BLIMP_OK) {
+                    if (MakeParseTable(grammar, &m) != BLIMP_OK) {
                         goto error;
                     }
                     ParseTreeStream_Invalidate(stream);
@@ -3679,7 +3898,6 @@ static Status ParseStream(
                 }
                 goto error;
             }
-
         }
     }
 
