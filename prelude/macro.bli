@@ -1,6 +1,42 @@
-# This whole file is only intended to have parse-time side-effects (defining
-# macros) so we wrap the whole thing in braces to ensure it never executes at
-# run-time.
+# Run-time functions used by expanded macros.
+__pat_head{^} {^iter
+    {
+        __h{^ ^};
+        ^iter { ^x
+            __h {(^x)}
+        };
+        __h[]
+    }[]
+};
+
+__pat_tail {^} {^iter {^visit
+    n_ref{^ ^};
+    n n_ref;
+    n_ref _0;
+    ^iter {^x
+        {
+            _0{^{{
+                n_ref _1
+            }}} ;
+            _1{^{{
+                (^visit ^x)
+            }}};
+            n[] []
+        }[]
+    }
+}};
+
+__bind parse_tree each {^t{^f
+    ^t {^sub_tree
+        ^f (__wrap parse_tree ^sub_tree)
+    }
+}};
+
+__bind parse_tree __inner{^};
+
+# The whole rest of this file is only intended to have parse-time side-effects
+# (defining macros) so we wrap the whole thing in braces to ensure it never
+# executes at run-time.
 {
 
 # Loop over a parse tree returned from a Kleene star production. A Kleene star
@@ -354,69 +390,11 @@
                             {`(`} {`^list`} {`)`} {`each`} {`^`} {`;`} {`1`}
                         {`}`}
                     {`}`} {`(`}
-                        # Depending on whether the standard library has already
-                        # been imported, we need to call the user's handler
-                        # slightly differently. If std has already been imported
-                        # (for example, as a preimport when running via the
-                        # interpreter without --core) we need not (and cannot)
-                        # import it again. But if it has not yet been imported
-                        # (for example, in a standard bl:mp program beginning
-                        # with `import std`, where that import statement has not
-                        # been evaluated yet since we are still in the parsing
-                        # phase) we must import it now, at parse time, in the
-                        # scope in which we invoke the handler, since the
-                        # handler almost certainly depends on standard library
-                        # features. We will use the state of the symbol
-                        # `__std_imported` to determine what to do.
-                        {`__std_imported`} {`{`}
-                            # If the standard library has not been imported and
-                            # evaluated, then __std_imported will be undefined,
-                            # and this block will execute. The argument (which
-                            # we ignore) will be a reference to
-                            # `__std_imported`. We return a block which, when
-                            # invoked, imports the idempotent parts of the
-                            # standard library and then invokes the user's
-                            # handler. This block will be invoked immediately
-                            # when it receives (and ignores) the block
-                            # representing the second case of this conditional.
-                            {`{`}
-                                {`(`} {`import`} {`std_idempotent`} {`)`} {`;`}
-                                    # We import std_idempotent, not std, because
-                                    # it is only safe to import the parts of the
-                                    # library which are idempotent at parse time
-                                    # (e.g. we cannot re-import this file if it
-                                    # has already been parsed, since that would
-                                    # cause the addition of duplicate grammar
-                                    # rules to the parser).
-                                    #
-                                    # Note that we do not have to worry about
-                                    # runtime idempotency, since this import
-                                    # executes in a sandboxed scope (the block
-                                    # we are in now), not at the global scope,
-                                    # where it would potentially clash with
-                                    # future imports of `std`.
-                                {`__call`} {`{`};
-                                    visit_patterns (patterns[]) {^sym{^binder
-                                        ^out ^binder {`:=`} {`(`} (next_tok[]) {`)`} {`;`}
-                                    }};
-                                    curr_tok_ref {{^{`^toks`}; 7}};
-                                        # Reset `curr_tok` after traversing the
-                                        # list of patterns.
-                                    ^{`(`}(handler[]){`)`}
-                                {`}`}
-                            {`}`}
-                        {`}`} {`{`}
-                            # If the standard library has already been imported
-                            # and evaluated, then __std_imported will be defined
-                            # to ignore its first argument (the block above) and
-                            # execute its second, where we simply invoke the
-                            # handler.
-                            {`__call`} {`{`};
-                                visit_patterns (patterns[]) {^sym{^binder
-                                    ^out ^binder {`:=`} {`(`} (next_tok[]) {`)`} {`;`}
-                                }};
-                                ^{`(`}(handler[]){`)`}
-                            {`}`}
+                        {`__call`} {`{`};
+                            visit_patterns (patterns[]) {^sym{^binder
+                                ^out ^binder {`:=`} {`(`} (next_tok[]) {`)`} {`;`}
+                            }};
+                            ^{`(`}(handler[]){`)`}
                         {`}`}
                     {`)`};
                 ^{`}`} {`[]`};

@@ -1,4 +1,14 @@
-import macro;
-import std_idempotent;
-import syntax;
-.
+!(
+    import runtime;
+    import vtable;
+    import bool;
+    import symbol;
+    import function;
+    import int;
+    import list;
+    import struct;
+    import path;
+    import macro;
+    import syntax;
+    .
+)
