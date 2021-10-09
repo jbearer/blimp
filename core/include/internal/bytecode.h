@@ -70,7 +70,8 @@ struct BlimpBytecode {
 PRIVATE Status Bytecode_New(
     Blimp *blimp, Expr *expr, size_t specialized_seq, Bytecode **code);
 PRIVATE Status Bytecode_Append(Bytecode *code, const Instruction *instr);
-PRIVATE Status Bytecode_MoveToEnd(Bytecode *code, const Instruction *instr);
+PRIVATE Status Bytecode_MoveToEnd(
+    Bytecode *code, const Instruction *instr, size_t *new_offset);
 PRIVATE void Bytecode_Delete(Bytecode *code, Instruction *instr);
 PRIVATE void Bytecode_RemoveNops(Bytecode *code);
 PRIVATE void Bytecode_Truncate(Bytecode *code, size_t offset);

@@ -99,7 +99,8 @@ Status Bytecode_Append(Bytecode *code, const Instruction *instr)
     return BLIMP_OK;
 }
 
-Status Bytecode_MoveToEnd(Bytecode *code, const Instruction *instr)
+Status Bytecode_MoveToEnd(
+    Bytecode *code, const Instruction *instr, size_t *new_offset)
 {
     assert(Bytecode_Begin(code) <= instr && instr < Bytecode_End(code));
         // Make sure the instruction occurs within this array.
@@ -110,10 +111,15 @@ Status Bytecode_MoveToEnd(Bytecode *code, const Instruction *instr)
         // Get the offset of the instruction so we have a stable way to
         // reference it before possibly reallocating the array.
 
-    if (offset == code->size) {
+    if (offset + instr->size == code->size) {
         // If this instruction is already the last instruction in the procedure,
         // we don't have to do anything.
+        *new_offset = offset;
         return BLIMP_OK;
+    } else {
+        // If the instruction is not last in the procedure, we're going to move
+        // it to the end, just past the current last in procedure.
+        *new_offset = code->size;
     }
 
     // Increase the capacity of the instructions array if necessary.

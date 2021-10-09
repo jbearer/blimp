@@ -241,19 +241,20 @@ static Status Emit(
     Blimp *blimp = Optimizer_Blimp(opt);
 
     TRY(SymbolicObject_New(opt, result));
-    opt->last_offset = Bytecode_Offset(opt->code);
-    (*result)->instr_offset = opt->last_offset;
-
     if (move) {
-        if (Bytecode_MoveToEnd(opt->code, instr) != BLIMP_OK) {
+        if (Bytecode_MoveToEnd(opt->code, instr, &(*result)->instr_offset)
+                != BLIMP_OK)
+        {
             return Reraise(blimp);
         }
         instr = Bytecode_Get(opt->code, (*result)->instr_offset);
     } else {
+        (*result)->instr_offset = Bytecode_Offset(opt->code);
         if (Bytecode_Append(opt->code, instr) != BLIMP_OK) {
             return Reraise(blimp);
         }
     }
+    opt->last_offset = (*result)->instr_offset;
 
     // Update the `result_type` of the new instruction if necessary.
     if (instr->result_type == RESULT_INHERIT &&
