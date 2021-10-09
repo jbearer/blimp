@@ -153,6 +153,9 @@ typedef struct {
         // A map from non-terminals to human-readable names. Used for error
         // messages and pretty-printing.
     struct GrammarListener *listeners;
+        // List of observers interested in finding out when the grammar changes.
+    struct StateMachine *parse_table;
+        // Cached, up-to-date parse table.
 } Grammar;
 
 #define ParseTree_Init BlimpParseTree_Init
@@ -184,7 +187,7 @@ PRIVATE Status Grammar_AddRule(
     void *handler_arg);
 PRIVATE void Grammar_SetTerminalString(
     Grammar *grammar, Terminal terminal, const char *string);
-PRIVATE void Grammar_DumpVitals(FILE *file, const Grammar *grammar);
+PRIVATE void Grammar_DumpVitals(FILE *file, Grammar *grammar);
 
 PRIVATE Status Parse(
     Lexer *lex,

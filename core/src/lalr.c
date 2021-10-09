@@ -684,6 +684,7 @@ Status Grammar_Init(Blimp *blimp, Grammar *grammar, Terminal eof)
 
     grammar->eof_terminal = eof;
     grammar->listeners = NULL;
+    grammar->parse_table = NULL;
 
     grammar->num_terminals = 0;
     if (Grammar_AddTerminal(grammar, NUM_BUILT_IN_TOKENS - 1) != BLIMP_OK) {
@@ -756,9 +757,22 @@ static inline size_t Grammar_NumTerminals(const Grammar *grammar)
     return grammar->num_terminals;
 }
 
+static struct StateMachine *StateMachine_Borrow(struct StateMachine *m);
+static void StateMachine_Release(struct StateMachine *m);
+
 static Status Grammar_AddNonTerminal(
     Grammar *grammar, NonTerminal nt, const char *name)
 {
+    if (nt < Grammar_NumNonTerminals(grammar)) {
+        return BLIMP_OK;
+    }
+
+    // This operation invalidates the cached parse table.
+    if (grammar->parse_table != NULL) {
+        StateMachine_Release(grammar->parse_table);
+        grammar->parse_table = NULL;
+    }
+
     // This loop ensures that
     // productions_for_non_terminals[production->non_terminal] and
     // non_terminal_strings[nt] both exist by
@@ -811,6 +825,12 @@ static Status Grammar_AddNonTerminal(
 
 static Status Grammar_AddProduction(Grammar *grammar, Production *production)
 {
+    // This operation invalidates the cached parse table.
+    if (grammar->parse_table != NULL) {
+        StateMachine_Release(grammar->parse_table);
+        grammar->parse_table = NULL;
+    }
+
     Blimp *blimp = Grammar_GetBlimp(grammar);
 
     production->index = Vector_Length(&grammar->productions);
@@ -901,6 +921,12 @@ Status Grammar_AddTerminal(Grammar *grammar, Terminal terminal)
 {
     if (terminal < grammar->num_terminals) {
         return BLIMP_OK;
+    }
+
+    // This operation invalidates the cached parse table.
+    if (grammar->parse_table != NULL) {
+        StateMachine_Release(grammar->parse_table);
+        grammar->parse_table = NULL;
     }
 
     Blimp *blimp = Grammar_GetBlimp(grammar);
@@ -1123,6 +1149,26 @@ error:
     Vector_Destroy(&firsts);
     Vector_Destroy(follows);
     return Reraise(blimp);
+}
+
+static Status StateMachine_New(const Grammar *grammar, struct StateMachine **m);
+static Status MakeParseTable(
+    const Grammar *grammar, struct StateMachine *table);
+
+static Status Grammar_GetParseTable(
+    Grammar *grammar, struct StateMachine **parse_table)
+{
+    if (grammar->parse_table == NULL) {
+        TRY(StateMachine_New(grammar, &grammar->parse_table));
+        if (MakeParseTable(grammar, grammar->parse_table) != BLIMP_OK) {
+            StateMachine_Release(grammar->parse_table);
+            grammar->parse_table = NULL;
+            return Reraise(Grammar_GetBlimp(grammar));
+        }
+    }
+
+    *parse_table = StateMachine_Borrow(grammar->parse_table);
+    return BLIMP_OK;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1883,6 +1929,7 @@ struct StateMachine {
     size_t first_pseudo_terminal;
     size_t num_non_terminals;
     Production *start_production;
+    size_t refcount;
 };
 
 typedef StateIndex StateMachineIterator;
@@ -1944,13 +1991,6 @@ static inline bool StateMachine_Next(
     }
 
     return true;
-}
-
-static void StateMachine_Destroy(StateMachine *m)
-{
-    Vector_Destroy(&m->states);
-    HashMap_Destroy(&m->index);
-    free(m->start_production);
 }
 
 static inline State *StateMachine_GetState(const StateMachine *m, StateIndex i)
@@ -2045,8 +2085,7 @@ static Status StateMachine_NewState(
     return BLIMP_OK;
 }
 
-static Status MakeStateMachine(
-    const Grammar *grammar, StateMachine *m)
+static Status StateMachine_Init(const Grammar *grammar, StateMachine *m)
 {
     Blimp *blimp = Grammar_GetBlimp(grammar);
 
@@ -2169,8 +2208,41 @@ static Status MakeStateMachine(
 
 error:
     OrderedSet_Destroy(&transitions);
-    StateMachine_Destroy(m);
+    Vector_Destroy(&m->states);
+    HashMap_Destroy(&m->index);
+    free(m->start_production);
     return Reraise(blimp);
+}
+
+static Status StateMachine_New(const Grammar *grammar, StateMachine **m)
+{
+    Blimp *blimp = Grammar_GetBlimp(grammar);
+
+    TRY(Malloc(blimp, sizeof(StateMachine), m));
+    if (StateMachine_Init(grammar, *m) != BLIMP_OK) {
+        Free(blimp, m);
+        return Reraise(blimp);
+    }
+
+    (*m)->refcount = 1;
+    return BLIMP_OK;
+}
+
+static StateMachine *StateMachine_Borrow(StateMachine *m)
+{
+    ++m->refcount;
+    return m;
+}
+
+static void StateMachine_Release(StateMachine *m)
+{
+    assert(m->refcount > 0);
+    if (--m->refcount == 0) {
+        Vector_Destroy(&m->states);
+        HashMap_Destroy(&m->index);
+        free(m->start_production);
+        free(m);
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -2658,18 +2730,14 @@ static void DumpExtendedGrammar(
 static Status MakeParseTable(const Grammar *grammar, StateMachine *table) {
     Blimp *blimp = Grammar_GetBlimp(grammar);
 
-    TRY(MakeStateMachine(grammar, table));
-
     ExtendedGrammar extended_grammar;
     if (MakeExtendedGrammar(grammar, table, &extended_grammar) != BLIMP_OK) {
-        StateMachine_Destroy(table);
         return Reraise(blimp);
     }
 
     Vector follows;
     if (ExtendedGrammar_FollowSets(&extended_grammar, &follows) != BLIMP_OK) {
         ExtendedGrammar_Destroy(&extended_grammar);
-        StateMachine_Destroy(table);
         return Reraise(blimp);
     }
 
@@ -2832,23 +2900,22 @@ static void DumpParseTable(
     }
 }
 
-void Grammar_DumpVitals(FILE *file, const Grammar *grammar)
+void Grammar_DumpVitals(FILE *file, Grammar *grammar)
 {
-    StateMachine table;
+    StateMachine *table = NULL;
     ExtendedGrammar extended;
 
-    if (MakeStateMachine(grammar, &table) == BLIMP_OK &&
-        MakeExtendedGrammar(grammar, &table, &extended) == BLIMP_OK)
+    if (Grammar_GetParseTable(grammar, &table) == BLIMP_OK &&
+        MakeExtendedGrammar(grammar, table, &extended) == BLIMP_OK)
     {
-        DumpExtendedGrammar(file, grammar, &table, &extended);
+        DumpExtendedGrammar(file, grammar, table, &extended);
+        ExtendedGrammar_Destroy(&extended);
     }
-    ExtendedGrammar_Destroy(&extended);
-    StateMachine_Destroy(&table);
 
-    if (MakeParseTable(grammar, &table) == BLIMP_OK) {
-        DumpParseTable(file, grammar, &table);
+    if (table != NULL) {
+        DumpParseTable(file, grammar, table);
+        StateMachine_Release(table);
     }
-    StateMachine_Destroy(&table);
 }
 
 
@@ -3590,8 +3657,8 @@ static Status ParseStream(
 
     Blimp *blimp = ParseTreeStream_GetBlimp(stream);
 
-    StateMachine m;
-    TRY(MakeParseTable(grammar, &m));
+    StateMachine *m;
+    TRY(Grammar_GetParseTable(grammar, &m));
 
     // `stack` is a stack of parser state indices which is modified by SHIFT and
     // REDUCE actions.
@@ -3632,10 +3699,10 @@ static Status ParseStream(
 
     while (true) {
         const State *state = StateMachine_GetState(
-            &m, *(StateIndex *)Vector_RIndex(&stack, 0));
+            m, *(StateIndex *)Vector_RIndex(&stack, 0));
 
         ParseTree tree;
-        if (ParseTreeStream_Peek(stream, &tree, &m, &stack) != BLIMP_OK) {
+        if (ParseTreeStream_Peek(stream, &tree, m, &stack) != BLIMP_OK) {
             goto error;
         }
 
@@ -3649,14 +3716,13 @@ static Status ParseStream(
             // pseudo-terminals created by the addition of pseudo-productions
             // during the construction of the state machine.
             action = state->actions[
-                StateMachine_PseudoTerminal(
-                    &m, tree.grammar_symbol.non_terminal)
+                StateMachine_PseudoTerminal(m, tree.grammar_symbol.non_terminal)
             ];
         }
 
         switch (Action_Type(action)) {
             case SHIFT: {
-                CHECK(ParseTreeStream_Next(stream, &m, &stack));
+                CHECK(ParseTreeStream_Next(stream, m, &stack));
                     // Consume the tree we peeked.
 
                 // Push the tree onto the parse tree stack.
@@ -3687,8 +3753,8 @@ static Status ParseStream(
                 const GrammarSymbol *max_precedence = OrderedMultiset_Max(
                     &output_precedences);
                 if (GrammarListener_ShouldUpdate(&listener, max_precedence)) {
-                    StateMachine_Destroy(&m);
-                    if (MakeParseTable(grammar, &m) != BLIMP_OK) {
+                    StateMachine_Release(m);
+                    if (Grammar_GetParseTable(grammar, &m) != BLIMP_OK) {
                         goto error;
                     }
                 }
@@ -3792,7 +3858,7 @@ static Status ParseStream(
                 // out of that state, this time on the non-terminal that the
                 // reduction just produced.
                 const State *tmp_state = StateMachine_GetState(
-                    &m, *(StateIndex *)Vector_RIndex(&stack, 0));
+                    m, *(StateIndex *)Vector_RIndex(&stack, 0));
                 assert(tmp_state->gotos[production->non_terminal] != (size_t)-1);
                 if (Vector_PushBack(&stack,
                         &(StateIndex) {
@@ -3809,8 +3875,8 @@ static Status ParseStream(
                 const GrammarSymbol *max_precedence = OrderedMultiset_Max(
                     &output_precedences);
                 if (GrammarListener_ShouldUpdate(&listener, max_precedence)) {
-                    StateMachine_Destroy(&m);
-                    if (MakeParseTable(grammar, &m) != BLIMP_OK) {
+                    StateMachine_Release(m);
+                    if (Grammar_GetParseTable(grammar, &m) != BLIMP_OK) {
                         goto error;
                     }
                     ParseTreeStream_Invalidate(stream);
@@ -3830,7 +3896,7 @@ static Status ParseStream(
                 Vector_Destroy(&stack);
                 Vector_Destroy(&output);
                 OrderedMultiset_Destroy(&output_precedences);
-                StateMachine_Destroy(&m);
+                StateMachine_Release(m);
                 return BLIMP_OK;
             }
 
@@ -3906,7 +3972,7 @@ error:
     Vector_Destroy(&stack);
     Vector_Destroy(&output);
     OrderedMultiset_Destroy(&output_precedences);
-    StateMachine_Destroy(&m);
+    StateMachine_Release(m);
     return Reraise(blimp);
 }
 
