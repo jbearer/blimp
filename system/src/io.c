@@ -35,7 +35,11 @@ static BlimpStatus OutStream(
     }
 
     fprintf(file, "%s", BlimpSymbol_GetName(sym));
-    return VoidReturn(blimp, result);
+
+    // Return the receiver so that multiple outputs can be sent to the stream in
+    // a chain.
+    *result = BlimpObject_Borrow(receiver);
+    return BLIMP_OK;
 }
 
 ////////////////////////////////////////////////////////////////////////////////

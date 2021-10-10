@@ -6,7 +6,7 @@ file_extensions: [bli, blt]
 scope: source.blimp
 
 variables:
- symbol: '[~$%&\*\[\]\|\-\+=:",\.<>/\?!]*[a-zA-Z0-9_]*'
+ symbol: '[~$%&\*\[\]\-\+=:",\.<>/\?!]*[a-zA-Z0-9_]*'
 
 contexts:
   main:
@@ -28,6 +28,10 @@ contexts:
       captures:
         1: punctuation.definition.variable
         2: variable.other
+
+    - match: '\[({{symbol}})?\|'
+      scope: keyword.other.quasibracket
+      push: quasiquote
 
     - match: '({{symbol}})(@)'
       captures:
@@ -73,3 +77,22 @@ contexts:
 
     - match: '`'
       pop: true
+
+  quasiquote:
+    - meta_scope: meta.other.quasiquote
+
+    - match: '\$\s*\{'
+      push: interp_expr
+
+    - match: '\|\]'
+      scope: keyword.other.quasibracket
+      pop: true
+
+    - match: .
+      scope: string.quasiquoted
+
+  interp_expr:
+    - match: '}'
+      pop: true
+
+    - include: expr

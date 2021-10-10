@@ -662,7 +662,7 @@ static BlimpStatus TestBlimp_Receive(
         }
     }
 
-    return Blimp_ErrorMsg(blimp, BLIMP_ERROR, "no such method !%s",
+    return Blimp_ErrorMsg(blimp, BLIMP_ERROR, "no such method :%s",
         BlimpSymbol_GetName(method_name));
 }
 

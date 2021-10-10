@@ -165,12 +165,13 @@ static BlimpStatus StdoutStream(
     BlimpObject *message,
     BlimpObject **result)
 {
+    (void)blimp;
     (void)scope;
     (void)receiver;
 
     BlimpObject_Print(stdout, message);
 
-    *result = BlimpObject_Borrow(Blimp_GlobalObject(blimp));
+    *result = BlimpObject_Borrow(receiver);
     return BLIMP_OK;
 }
 

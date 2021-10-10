@@ -3,7 +3,7 @@
 #
 
 syntax 7 -> test_macro {
-    "foo"
+    [1|foo|]
 };
 
 :expect_eq test_macro foo;
@@ -12,7 +12,7 @@ syntax 7 -> test_macro {
 # A simple macro with multiple symbols.
 
 syntax 7 -> test2 test3 {
-    "bar"
+    [|bar|]
 };
 
 :expect_eq test2 test3 bar;
@@ -22,7 +22,7 @@ syntax 7 -> test2 test3 {
 #
 
 syntax 7 -> test4 <7> {
-    "baz"
+    [|baz|]
 };
 
 :expect_eq test4 {^} baz;
@@ -33,7 +33,7 @@ syntax 7 -> test4 <7> {
 #
 
 syntax 7 -> `<+` arg@<3> `+>` {
-    " $($arg) "
+    [| ${$arg}|]
 };
 
 :expect_eq <+foo+> foo;
@@ -46,7 +46,7 @@ syntax 7 -> `<+` arg@<3> `+>` {
 #
 
 syntax 7 -> test_macro2 {
-    "foo"
+    [|foo|]
 };
 
 :expect_eq test_macro2 foo;
@@ -56,14 +56,14 @@ syntax 7 -> test_macro2 {
 #
 
 syntax 7 -> test5 {
-    "foo bar"
+    [|foo bar|]
 };
 
 foo{^}{^};
 :expect_eq test5 `bar`;
 
 syntax 7 -> test6 {
-    "bar baz"
+    [|bar baz|]
 };
 
 :expect_eq test6 `bar`;
@@ -73,7 +73,7 @@ syntax 7 -> test6 {
 #
 
 syntax 7 -> quotes_in_def2 {
-    " `{` `foo` `}` "
+    [|{foo}|]
 };
 
 :expect_eq (quotes_in_def2 []) foo;

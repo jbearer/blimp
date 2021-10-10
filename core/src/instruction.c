@@ -397,11 +397,11 @@ static void PrintProcedure(
             switch (ip->type) {
                 case INSTR_BLOCKI:
                     fputc('\n', file);
-                    BlimpBytecode_Print(file, ((BLOCKI *)ip)->code, true);
+                    PrintProcedure(file, ((BLOCKI *)ip)->code, NULL, visited);
                     break;
                 case INSTR_CLOSEI:
                     fputc('\n', file);
-                    BlimpBytecode_Print(file, ((CLOSEI *)ip)->code, true);
+                    PrintProcedure(file, ((CLOSEI *)ip)->code, NULL, visited);
                     break;
                 case INSTR_SENDTO: {
                     SENDTO *instr = (SENDTO *)ip;

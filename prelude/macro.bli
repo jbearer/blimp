@@ -1,44 +1,189 @@
-# Run-time functions used by expanded macros.
-__pat_head{^} {^iter
-    {
-        __h{^ ^};
-        ^iter { ^x
-            __h {(^x)}
+################################################################################
+# Parse tree data structures
+#
+# A parse tree is conceptually a pair of
+#   * a grammar symbol, which is an object (usually, but not always, a symbol)
+#     identifying the terminal or non-terminal matching that parse tree
+#   * a possibly-empty list of sub-trees
+#
+# We represent parse trees as a struct owning a linked list of sub-trees. The
+# linked list is implemented using a __parse_tree_node data structure, which
+# wraps a sub-tree and a pointer to the next node.
+#
+
+# __parse_tree_nil implements the __parse_tree_node interface, but it is a
+# singleton representing the empty list.
+__parse_tree_nil{^} ({
+    each{^} {
+        {^f
+            .
+        }
+    };
+
+    if_nil{^} {
+        {^t{^f
+            ^t[]
+        }}
+    };
+
+    equals{^} {
+        {^other
+            ^other if_nil {
+                true
+            } {
+                false
+            }
+        }
+    };
+
+    {^msg
+        ^msg[]
+    }
+}[]);
+
+__bind __parse_tree_node __init {^self{^tree
+    ^self tree (^tree);
+    ^self next (__cell[]);
+    ^self next{__parse_tree_nil}
+}};
+
+__bind __parse_tree_node each {^self{^f
+    ^f (^self tree);
+    ^self next{^} each ^f
+}};
+
+__bind __parse_tree_node if_nil {^self{^t{^f
+    ^f[]
+}}};
+
+__bind __parse_tree_node equals {^self{^other
+    (^other if_nil) {
+        false
+    } {
+        (^self tree) == (^other tree) if_true {
+            (^self next{^}) equals (^other next{^})
+        } {
+            false
+        }
+    }
+}};
+
+__bind parse_tree __init {^self{^sym
+    ^self symbol ^sym;
+
+    ^self _head (__cell[]);
+    ^self _head {__parse_tree_nil};
+
+    ^self _tail (__cell[]);
+    ^self _tail {__parse_Tree_nil};
+
+    .
+}};
+
+__bind parse_tree == {^self{^other
+    __call {
+        (^self symbol) == (^other symbol) if_true {
+            (^self _head{^}) equals (^other _head{^})
+        } {
+            false
+        }
+    }
+}};
+
+__bind parse_tree each {^self{^f
+    ^self _head{^} each ^f
+}};
+
+__bind parse_tree is_terminal {^self
+    # By definition, a tree represents a terminal if and only if it has no
+    # sub-trees.
+    ^self _head{^} if_nil {
+        true
+    } {
+        false
+    }
+};
+
+__bind parse_tree push {^self{^tree
+    # Create a new, isolated list node representing ^tree, and call it ^node.
+    {^node
+        # Append the node to the linked list.
+        ^self _tail{^} if_nil {
+            (^self) _head{(^node)};
+            (^self) _tail{(^node)}
+        } {
+            (^self) _tail{^} next {(^node)};
+            (^self) _tail{(^node)}
+        }
+    } (__new __parse_tree_node ^tree);
+
+    ^self
+}};
+
+__bind parse_tree render {^self{^out
+    ^out `[` (^self symbol) `|`;
+    ^self each {^sub_tree
+        ^sub_tree render ^out
+    };
+    ^out `|]`
+}};
+
+# Create an object implementing the low-level parse tree protocol understood by
+# the built-in macro construct, representing the same tree as this parse tree.
+__bind parse_tree __inner {^self
+    {^out
+        ^self each {^sub_tree
+            ^out (^sub_tree __inner)
         };
-        __h[]
+        ^self symbol
+    }
+};
+
+# Construct a high-level parse_tree instance from an object implementing the
+# low-level parse tree protocol.
+__parse_tree_from_inner{^} {^t
+    {
+        # We'll build a linked list of the sub-trees locally, as we visit the
+        # children of ^t. Once we have all of ^t's children (and its grammar
+        # symbol, which we can only get after visiting it) we will move the
+        # children and grammar symbol into a new parse_tree object.
+        head{^} (__cell[]);
+        head{__parse_tree_nil};
+        tail{^} (__cell[]);
+        tail{__parse_tree_nil};
+
+        # Visit the children of ^t and get the return value ^sym, which is the
+        # grammar symbol of the parse tree.
+        {^sym
+            # Construct a new parse_tree with ^sym and set its head and tail.
+            {^t
+                ^t _head {head{^}};
+                ^t _tail {tail{^}};
+                ^t
+            } (__new parse_tree ^sym)
+        } (
+            ^t {^sub_tree
+                # For each child of ^t, recursively use __parse_tree_from_inner
+                # to build a high-level parse_tree representing the child, and
+                # then  construct a new isolated list node from that tree.
+                {^node
+                    # Append the new node to our local list.
+                    tail{^} if_nil {
+                        head{(^node)};
+                        tail{(^node)}
+                    } {
+                        tail{^} next {(^node)};
+                        tail{(^node)}
+                    }
+                } (__new __parse_tree_node (__parse_tree_from_inner ^sub_tree))
+            }
+        )
     }[]
 };
 
-__pat_tail {^} {^iter {^visit
-    n_ref{^ ^};
-    n n_ref;
-    n_ref _0;
-    ^iter {^x
-        {
-            _0{^{{
-                n_ref _1
-            }}} ;
-            _1{^{{
-                (^visit ^x)
-            }}};
-            n[] []
-        }[]
-    }
-}};
-
-__bind parse_tree each {^t{^f
-    ^t {^sub_tree
-        ^f (__wrap parse_tree ^sub_tree)
-    }
-}};
-
-__bind parse_tree __inner{^};
-
-# The whole rest of this file is only intended to have parse-time side-effects
-# (defining macros) so we wrap the whole thing in braces to ensure it never
-# executes at run-time.
-{
-
+################################################################################
+# __kleene_for
+#
 # Loop over a parse tree returned from a Kleene star production. A Kleene star
 # production is one of a pair of productions of the form
 #
@@ -68,7 +213,7 @@ __bind parse_tree __inner{^};
 #
 # This macro takes such a parse tree object and a block, and applies the block
 # to each term in the inner parse tree.
-\> {^{`__kleene_for`} {^{``}; 6} {^{``}; 7}; 3} {^toks
+{\> {^{`__kleene_for`} {^{``}; 6} {^{``}; 7}; 3} {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -100,19 +245,245 @@ __bind parse_tree __inner{^};
           3
         }
     }[]
-};
+}};
 
-# A non-terminal which just reduces symbols. This is just because it's slightly
-# nicer to write {symbol} than `\`sym\``.
-\> {^{`\`sym\``}; symbol} {^toks
+################################################################################
+# QuasiQuote syntax for creating parse trees
+#
+# The expression [n|input to parser|] is a parse_tree representing the result of
+# parsing the text "input to parser" as the non-terminal `n`. The non-terminal
+# symbol is optional and defaults to 1, so [|input|] is the same as [1|input|].
+#
+# Expressions representing parse trees can be interpolated into the new parse
+# tree using ${}, as in [|${recv} msg|], which is a parse tree representing the
+# expression that sends `msg` to whatever expression is represented by the
+# parse_tree `recv`.
+#
+
+# Literal terms (which we convert to terminal parse trees).
+{\> {^{^{``}; symbol}; term}  {^toks
     {
         sym{^ ^};
-        ^toks{^sym
-            sym{(^sym[])}
+        ^toks{^sub_tree
+            ^sub_tree {^sym
+                sym{(^sym)}
+            }
         };
-        {^{^{sym[]}; 7}; 6}
+        {^ {`(`} {`__new`} {`parse_tree`} (sym[]) {`)`}; 6}
     }[]
-};
+}};
+
+# For commonly used tokens which cannot be lexed as symbols even in a context
+# where a symbol is the only expected token, we define rules that accept that
+# token and convert it to a terminal parse tree.
+#
+# This is only necessary due to current limitations of the lexer. The lexer
+# should be made extensible from bl:mp or at least given better defaults, after
+# which time we should be able to achieve this in a much more general way.
+{\> {^{`(`}; term}  {^toks
+    {^ {`(`} {`__new`} {`parse_tree`} {^{`(`}; 7} {`)`}; 6}
+}};
+{\> {^{`)`}; term}  {^toks
+    {^ {`(`} {`__new`} {`parse_tree`} {^{`)`}; 7} {`)`}; 6}
+}};
+{\> {^{`{`}; term}  {^toks
+    {^ {`(`} {`__new`} {`parse_tree`} {^{`{`}; 7} {`)`}; 6}
+}};
+{\> {^{`}`}; term}  {^toks
+    {^ {`(`} {`__new`} {`parse_tree`} {^{`}`}; 7} {`)`}; 6}
+}};
+{\> {^{`!`}; term}  {^toks
+    {^ {`(`} {`__new`} {`parse_tree`} {^{`!`}; 7} {`)`}; 6}
+}};
+
+
+# Interpolated expressions as terms representing sub-trees.
+{\> {^{`$`} {`{`} {^{``}; 1} {`}`}; term} {^toks
+    {
+        n_ref{^ ^};
+        n n_ref;
+        n_ref _0;
+
+        term{^ ^};
+        ^toks {^tok
+            {
+                _0{^{{
+                    # $
+                    n_ref _1
+                }}};
+                _1{^{{
+                    # {
+                    n_ref _2
+                }}};
+                _2{^{{
+                    term{(^tok)};
+                    n_ref _3
+                }}};
+                _3{^{{
+                    # }
+                    n_ref _4
+                }}};
+                n[] []
+            }[]
+        };
+
+        term[]
+    }[]
+}};
+
+{\> {^{^{``}; term}; terms} {^toks
+    {^ {(^toks) ^; 7}; 6}
+}};
+
+{\> {^{^{``}; term} {^{``}; terms}; terms} {^toks
+    {
+        n_ref{^ ^};
+        n n_ref;
+        n_ref _0;
+
+        head{^ ^};
+        tail{^ ^};
+        ^toks {^tok
+            {
+                _0{^{{
+                    head {(^tok)};
+                    n_ref _1
+                }}};
+                _1{^{{
+                    tail {(^tok)};
+                    n_ref _2
+                }}};
+                n[] []
+            }[]
+        };
+
+        {^{^out
+            ^out(head[]);
+            __kleene_for(tail[]) {^term
+                ^out ^term
+            };
+            7
+        }; 6}
+    }[]
+}};
+
+# The basic quasiquote syntax.
+{\> {^{`[`} {^{``}; 7} {`|`} {^{``}; terms} {`|]`}; 7} {^toks
+    {
+        n_ref{^ ^};
+        n n_ref;
+        n_ref _0;
+
+        nt{^ ^};
+        terms{^ ^};
+        ^toks {^tok
+            {
+                _0{^{{
+                    # [
+                    n_ref _1
+                }}};
+                _1{^{{
+                    nt {(^tok)};
+                    n_ref _2
+                }}};
+                _2{^{{
+                    # |
+                    n_ref _3
+                }}};
+                _3{^{{
+                    terms {(^tok)};
+                    n_ref _4
+                }}};
+                _4{^{{
+                    # |]
+                    n_ref _5
+                }}};
+
+                n[] []
+            }[]
+        };
+
+        {^out
+            ^{`__new`} {`parse_tree`} (nt[]);
+            __kleene_for (terms[]) {^term
+                ^out {`push`} {(^term) ^; 7}
+            };
+            3
+        }
+    }[]
+}};
+
+# `terms` is always non-empty, so we define a separate production for an empty
+# parse tree.
+{\> {^{`[`} {^{``}; 7} {`|`} {`|]`}; 7} {^toks
+    {
+        n_ref{^ ^};
+        n n_ref;
+        n_ref _0;
+
+        nt{^ ^};
+        terms{^ ^};
+        ^toks {^tok
+            {
+                _0{^{{
+                    # [
+                    n_ref _1
+                }}};
+                _1{^{{
+                    nt {(^tok)};
+                    n_ref _2
+                }}};
+                _2{^{{
+                    # |
+                    n_ref _3
+                }}};
+                _3{^{{
+                    # |]
+                    n_ref _4
+                }}};
+
+                n[] []
+            }[]
+        };
+
+        {^{`__new`} {`parse_tree`} (nt[]); 3}
+    }[]
+}};
+
+# If no non-terminal symbol is given, default to 1.
+{\> {^{`[|`} {^{``}; terms} {`|]`}; 7} {^toks
+    {
+        n_ref{^ ^};
+        n n_ref;
+        n_ref _0;
+
+        nt{^ ^};
+        terms{^ ^};
+        ^toks {^tok
+            {
+                _0{^{{
+                    # [|
+                    n_ref _1
+                }}};
+                _1{^{{
+                    terms {(^tok)};
+                    n_ref _2
+                }}};
+                _2{^{{
+                    # |]
+                    n_ref _3
+                }}};
+
+                n[] []
+            }[]
+        };
+
+        {^out
+            ^{`[`} {`1`} {`|`} (terms[]) {`|]`};
+            7
+        }
+    }[]
+}};
 
 ################################################################################
 # grammar_symbol
@@ -123,8 +494,20 @@ __bind parse_tree __inner{^};
 # <>).
 #
 
+# A non-terminal which just reduces symbols. This is just because it's slightly
+# nicer to write {symbol} than `\`sym\``.
+{\> {^{`\`sym\``}; symbol} {^toks
+    {
+        sym{^ ^};
+        ^toks{^sym
+            sym{(^sym[])}
+        };
+        {^{^{sym[]}; 7}; 6}
+    }[]
+}};
+
 # Terminal symbols.
-\> {^{^{``}; symbol}; grammar_symbol}  {^toks
+{\> {^{^{``}; symbol}; grammar_symbol}  {^toks
     {
         sym{^ ^};
         ^toks{^sub_tree
@@ -134,10 +517,10 @@ __bind parse_tree __inner{^};
         };
         {^ {`{`} (sym[]) {`}`}; 6}
     }[]
-};
+}};
 
 # Non-terminal symbols.
-\> {^ {<} {^{``}; symbol} {>}; grammar_symbol} {^toks
+{\> {^ {<} {^{``}; symbol} {>}; grammar_symbol} {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -171,7 +554,7 @@ __bind parse_tree __inner{^};
         # definitions.
         {^ {`{`} {`^`} {`{`} {``} {`}`} {`;`} (nt[]) {`}`}; 6}
     }[]
-};
+}};
 
 ################################################################################
 # pattern
@@ -189,7 +572,7 @@ __bind parse_tree __inner{^};
 #
 
 # No-name patterns.
-\> {^{^{``}; grammar_symbol}; pattern} {^toks
+{\> {^{^{``}; grammar_symbol}; pattern} {^toks
     {
         ret{^ ^};
 
@@ -204,10 +587,10 @@ __bind parse_tree __inner{^};
         };
         ret[]
     }[]
-};
+}};
 
 # Named patterns.
-\> {^{^{``}; symbol} {`@`} {^{``}; grammar_symbol}; pattern} {^toks
+{\> {^{^{``}; symbol} {`@`} {^{``}; grammar_symbol}; pattern} {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -235,15 +618,15 @@ __bind parse_tree __inner{^};
 
         {^{(binder[]) ^; (symbol[]) ^; 7}; 6}
     }[]
-};
+}};
 
 # A singleton Kleene sequence of patterns.
-\> {^{^{``}; pattern}; patterns} {^toks
+{\> {^{^{``}; pattern}; patterns} {^toks
     {^ {(^toks) ^; 7}; 6}
-};
+}};
 
 # A non-trivial Kleene sequence of patterns.
-\> {^{^{``}; pattern} {^{``}; patterns}; patterns} {^toks
+{\> {^{^{``}; pattern} {^{``}; patterns}; patterns} {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -273,13 +656,41 @@ __bind parse_tree __inner{^};
             7
         }; 6}
     }[]
-};
+}};
 
 ################################################################################
 # Macro definitions
 #
 
-\> {^ {`syntax`} {`\`sym\``} {`->`} {^{``}; patterns} {`{`} {^{``}; 1} {`}`}; 3} {^toks
+# Run-time functions used by macro handlers defined using `syntax`.
+__pat_head{^} {^iter
+    {
+        __h{^ ^};
+        ^iter { ^x
+            __h {(^x)}
+        };
+        __h[]
+    }[]
+};
+
+__pat_tail {^} {^iter {^visit
+    n_ref{^ ^};
+    n n_ref;
+    n_ref _0;
+    ^iter {^x
+        {
+            _0{^{{
+                n_ref _1
+            }}} ;
+            _1{^{{
+                (^visit ^x)
+            }}};
+            n[] []
+        }[]
+    }
+}};
+
+{\> {^ {`syntax`} {`\`sym\``} {`->`} {^{``}; patterns} {`{`} {^{``}; 1} {`}`}; 3} {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -382,171 +793,20 @@ __bind parse_tree __inner{^};
 
             ^{`{`} {`^toks`};
                 ^ {`{`};
-                    # This block will receive the output of the user's handler
-                    # (which is a list of parse trees) and feed each output tree
-                    # to the output stream.
-                    ^ {`{`} {`^list`}
-                        {`{`}
-                            {`(`} {`^list`} {`)`} {`each`} {`^`} {`;`} {`1`}
-                        {`}`}
-                    {`}`} {`(`}
-                        {`__call`} {`{`};
-                            visit_patterns (patterns[]) {^sym{^binder
-                                ^out ^binder {`:=`} {`(`} (next_tok[]) {`)`} {`;`}
-                            }};
-                            ^{`(`}(handler[]){`)`}
-                        {`}`}
-                    {`)`};
+                    ^ {`__call`} {`{`};
+                        visit_patterns (patterns[]) {^sym{^binder
+                            ^out ^binder {`:=`}
+                                {`(`} {`__parse_tree_from_inner`}
+                                    {`(`} (next_tok[]) {`)`} {`)`} {`;`}
+                        }};
+                        ^{`(`}(handler[]){`)`} {`__inner`};
+                    ^{`}`};
                 ^{`}`} {`[]`};
             ^{`}`} {`}`};
 
             1
         }
     }[]
-};
-
-################################################################################
-# terms
-#
-# To make it a bit easier to define macros, we provide a convenient syntax for
-# creating a parse tree which emits a list of sub-trees. The `terms` grammar
-# matches a Kleen sequence of precedence-7 expressions. Quotes ("") signal the
-# parser to look for a sequence of terms, and the macro definition macro above
-# expects the handler to return a list of terms.
-#
-
-# Literal terms (which we convert to terminal parse trees).
-\> {^{^{``}; symbol}; term}  {^toks
-    {
-        sym{^ ^};
-        ^toks{^sub_tree
-            ^sub_tree {^sym
-                sym{(^sym)}
-            }
-        };
-        {^ {`{`} (sym[]) {`}`}; 6}
-    }[]
-};
-
-# Interpolated expressions as terms representing sub-trees.
-\> {^{`$`} {^{``}; 7}; term} {^toks
-    {
-        n_ref{^ ^};
-        n n_ref;
-        n_ref _0;
-
-        term{^ ^};
-        ^toks {^tok
-            {
-                _0{^{{
-                    n_ref _1
-                }}};
-                _1{^{{
-                    term{(^tok)};
-                    n_ref _2
-                }}};
-                n[] []
-            }[]
-        };
-
-        term[]
-    }[]
-};
-
-\> {^{^{``}; term}; terms} {^toks
-    {^ {(^toks) ^; 7}; 6}
-};
-
-\> {^{^{``}; term} {^{``}; terms}; terms} {^toks
-    {
-        n_ref{^ ^};
-        n n_ref;
-        n_ref _0;
-
-        head{^ ^};
-        tail{^ ^};
-        ^toks {^tok
-            {
-                _0{^{{
-                    head {(^tok)};
-                    n_ref _1
-                }}};
-                _1{^{{
-                    tail {(^tok)};
-                    n_ref _2
-                }}};
-                n[] []
-            }[]
-        };
-
-        {^{^out
-            ^out(head[]);
-            __kleene_for(tail[]) {^term
-                ^out ^term
-            };
-            7
-        }; 6}
-    }[]
-};
-
-\> {^{`"`} {^{``}; terms} {`"`}; 3} {^toks
-    {
-        n_ref{^ ^};
-        n n_ref;
-        n_ref _0;
-
-        terms{^ ^};
-        ^toks {^tok
-            {
-                _0{^{{
-                    # "
-                    n_ref _1
-                }}};
-                _1{^{{
-                    terms {(^tok)};
-                    n_ref _2
-                }}};
-                _2{^{{
-                    # "
-                    n_ref _3
-                }}};
-
-                n[] []
-            }[]
-        };
-
-        # Visit each term, and take an action where we want to emit a separator
-        # (between each pair of terms).
-        visit_terms{^} {^terms{^visit
-            # Initially, `sep` is set to `{.}`, to skip the separator action
-            # before the first term.
-            sep_ref{^ ^};
-            sep sep_ref;
-            sep_ref{{.}};
-
-            __kleene_for ^terms {^term
-                ^visit ^term (sep[]);
-                sep_ref{{^ []}}
-                    # After visiting a term, set `sep` to {^[]}, so that passing
-                    # a block to `sep` will evaluate that block before each
-                    # remaining term.
-            }
-        }};
-
-        {^out
-            ^{`[`};
-                visit_terms (terms[]) {^term{^sep
-                    ^sep {
-                        (^out {`,`})
-                    };
-                    ^out {(^term) ^; 7}
-                }};
-            ^{`]`};
-            3
-        }
-    }[]
-};
+}};
 
 .
-
-}
