@@ -3842,12 +3842,9 @@ static Status ParseStream(
 
                 // Remove the corresponding symbols from `output_precedences`
                 // for each expression consumed from `output`.
-                for (ParseTree *consumed = fragment.sub_trees;
-                     consumed < fragment.sub_trees + fragment.num_sub_trees;
-                     ++consumed)
-                {
+                for (size_t i = 0; i < production->num_symbols; ++i) {
                     OrderedMultiset_Remove(
-                        &output_precedences, &consumed->grammar_symbol);
+                        &output_precedences, &production->symbols[i]);
                 }
 
                 // Call the handler to get a larger parse tree.
