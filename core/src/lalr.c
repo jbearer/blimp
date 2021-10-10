@@ -388,8 +388,8 @@
 // is a starting state of the form `S -> N` for each non-terminal `N`, and so
 // adding a new non-terminal `N` (even if the production that created it starts
 // with a high-precedence symbol) would implicitly add a new low-precedence
-// production `S -> N` to the grammar, which would be very difficult to add to
-// the parsing state due to its low precedence.
+// state to the state machine, which would be very difficult to add to the
+// parsing state due to its low precedence.
 //
 // To get around this apparent impasse, starting states occupy a separate,
 // parallel table from normal states, so their precedence is incomparable to
@@ -404,7 +404,12 @@
 //
 // To manage this additional complexity, there is a StateIndex abstraction,
 // which wraps an index and a tag identifying the table to which the index is
-// relative (the starting state table or the normal state table).
+// relative (the starting state table or the normal state table). In addition,
+// we do still have to respect newly added non-terminals when deciding if we can
+// update the parse table mid-parse, because a newly added non-terminal N
+// corresponds to an implicit production `S -> N`, and the precedence of the
+// first symbol of newly added productions is relevant when deciding if it is
+// safe to update the parse table.
 //
 ////////////////////////////////////////////////////////////////////////////////
 // Dynamic and Context-Sensitive Lexing
@@ -765,6 +770,31 @@ static Status Grammar_AddNonTerminal(
 {
     if (nt < Grammar_NumNonTerminals(grammar)) {
         return BLIMP_OK;
+    } else {
+        // If any parsing operations are in progress and listening for updates
+        // to the grammar, inform them of the lowest-precedence new
+        // non-terminal.
+        GrammarSymbol new = {
+            .is_terminal = false,
+            .non_terminal = Grammar_NumNonTerminals(grammar),
+        };
+        for (GrammarListener *listener = grammar->listeners;
+             listener != NULL;
+             listener = listener->next)
+        {
+            if (listener->dirty) {
+                // The listener only cares about the new production if it is
+                // lower precedence than the ones they already know about.
+                if (GrammarSymbol_Cmp(
+                        &new, &listener->min_new_precedence) < 0)
+                {
+                    listener->min_new_precedence = new;
+                }
+            } else {
+                listener->dirty = true;
+                listener->min_new_precedence = new;
+            }
+        }
     }
 
     // This operation invalidates the cached parse table.
