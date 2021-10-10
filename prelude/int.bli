@@ -24,6 +24,11 @@
 # singleton lists of the corresponding digits.
 #
 
+# Everything we need to construct integer objects is evaluated eagerly, so that
+# we can define syntax that constructs integer literals at parse time and start
+# using the syntax immediately after.
+!(
+
 ################################################################################
 # single-digit arithmetic
 #
@@ -717,9 +722,49 @@ __make_dcons{^} {^h{^t
     }
 }};
 
+.);
+
 ################################################################################
 # integer: a wrapper class which presents a vtable-based interface to integers
 #
+
+# Syntax for integer literals, evaluated into integer objects at parse time.
+#
+# At present, integer literals must be delimited by %%, because otherwise, an
+# integer literal could be lexed as a single symbol or a sequence of 1-character
+# digits, and the current design of the lexer, with an implicit rule to always
+# match symbols and a longest-match disambiguator, means that it will always
+# choose the symbol lexing.
+#
+# The lexer be improved to be extensible from bl:mp, or at least have better
+# defaults, after which time we should be able to do away with the %%
+# delimiters.
+syntax digit -> 0 { [|__digit0|] };
+syntax digit -> 1 { [|__digit1|] };
+syntax digit -> 2 { [|__digit2|] };
+syntax digit -> 3 { [|__digit3|] };
+syntax digit -> 4 { [|__digit4|] };
+syntax digit -> 5 { [|__digit5|] };
+syntax digit -> 6 { [|__digit6|] };
+syntax digit -> 7 { [|__digit7|] };
+syntax digit -> 8 { [|__digit8|] };
+syntax digit -> 9 { [|__digit9|] };
+syntax number -> 0 { [|__dpos|] };
+syntax number -> 1 { [|__dcons __digit1 __dpos|] };
+syntax number -> 2 { [|__dcons __digit2 __dpos|] };
+syntax number -> 3 { [|__dcons __digit3 __dpos|] };
+syntax number -> 4 { [|__dcons __digit4 __dpos|] };
+syntax number -> 5 { [|__dcons __digit5 __dpos|] };
+syntax number -> 6 { [|__dcons __digit6 __dpos|] };
+syntax number -> 7 { [|__dcons __digit7 __dpos|] };
+syntax number -> 8 { [|__dcons __digit8 __dpos|] };
+syntax number -> 9 { [|__dcons __digit9 __dpos|] };
+syntax number -> n@<number> d@<digit> {
+    [|__dcons (${$d}) (${$n})|]
+};
+syntax `7` -> `%` n@<number> `%` {
+    [| !(__wrap integer (${$n})) |]
+};
 
 __bind integer __digits {^x
     ^x
@@ -743,7 +788,7 @@ __bind integer * {^self
     # We should be able to replace this with a faster implementation.
     function(y) {
         x := (__wrap integer ^self);
-        n := 0;
+        n := %0%;
         $y times {
             n := (($n) + ($x))
         };
@@ -775,7 +820,7 @@ __bind integer render {^x{^out
         # normal decimal representation is to get the sign and the absolute
         # value in two separate steps.
         if (^x negative) {
-            (^out `-`); (0 - (__wrap integer ^x)) render ^out
+            (^out `-`); (%0% - (__wrap integer ^x)) render ^out
         } else {
             (^x __render ^out)
         }
@@ -784,35 +829,7 @@ __bind integer render {^x{^out
 
 __operator -;
 -{^} {^x
-    0 - ^x
+    %0% - ^x
 };
-
-################################################################################
-# globally bound names for small integers
-#
-
-0{^} (__wrap integer (__dpos));
-1{^} (__wrap integer (__dcons __digit1 __dpos));
-2{^} (__wrap integer (__dcons __digit2 __dpos));
-3{^} (__wrap integer (__dcons __digit3 __dpos));
-4{^} (__wrap integer (__dcons __digit4 __dpos));
-5{^} (__wrap integer (__dcons __digit5 __dpos));
-6{^} (__wrap integer (__dcons __digit6 __dpos));
-7{^} (__wrap integer (__dcons __digit7 __dpos));
-8{^} (__wrap integer (__dcons __digit8 __dpos));
-9{^} (__wrap integer (__dcons __digit9 __dpos));
-10{^} (__wrap integer (__dcons __digit0 (__dcons __digit1 __dpos)));
-
-################################################################################
-# constructor for arbitarary integers
-#
-
-digits{^} (function(ds) {
-    n := 0;
-    $ds each {^d
-        n := (10*($n) + ^d)
-    };
-    $n
-});
 
 .

@@ -94,6 +94,10 @@ __bind parse_tree each {^self{^f
     ^self _head{^} each ^f
 }};
 
+__bind parse_tree first {^self
+    ^self _head{^} tree
+};
+
 __bind parse_tree is_terminal {^self
     # By definition, a tree represents a terminal if and only if it has no
     # sub-trees.
@@ -808,5 +812,14 @@ __pat_tail {^} {^iter {^visit
         }
     }[]
 }};
+
+################################################################################
+# Syntax for earlier modules, which are defined before this one because this
+# module depends on them.
+#
+
+syntax 7 -> `$` lv@<6> {
+    [3|(${$lv}) __get|]
+};
 
 .

@@ -26,28 +26,39 @@ c := nil;
 :expect_eq $c a;
 
 # Test length.
-:expect([ ] length == 0);
-:expect([a] length == 1);
-:expect([a, b, c, d, e] length == 5);
+:expect([ ] length == %0%);
+:expect([a] length == %1%);
+:expect([a, b, c, d, e] length == %5%);
 
 # Test element access.
-:expect_eq $([a, b, c]@0) a;
-:expect_eq $([a, b, c]@1) b;
-:expect_eq $([a, b, c]@2) c;
+:expect_eq $([a, b, c]@%0%) a;
+:expect_eq $([a, b, c]@%1%) b;
+:expect_eq $([a, b, c]@%2%) c;
 
 # Test element updates.
 l := [a, b, c];
-($l)@0 := c;
-($l)@1 := b;
-($l)@2 := a;
-:expect_eq $(($l)@0) c;
-:expect_eq $(($l)@1) b;
-:expect_eq $(($l)@2) a;
+($l)@%0% := c;
+($l)@%1% := b;
+($l)@%2% := a;
+:expect_eq $(($l)@%0%) c;
+:expect_eq $(($l)@%1%) b;
+:expect_eq $(($l)@%2%) a;
 
 # Test simultaneous element updates.
-[(($l)@0), (($l)@1), (($l)@2)] := [($(($l)@2)), ($(($l)@1)), ($(($l)@0))];
-:expect_eq $(($l)@0) a;
-:expect_eq $(($l)@1) b;
-:expect_eq $(($l)@2) c;
+[(($l)@%0%), (($l)@%1%), (($l)@%2%)] := [($(($l)@%2%)), ($(($l)@%1%)), ($(($l)@%0%))];
+:expect_eq $(($l)@%0%) a;
+:expect_eq $(($l)@%1%) b;
+:expect_eq $(($l)@%2%) c;
+
+# Test equality.
+:expect ([ ] == [ ]);
+:expect (not ([ ] == [a]));
+:expect ([a] == [a]);
+:expect (not ([a] == [ ]));
+:expect (not ([a] == [b]));
+:expect (not ([a] == [a, b]));
+:expect (not ([a, b] == [a]));
+:expect ([a, b] == [a, b]);
+:expect (not ([a, b] == [b, a]));
 
 .

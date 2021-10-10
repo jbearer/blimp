@@ -96,6 +96,12 @@ __list_nil{^} ({
         }
     };
 
+    prefix{^} {
+        {^other
+            true
+        }
+    };
+
     if_nil{^} {
         {^t{^f
             ^t[]
@@ -129,6 +135,14 @@ __bind __list_node assign{^self{^values
     ^self next{^} assign (^values next{^})
 }};
 
+__bind __list_node prefix{^self{^other
+    (^self value{^} == (^other value{^})) if_true {
+        (^self next{^}) prefix (^other next{^})
+    } {
+        false
+    }
+}};
+
 __bind __list_node get{^self
     ^self value
 };
@@ -150,7 +164,7 @@ __bind list __init {^self{
     # to 0.
     ^self __head {__list_nil};
     ^self __tail {__list_nil};
-    ^self __length {0};
+    ^self __length {%0%};
     .
 }};
 
@@ -182,7 +196,7 @@ __bind list push {^self{^value
         # is equal to the old length of the list.
         ^self __at ^length {(^self __tail){^}};
 
-        ^length + 1
+        ^length + %1%
     });
 
     ^self
@@ -220,6 +234,14 @@ __bind list := {^self{^values
     .
 }};
 
+__bind list == {^self{^other
+    (^self length) == (^other length) if_true {
+        (^self __head{^}) prefix (^other __head{^})
+    } {
+        false
+    }
+}};
+
 __bind list render {^self{^out
     ^out `[`;
     ^self __head{^head
@@ -237,5 +259,33 @@ __bind list render {^self{^out
     };
     ^out `]`
 }};
+
+# We represent a __list_elems as a [6||] enclosing a [7||] whose children are a
+# flat list of the elements. The outer [6||] is just to stop the inner [7||]
+# (which is not actually a valid parse tree) from being interpreted during
+# reparsing.
+syntax __list_elems -> elem@<custom1> {
+    [6| ${[7| ${$elem} |]} |]
+};
+
+syntax __list_elems -> elem@<custom1> `,` elems@<__list_elems> {
+    t := [7| ${$elem} |];
+    $elems first each {^elem
+        $t push ^elem
+    };
+    [6| ${$t} |]
+};
+
+syntax 7 -> `[` elems@<__list_elems> `]` {
+    t := [3|${[3|__new list|]} . |];
+    $elems first each {^elem
+        t := [3|${[3|${$t} push|]} ${^elem}|]
+    };
+    $t
+};
+
+syntax 7 -> `[` `]` {
+    [3|__new list . |]
+};
 
 .

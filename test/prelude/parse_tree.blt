@@ -1,0 +1,46 @@
+import std;
+
+# Terminals
+:expect (__new parse_tree foo is_terminal);
+:expect_eq (__new parse_tree foo symbol) foo;
+
+children := [ ];
+__new parse_tree foo each {^t
+    $children push ^t
+};
+:expect ($children == [ ]);
+
+# Non-terminals
+:expect (not (__new parse_tree foo push (__new parse_tree bar) is_terminal));
+:expect_eq (__new parse_tree foo push (__new parse_tree bar) symbol) foo;
+
+children := [ ];
+__new parse_tree foo
+    push (__new parse_tree bar)
+    push (__new parse_tree baz)
+each {^t
+    $children push ^t
+};
+:expect ($children == [(__new parse_tree bar), (__new parse_tree baz)]);
+
+# QuasiQuote
+:expect ([foo||] == (__new parse_tree foo));
+:expect ([|foo|] == (__new parse_tree 1 push (__new parse_tree foo)));
+:expect ([|foo ${[bar||]}|] == (__new parse_tree 1
+    push (__new parse_tree foo)
+    push (__new parse_tree bar)));
+
+# Equality
+:expect ([foo||] == [foo||]);
+:expect (not ([foo||] == [bar||]));
+:expect (not ([foo||] == [|foo|]));
+:expect (not ([|foo|] == [foo||]));
+:expect ([|foo|] == [|foo|]);
+:expect (not ([|foo|] == [|bar|]));
+:expect (not ([1|foo|] == [2|foo|]));
+:expect (not ([|foo bar|] == [|foo|]));
+:expect (not ([|foo|] == [|foo bar|]));
+:expect ([|foo bar|] == [|foo bar|]);
+:expect (not ([|foo bar|] == [|bar foo|]));
+
+.

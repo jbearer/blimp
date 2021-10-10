@@ -1,14 +1,14 @@
-!(
-    import runtime;
-    import vtable;
-    import bool;
-    import symbol;
-    import function;
-    import int;
-    import list;
-    import struct;
-    import path;
-    import macro;
-    import syntax;
-    .
-)
+# We import each sub-module in a !() expression, so that it is fully evaluated
+# during parse time. This allows each subsequent module to use run-time
+# definitions of the previous modules, even at parse time of the new module.
+!(import runtime);
+!(import vtable);
+!(import symbol);
+!(import macro);
+!(import bool);
+!(import function);
+!(import int);
+!(import list);
+!(import struct);
+!(import path);
+.

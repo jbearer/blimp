@@ -59,7 +59,7 @@ false {
 };
 
 not {^{^b
-    b if_true { false } { true }
+    ^b if_true { false } { true }
 }};
 
 if{^} {^cond{^if_block

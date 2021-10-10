@@ -34,4 +34,8 @@ __bind __at_path render{^self{^out
     ^self __index render ^out
 }};
 
+syntax 6 -> base@<6> `@` index@<6> {
+    [3|__new __at_path([ ${$base} , ${$index} ])|]
+};
+
 .

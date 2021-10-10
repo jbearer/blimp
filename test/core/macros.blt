@@ -828,4 +828,28 @@ get_singleton{^} {
 :expect_eq (get_singleton[] {foo}) undefined;
 :expect_eq (get_singleton[] {^}) foo;
 
+################################################################################
+# Regression test: adding a new non-terminal while in a high-precedence state.
+#
+# A bug where newly added non-terminals were not factored into the decision to
+# update the parser state led to the parser state being updated too early,
+# changing the meaning of states which were currently on the parser stack.
+#
+
+(
+    \\> new_non_terminal -> {foo} {(7 -> {bar})}
+);
+
+################################################################################
+# Regression test: adding a new rule after evaluating a bang expression.
+#
+# A bug where the reduction for !<expr> did not properly update the set of
+# precedences preventing the parser from adding new rules made it impossible to
+# add new low-precedence rules afterwards.
+#
+
+!foo;
+\\> custom1 -> { new_rule_after_bang } {(7 -> {foo})};
+:expect_eq new_rule_after_bang foo;
+
 .
