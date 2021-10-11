@@ -90,7 +90,14 @@ static Status ResolveStmt(Blimp *blimp, Expr *stmt, DeBruijnMap *scopes)
 {
     switch (stmt->tag) {
         case EXPR_OBJECT:
+            return BLIMP_OK;
         case EXPR_MSG:
+            // Validate the message index, since downstream passes assume that
+            // all message expressions refer to a parent that actually exists.
+            if (stmt->msg.index >= DBMap_Size(scopes)) {
+                return ErrorFrom(blimp, stmt->range, BLIMP_INVALID_MESSAGE_NAME,
+                    "expression refers to a message which is not in scope");
+            }
             return BLIMP_OK;
         case EXPR_SEND:
             // Recurse into sub-expressions.
