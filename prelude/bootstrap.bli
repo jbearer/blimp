@@ -1,0 +1,43 @@
+# Define __run <expr>, which is exactly like !<expr>, except it takes (and
+# returns) an expression with precedence 1 instead of 7. This is necessary
+# because we are going to end this file with __run so that it can be prepended
+# to another file, whose contents will in general be a 1-level expression. Since
+# we don't have the ability to append code _after_ the bootstrapped file, we
+# can't wrap it's contents in parentheses, so we have to work with the
+# precedence we get.
+!(\> {^{__run} {^{``}; 1}; 1} {^toks
+    {
+        n_ref{^ ^};
+        n n_ref;
+        n_ref _0;
+
+        expr{^ ^};
+        ^toks {^tok
+            {
+                _0{^{{
+                    # __run
+                    n_ref _1
+                }}};
+                _1{^{{
+                    expr {(^tok)};
+                    n_ref _2
+                }}};
+
+                n[] []
+            }[]
+        };
+
+        {^ {`!`} {`(`} (expr[]) {`)`}; 1 }
+    }[]
+});
+
+# Define __run as a no-op. This makes this file valid bl:mp on its own, even
+# with the trailing `__run` below, so that it can be imported as well as
+# prepended.
+!(\> {^{__run}; 1} {^toks
+    {^ {.}; 1}
+});
+
+# If this file is prepended to another, execute the code in that file.
+# Otherwise, this is a no-op.
+__run

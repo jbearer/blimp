@@ -28,30 +28,69 @@
  */
 BlimpStatus BlimpModule_Init(Blimp *blimp, const char **path);
 
+typedef enum {
+    BLIMP_MODULE_TEXT = 0x1,
+    BLIMP_MODULE_BINARY = 0x2,
+} BlimpModuleType;
+
 /**
- * \brief Import the named module.
+ * \brief Find the full path of the module named `module`.
+ *
+ * \param[in] module
+ *      The module to search for.
+ * \param[in] path
+ *      The search path. Must be a NULL-terminated array of strings.
+ * \param[in,out] type
+ *      The type of module to search for (text or binary). Must be a bitwise or
+ *      of zero or more BlimpModuleType values. Upon succesful return, this
+ *      value is modified to indicate the type of the discovered module. The
+ *      resulting value will be exactly one BlimpModuleType value.
+ * \param[out] ret
+ *      The full path to the file containing the discovered module.
  *
  * Module search is performed as follows:
- *  * For each path in `import_path`,
+ *  * For each path in `path`,
  *      - Check for a .bli source module by converting each occurrence of . in
  *        `module` with /, appending it to the search path, and then appending
- *        `.bli`.
- *      - If a source module exists, then evaluate the contents of the file as a
- *        `bl:mp` expression. Evaluation is performed in the scope of the object
- *        `context`, which for most purposes should be Blimp_GlobalObject().
- *        Return the results of evaluation.
+ *        `.bli`. If one exists, return it.
  *      - If a source module does not exist in this directory, look for an
  *        \ref extensions "extension module". The module name is split into
  *        segments on `.'. All but the last segment are treated as directories
  *        and appended to the search path, intercalated with `/'. The last
  *        segment is used to derive the name of a bl:mp extension shared object
- *        module: lib<segment>.so.
- *      - If the resulting file path exists, it is loaded into the program using
+ *        module: lib<segment>.so. If an extension module path exists, return
+ *        it.
+ *  * If no matching module is found, an error is raised and the result is
+ *    undefined.
+ */
+BlimpStatus BlimpModule_Search(
+    Blimp *blimp,
+    const char *module,
+    const char **path,
+    BlimpModuleType *type,
+    const char **ret);
+
+/**
+ * \brief Import the named module.
+ *
+ * Module search is performed as follows:
+ *  * Find a bl:mp source module or extension module as if by
+ *
+ *        BlimpModule_Search(
+ *            blimp, module, path, &(BLIMP_MODULE_TEXT|BLIMP_MODULE_BINARY),
+ *            &module_path)
+ *
+ *  * If no matching module is found, an error is raised and the result is
+ *    undefined.
+ *  * Otherwise,
+ *      - If the module is a source module, evaluate the contents of the file as
+ *        a `bl:mp` expression. Evaluation is performed in the scope of the
+ *        object `context`, which for most purposes should be
+ *        Blimp_GlobalObject(). Return the results of evaluation.
+ *      - If the module is a binary module, it is loaded into the program using
  *        the OS loader (e.g. dlopen). The BlimpModuleInfo structure describing
  *        the module is located using the symbol `_blimp_module_info`, and the
  *        module's `init` function is called.
- *  * If no matching module is found, an error is raised and the result is
- *    undefined.
  */
 BlimpStatus BlimpModule_Import(
     Blimp *blimp,

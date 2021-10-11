@@ -298,6 +298,51 @@ BlimpStatus BlimpModule_Init(Blimp *blimp, const char **path)
     return BLIMP_OK;
 }
 
+BlimpStatus BlimpModule_Search(
+    Blimp *blimp,
+    const char *module,
+    const char **path,
+    BlimpModuleType *type,
+    const char **ret)
+{
+    for (const char **path_entry = path; *path_entry; ++path_entry) {
+        const char *dir = *path_entry;
+
+        if (*type & BLIMP_MODULE_TEXT) {
+            // Look for a .bli source module at this path.
+            char *source_path;
+            if (MakeModulePath(blimp, dir, "", module, ".bli", &source_path)
+                    == BLIMP_OK)
+            {
+                if (access(source_path, R_OK) == 0) {
+                    *type = BLIMP_MODULE_TEXT;
+                    *ret = source_path;
+                    return BLIMP_OK;
+                }
+            }
+            free(source_path);
+        }
+
+        if (*type & BLIMP_MODULE_BINARY) {
+            // Look for a .so binary module at this path.
+            char *binary_path;
+            if (MakeModulePath(blimp, dir, "lib", module, ".so", &binary_path)
+                    == BLIMP_OK)
+            {
+                if (access(binary_path, R_OK) == 0) {
+                    *type = BLIMP_MODULE_BINARY;
+                    *ret = binary_path;
+                    return BLIMP_OK;
+                }
+            }
+            free(binary_path);
+        }
+    }
+
+    return Blimp_ErrorMsg(
+        blimp, BLIMP_ERROR, "could not find module `%s'", module);
+}
+
 BlimpStatus BlimpModule_Import(
     Blimp *blimp,
     const char *module,
@@ -332,115 +377,103 @@ BlimpStatus BlimpModule_StaticImport(
     }
 
     // Search the path for a file matching `module`.
-    for (const char **path_entry = path; *path_entry; ++path_entry) {
-        const char *dir = *path_entry;
-
-        // Look for a .bli source module at this path.
-        char *source_path;
-        if (MakeModulePath(blimp, dir, "", module, ".bli", &source_path)
-                == BLIMP_OK)
-        {
-            if (access(source_path, R_OK) == 0) {
-                // Parse the source file at `source_path` and return the
-                // resulting expression.
-                BlimpStatus ret = Blimp_ParseFile(
-                    blimp, source_path, result);
-                free(source_path);
-                return ret;
-            }
-        }
-        free(source_path);
-
-        // Look for a .so binary module at this path.
-        char *binary_path;
-        if (MakeModulePath(blimp, dir, "lib", module, ".so", &binary_path)
-                == BLIMP_OK)
-        {
-            if (access(binary_path, R_OK) == 0) {
-                // There's nothing we can do at parse time to import a binary
-                // module, except to emit an instruction to load the module at
-                // runtime. Get a symbol for the path so we can create an
-                // expression reprsenting the file name.
-                const BlimpSymbol *path_sym;
-                if (Blimp_GetSymbol(blimp, binary_path, &path_sym)
-                        != BLIMP_OK)
-                {
-                    free(binary_path);
-                    return Blimp_Reraise(blimp);
-                }
-                free(binary_path);
-                    // We don't need `binary_path` anymore, now that we have
-                    // `path_sym`.
-
-                // The expression we emit will be a send:
-                //          import_extension binary_path
-                // The `import_extension` symbol is bound to an extension object
-                // which requires a full path and imports the corresponding
-                // binary module.
-                //
-                // Before we can construct the send, we need an expression for
-                // the receiver:
-                const BlimpSymbol *import_extension;
-                if (Blimp_GetSymbol(
-                        blimp, "import_extension", &import_extension)
-                    != BLIMP_OK)
-                {
-                    return Blimp_Reraise(blimp);
-                }
-
-                const BlimpSymbol *sym_sym;
-                if (Blimp_GetSymbol(blimp, "``", &sym_sym) != BLIMP_OK) {
-                    return Blimp_Reraise(blimp);
-                }
-                BlimpTerminal sym_terminal;
-                if (Blimp_GetTerminal(blimp, sym_sym, &sym_terminal)
-                        != BLIMP_OK)
-                {
-                    return Blimp_Reraise(blimp);
-                }
-
-                // Now we can construct the send:
-                BlimpParseTree *sub_trees = malloc(2*sizeof(BlimpParseTree));
-                if (sub_trees == NULL) {
-                    return Blimp_Error(blimp, BLIMP_OUT_OF_MEMORY);
-                }
-                if (BlimpParseTree_Init(
-                        blimp,
-                        (BlimpObject *)import_extension,
-                        NULL,
-                        0,
-                        NULL,
-                        &sub_trees[0]
-                    ) != BLIMP_OK)
-                {
-                    return Blimp_Reraise(blimp);
-                }
-                if (BlimpParseTree_Init(
-                        blimp,
-                        (BlimpObject *)path_sym,
-                        NULL,
-                        0,
-                        NULL,
-                        &sub_trees[1]
-                    ) != BLIMP_OK)
-                {
-                    return Blimp_Reraise(blimp);
-                }
-                if (BlimpParseTree_Init(
-                        blimp, (BlimpObject *)prec3, sub_trees, 2, NULL, result)
-                    != BLIMP_OK)
-                {
-                    return Blimp_Reraise(blimp);
-                }
-
-                return BLIMP_OK;
-            }
-        }
-        free(binary_path);
+    BlimpModuleType type = BLIMP_MODULE_TEXT|BLIMP_MODULE_BINARY;
+    const char *full_path;
+    if (BlimpModule_Search(blimp, module, path, &type, &full_path) != BLIMP_OK)
+    {
+        return Blimp_Reraise(blimp);
     }
 
-    return Blimp_ErrorMsg(
-        blimp, BLIMP_ERROR, "could not find module `%s'", module);
+    switch (type) {
+        case BLIMP_MODULE_TEXT: {
+            // Parse the source file at `full_path` and return the resulting
+            // expression.
+            BlimpStatus ret = Blimp_ParseFile(
+                blimp, full_path, result);
+            free((void *)full_path);
+            return ret;
+        }
+
+        case BLIMP_MODULE_BINARY: {
+            // There's nothing we can do at parse time to import a binary
+            // module, except to emit an instruction to load the module at
+            // runtime. Get a symbol for the path so we can create an expression
+            // reprsenting the file name.
+            const BlimpSymbol *path_sym;
+            if (Blimp_GetSymbol(blimp, full_path, &path_sym)
+                    != BLIMP_OK)
+            {
+                free((void *)full_path);
+                return Blimp_Reraise(blimp);
+            }
+            free((void *)full_path);
+                // We don't need `full_path` anymore, now that we have
+                // `path_sym`.
+
+            // The expression we emit will be a send:
+            //          import_extension path_sym
+            // The `import_extension` symbol is bound to an extension object
+            // which requires a full path and imports the corresponding
+            // binary module.
+            //
+            // Before we can construct the send, we need an expression for
+            // the receiver:
+            const BlimpSymbol *import_extension;
+            if (Blimp_GetSymbol(
+                    blimp, "import_extension", &import_extension)
+                != BLIMP_OK)
+            {
+                return Blimp_Reraise(blimp);
+            }
+
+            // Now we can construct the send:
+            BlimpParseTree *sub_trees = malloc(2*sizeof(BlimpParseTree));
+            if (sub_trees == NULL) {
+                return Blimp_Error(blimp, BLIMP_OUT_OF_MEMORY);
+            }
+            if (BlimpParseTree_Init(
+                    blimp,
+                    (BlimpObject *)import_extension,
+                    NULL,
+                    0,
+                    NULL,
+                    &sub_trees[0]
+                ) != BLIMP_OK)
+            {
+                free(sub_trees);
+                return Blimp_Reraise(blimp);
+            }
+            if (BlimpParseTree_Init(
+                    blimp,
+                    (BlimpObject *)path_sym,
+                    NULL,
+                    0,
+                    NULL,
+                    &sub_trees[1]
+                ) != BLIMP_OK)
+            {
+                BlimpParseTree_Destroy(&sub_trees[0]);
+                free(sub_trees);
+                return Blimp_Reraise(blimp);
+            }
+            if (BlimpParseTree_Init(
+                    blimp, (BlimpObject *)prec3, sub_trees, 2, NULL, result)
+                != BLIMP_OK)
+            {
+                BlimpParseTree_Destroy(&sub_trees[1]);
+                BlimpParseTree_Destroy(&sub_trees[0]);
+                free(sub_trees);
+                return Blimp_Reraise(blimp);
+            }
+
+            return BLIMP_OK;
+        }
+
+        default: {
+            assert(false);
+            return Blimp_ErrorMsg(blimp, BLIMP_ERROR, "invalid module type");
+        }
+    }
 }
 
 BlimpStatus BlimpModule_ImportSource(

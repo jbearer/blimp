@@ -5,7 +5,8 @@
 void DefaultOptions(Options *options)
 {
     options->blimp_options = DEFAULT_BLIMP_OPTIONS;
-    options->action        = ACTION_EVAL;
+    options->action        = ACTION_DEFAULT;
+    options->interactive   = false;
 
     // By default, we look for modules in the current working directory, the
     // directory containing the standard extension modules (e.g. `system`), and
@@ -16,6 +17,9 @@ void DefaultOptions(Options *options)
     options->import_path[0]  = ".";
     options->import_path[1]  = PRELUDE_PATH;
     options->import_path[2]  = EXTENSIONS_PATH;
+
+    options->prepend_len = 0;
+    options->prepend = NULL;
 
     const char *home = getenv("HOME");
     char *history_file = NULL;

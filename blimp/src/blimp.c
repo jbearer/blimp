@@ -60,7 +60,18 @@ static void PrintUsage(FILE *f, int argc, char *const *argv)
     fprintf(f, "                  in the formal semantics.\n");
     fprintf(f, "            * compile: print the compiled bytecode for an input\n");
     fprintf(f, "                  expression\n");
-    fprintf(f, "        The default is `eval'.\n");
+    fprintf(f, "        The default is `eval' for interactive mode, `parse' for\n");
+    fprintf(f, "        non-interactive mode.\n");
+    fprintf(f, "\n");
+    fprintf(f, "    -I, --import-path DIR\n");
+    fprintf(f, "        Search for imported modules in DIR. Multiple directories\n");
+    fprintf(f, "        may be given by passing this option more than once.\n");
+    fprintf(f, "\n");
+    fprintf(f, "    -l, --preload MODULE\n");
+    fprintf(f, "        Prepend the given module to the input file. MOD will be\n");
+    fprintf(f, "        searched in the import path, using the same search\n");
+    fprintf(f, "        procedure as `import MOD'. More than one preload module\n");
+    fprintf(f, "        may be given by passing this option more than once.\n");
     fprintf(f, "\n");
     fprintf(f, "    --history-file FILE\n");
     fprintf(f, "        Load and save interactive history to and from FILE.\n");
@@ -81,6 +92,59 @@ static void PrintUsage(FILE *f, int argc, char *const *argv)
     fprintf(f, "\n");
     fprintf(f, "Interpreter options:\n");
     fprintf(f, "%s\n", BLIMP_OPTIONS_USAGE);
+}
+
+static BlimpStatus PreloadStream(
+    Blimp *blimp, const Options *options, BlimpStream **stream)
+{
+    *stream = NULL;
+    for (size_t i = 0; i < options->prepend_len; ++i) {
+        // Locate the preload module in the module search path.
+        const char *preload_path;
+        BlimpModuleType type = BLIMP_MODULE_TEXT;
+        if (BlimpModule_Search(
+                blimp,
+                options->prepend[i],
+                options->import_path,
+                &type,
+                &preload_path
+            ) != BLIMP_OK)
+        {
+            if (*stream != NULL) {
+                BlimpStream_Delete(*stream);
+            }
+            return Blimp_Reraise(blimp);
+        }
+
+        // Open a stream for the preload module
+        BlimpStream *file_stream;
+        if (Blimp_FileStream(blimp, preload_path, &file_stream)
+                != BLIMP_OK)
+        {
+            free((void *)preload_path);
+            if (*stream != NULL) {
+                BlimpStream_Delete(*stream);
+            }
+            return Blimp_Reraise(blimp);
+        }
+        free((void *)preload_path);
+
+        // Append the new preload stream to the end of the stream we've already
+        // built up.
+        if (*stream == NULL) {
+            *stream = file_stream;
+        } else {
+            if (Blimp_ConcatStreams(blimp, *stream, file_stream, stream)
+                    != BLIMP_OK)
+            {
+                BlimpStream_Delete(*stream);
+                BlimpStream_Delete(file_stream);
+                return Blimp_Reraise(blimp);
+            }
+        }
+    }
+
+    return BLIMP_OK;
 }
 
 static bool IsRenderableStandardInstance(Blimp *blimp, BlimpObject *obj)
@@ -284,10 +348,26 @@ static BlimpStatus DoAction(
 {
     BlimpStatus status = BLIMP_OK;
 
+    Action action = options->action;
+    if (action == ACTION_DEFAULT) {
+        if (options->interactive) {
+            // In interactive mode, each input expression is evaluated
+            // automatically, as if it had been prefixed with !. Fall
+            // through to the ACTION_EVAL case.
+            action = ACTION_EVAL;
+        } else {
+            // In non-interactive mode, evaluation _is_ parsing, because the
+            // strict semantics of bl:mp state that the behavior of a
+            // program is simply the side-effects of parsing that program.
+            // `expr` is already parsed, so we have nothing left to do.
+            return BLIMP_OK;
+        }
+    }
+
     Blimp_HandleSignal(blimp, BLIMP_INTERRUPT_SIGNAL, InterruptBlimp, db);
     PushInterruptHandler(InterruptAction, blimp);
 
-    switch (options->action) {
+    switch (action) {
         case ACTION_EVAL: {
             BlimpObject *result;
             if ((status = Blimp_Eval(
@@ -340,6 +420,32 @@ static BlimpStatus DoAction(
 
 static int ReplMain(Blimp *blimp, const Options *options)
 {
+    // Create an input stream for the parser which yields the contents of
+    // each preload file.
+    BlimpStream *stream;
+    if (PreloadStream(blimp, options, &stream) != BLIMP_OK) {
+        Blimp_DumpLastError(blimp, stderr);
+        return 1;
+    }
+
+    if (stream != NULL) {
+        // Execute the preloaded files.
+        BlimpParseTree tree;
+        if (Blimp_Parse(blimp, stream, &tree) != BLIMP_OK) {
+            Blimp_DumpLastError(blimp, stderr);
+            return 1;
+        }
+        BlimpExpr *expr;
+        if (BlimpParseTree_Eval(blimp, &tree, &expr) != BLIMP_OK) {
+            BlimpParseTree_Destroy(&tree);
+            Blimp_DumpLastError(blimp, stderr);
+            return 1;
+        }
+        BlimpParseTree_Destroy(&tree);
+        Blimp_FreeExpr(expr);
+    }
+
+    // Initialize the REPL.
     Readline_Init(options);
     PrintVersion(stdout);
     InitCommands(blimp);
@@ -349,7 +455,7 @@ static int ReplMain(Blimp *blimp, const Options *options)
     Debugger_Init(&db);
     InitDebuggerCommands(blimp, &db);
 
-    Expr *expr;
+    BlimpExpr *expr;
     while ((expr = Readline_ReadExpr(blimp, "bl:mp> ", false)) != NULL) {
         if (DoAction(blimp, expr, options, &db) != BLIMP_OK) {
             Blimp_DumpLastError(blimp, stdout);
@@ -374,6 +480,35 @@ static int ReplMain(Blimp *blimp, const Options *options)
 
 static int EvalMain(Blimp *blimp, const char *path, const Options *options)
 {
+    // Create an input stream for the parser which first yields the contents of
+    // each preload file and then the contents of `path`.
+    BlimpStream *stream;
+    if (PreloadStream(blimp, options, &stream) != BLIMP_OK) {
+        Blimp_DumpLastError(blimp, stderr);
+        return 1;
+    }
+    {
+        // Open a stream for the input file.
+        BlimpStream *file_stream;
+        if (Blimp_FileStream(blimp, path, &file_stream) != BLIMP_OK) {
+            if (stream != NULL) {
+                BlimpStream_Delete(stream);
+            }
+            Blimp_DumpLastError(blimp, stderr);
+            return 1;
+        }
+
+        // Append the stream to the end of the stream with the preload files.
+        if (Blimp_ConcatStreams(blimp, stream, file_stream, &stream)
+                != BLIMP_OK)
+        {
+            BlimpStream_Delete(stream);
+            BlimpStream_Delete(file_stream);
+            Blimp_DumpLastError(blimp, stderr);
+            return 1;
+        }
+    }
+
     Debugger db;
     if (options->debug) {
         Debugger_Init(&db);
@@ -399,7 +534,7 @@ static int EvalMain(Blimp *blimp, const char *path, const Options *options)
     );
     PushInterruptHandler(InterruptAction, blimp);
     BlimpParseTree tree;
-    if (Blimp_ParseFile(blimp, path, &tree) != BLIMP_OK) {
+    if (Blimp_Parse(blimp, stream, &tree) != BLIMP_OK) {
         Blimp_DumpLastError(blimp, stderr);
         if (options->debug) {
             Debugger_Detach(&db);
@@ -438,6 +573,7 @@ typedef enum {
     FLAG_BLIMP_OPTION       = 'f',
     FLAG_OPTIMIZE           = 'O',
     FLAG_IMPORT_PATH        = 'I',
+    FLAG_PRELOAD            = 'l',
     FLAG_DEBUG              = 'g',
     FLAG_ACTION             = 'a',
     FLAG_HELP               = 'h',
@@ -462,6 +598,7 @@ int main(int argc, char *const *argv)
         {"core",                    no_argument,        NULL, FLAG_CORE},
         {"debug",                   no_argument,        NULL, FLAG_DEBUG},
         {"import-path",             required_argument,  NULL, FLAG_IMPORT_PATH},
+        {"preload",                 required_argument,  NULL, FLAG_PRELOAD},
         {"action",                  required_argument,  NULL, FLAG_ACTION},
         {"history-file",            required_argument,  NULL, FLAG_HISTORY_FILE},
         {"history-limit",           required_argument,  NULL, FLAG_HISTORY_LIMIT},
@@ -475,7 +612,7 @@ int main(int argc, char *const *argv)
     DefaultOptions(&options);
 
     int option, i = 1;
-    while ((option = getopt_long(argc, argv, "gf:OI:a:hv", flags, &i)) != -1) {
+    while ((option = getopt_long(argc, argv, "gf:OI:l:a:hv", flags, &i)) != -1) {
         switch (option) {
             case FLAG_BLIMP_OPTION: {
                 const char *error = Blimp_ParseOption(
@@ -511,6 +648,18 @@ int main(int argc, char *const *argv)
                 }
                 options.import_path[options.import_path_len-2] = optarg;
                 options.import_path[options.import_path_len-1]  = NULL;
+                break;
+
+            case FLAG_PRELOAD:
+                options.prepend = realloc(
+                    options.prepend,
+                    ++options.prepend_len * sizeof(char *)
+                );
+                if (options.prepend == NULL) {
+                    perror("could not allocate preload");
+                    return EXIT_FAILURE;
+                }
+                options.prepend[options.prepend_len-1] = optarg;
                 break;
 
             case FLAG_ACTION:
@@ -575,22 +724,22 @@ int main(int argc, char *const *argv)
 
     Blimp_Check(BlimpModule_Init(blimp, options.import_path));
 
-    // Automatically import the `std' prelude if requested by the user.
+    // Automatically prepend the `std' prelude if requested by the user.
     if (options.implicit_prelude) {
-        BlimpObject *std;
-        Blimp_Check(BlimpModule_Import(
-            blimp,
-            "std",
-            Blimp_GlobalObject(blimp),
-            options.import_path,
-            &std
-        ));
-        BlimpObject_Release(std);
+        options.prepend = realloc(
+            options.prepend, ++options.prepend_len * sizeof(char *));
+        if (options.prepend == NULL) {
+            fprintf(stderr, "could not allocate preload");
+            return EXIT_FAILURE;
+        }
+        options.prepend[options.prepend_len-1] = "std";
     }
 
     if (optind == argc) {
+        options.interactive = true;
         return ReplMain(blimp, &options);
     } else if (optind + 1 == argc) {
+        options.interactive = false;
         return EvalMain(blimp, argv[optind], &options);
     } else {
         PrintUsage(stderr, argc, argv);

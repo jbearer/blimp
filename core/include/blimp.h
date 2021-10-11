@@ -895,6 +895,22 @@ BlimpStatus Blimp_OpenFileStream(
 BlimpStatus Blimp_StringStream(
     Blimp *blimp, const char *str, BlimpStream **stream);
 
+/**
+ * \brief Create a new stream which outputs the contents of `s1` and then `s2`.
+ *
+ * This function takes ownership of both `s1` and `s2`. After this function
+ * returns successfully, the caller should no longer use `s1` or `s2`.
+ */
+BlimpStatus Blimp_ConcatStreams(
+    Blimp *blimp, BlimpStream *s1, BlimpStream *s2, BlimpStream **stream);
+
+/**
+ * \brief Close and deallocate a stream which was allocated using malloc().
+ *
+ * This function can be used with all of the built-in stream types.
+ */
+void BlimpStream_Delete(BlimpStream *stream);
+
 void Blimp_DumpGrammarVitals(FILE *file, Blimp *blimp);
 
 typedef size_t BlimpTerminal;

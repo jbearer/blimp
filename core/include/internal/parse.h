@@ -10,7 +10,7 @@
 
 PRIVATE Status Stream_Next(Stream *stream, int *c);
 PRIVATE SourceLoc Stream_Location(Stream *stream);
-PRIVATE void Stream_Delete(Stream *stream);
+#define Stream_Delete BlimpStream_Delete
 
 typedef enum {
     TOK_MSG_NAME,

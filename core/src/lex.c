@@ -599,6 +599,66 @@ static Status StringStream_New(
     return BLIMP_OK;
 }
 
+typedef struct {
+    Stream base;
+    Stream *s1;
+    Stream *s2;
+} ConcatStream;
+
+static Status ConcatStream_Next(Stream *stream, int *c)
+{
+    ConcatStream *self = (ConcatStream *)stream;
+
+    if (self->s1 != NULL) {
+        TRY(self->s1->Next(self->s1, c));
+        if (*c == EOF) {
+            Stream_Delete(self->s1);
+            self->s1 = NULL;
+        } else {
+            return BLIMP_OK;
+        }
+    }
+
+    return self->s2->Next(self->s2, c);
+}
+
+static SourceLoc ConcatStream_Location(Stream *stream)
+{
+    ConcatStream *self = (ConcatStream *)stream;
+
+    if (self->s1 != NULL) {
+        return self->s1->Location(self->s1);
+    } else {
+        return self->s2->Location(self->s2);
+    }
+}
+
+static void ConcatStream_Close(Stream *stream)
+{
+    ConcatStream *self = (ConcatStream *)stream;
+
+    if (self->s1 != NULL) {
+        Stream_Delete(self->s1);
+    }
+    Stream_Delete(self->s2);
+}
+
+static Status ConcatStream_New(
+    Blimp *blimp, Stream *s1, Stream *s2, ConcatStream **self)
+{
+    TRY(Malloc(blimp, sizeof(ConcatStream), self));
+    **self = (ConcatStream) {
+        .base = {
+            .Next     = ConcatStream_Next,
+            .Location = ConcatStream_Location,
+            .Close    = ConcatStream_Close,
+        },
+        .s1 = s1,
+        .s2 = s2,
+    };
+    return BLIMP_OK;
+}
+
 Status Stream_Next(Stream *stream, int *c)
 {
     TRY(stream->Next(stream, c));
@@ -688,4 +748,10 @@ Status Blimp_OpenFileStream(
 Status Blimp_StringStream(Blimp *blimp, const char *str, Stream **stream)
 {
     return StringStream_New(blimp, str, (StringStream **)stream);
+}
+
+Status Blimp_ConcatStreams(
+    Blimp *blimp, Stream *s1, Stream *s2, Stream **stream)
+{
+    return ConcatStream_New(blimp, s1, s2, (ConcatStream **)stream);
 }
