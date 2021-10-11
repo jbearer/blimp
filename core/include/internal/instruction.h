@@ -227,6 +227,7 @@ typedef struct {
 // instruction is the non-terminal symbol of the production.
 typedef struct {
     Instruction header;
+    SourceRange range;
     // production: stack
     // handler: stack
 } MACRO;

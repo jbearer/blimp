@@ -3,16 +3,16 @@
 import parse_tree;
 
 ################################################################################
-# First things first: define a macro for defining macros only at parse time, to
-# test parse-time behavior of macros without worrying about run-time macro
+# First things first: define a macro for defining macros at parse time, to test
+# parse-time behavior of macros without worrying about run-time macro
 # definitions.
 #
-# We can define a macro which executes at parse time but not run-time by
-# wrapping the macro definition in `{}`, so that it is parsed but never
-# executed.
+# We can define a macro which executes at parse time by wrapping the macro
+# definition in `!()`. Here we will define a macro that defines macros with this
+# wrapper.
 #
 
-{
+!(
     \> 3 -> {`\\\\>` <3> <6>} {^toks
         {
             n_ref{^ ^};
@@ -39,7 +39,7 @@ import parse_tree;
                 }[]
             };
 
-            7 -> {`{` `\\>` {production[]} {handler[]} `}`}
+            3 -> {`!` `(``\\>` `(`{production[]}`)` `(`{handler[]}`)``)`}
         }[]
     };
 
@@ -52,7 +52,7 @@ import parse_tree;
     };
 
     .
-};
+);
 
 ################################################################################
 # Simplest possible macro: create a new token and define it to a symbol.
@@ -726,44 +726,9 @@ import macro_module;
 ################################################################################
 # Run-time macros
 #
-# We can cause a macro to execute at run-time only by defining it in a nested
-# parse tree within the expansion of another macro. Since nested parse trees are
-# not reparsed, the macro will have no effect at parse time, but it will still
-# end up in the expression tree which is ultimately evaluated at run-time.
-#
-
-\\> 7 -> {`define` <6> <6>} {^toks
-    {
-        n_ref{^ ^};
-        n n_ref;
-        n_ref 0;
-
-        production{^ ^};
-        handler{^ ^};
-        for ^tok in ^toks {
-            {
-                0{^{{
-                    n_ref 1
-                }}};
-                1{^{{
-                    production {(^tok)};
-                    n_ref 2
-                }}};
-                2{^{{
-                    handler {(^tok)};
-                    n_ref 3
-                }}};
-
-                n[] []
-            }[]
-        };
-
-        1 -> {{3 -> {`\\>` {production[]} {handler[]}}}}
-    }[]
-};
 
 # Check that run-time macros have no effect at parse time.
-define (7 -> {`this_will_not_be_defined_at_parse_time`}) {(7 -> {`foo`})};
+\> (7 -> {`this_will_not_be_defined_at_parse_time`}) {(7 -> {`foo`})};
 :expect_eq this_will_not_be_defined_at_parse_time `this_will_not_be_defined_at_parse_time`;
 
 # But the macro above is defined at run-time.

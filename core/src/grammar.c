@@ -293,9 +293,6 @@ static Status ParseObject(Blimp *blimp, Object *obj, ParseTree *tree)
             // Release `visitor` _after_ the call to Reparse() above, as the
             // finalizer might destroy the `trees` vector.
 
-        assert(!tree->grammar_symbol.is_terminal);
-        assert(tree->grammar_symbol.non_terminal == nt);
-
         return BLIMP_OK;
     }
 
@@ -525,49 +522,6 @@ Status DefineMacro(
     return BLIMP_OK;
 }
 
-// Handler for `\> Term Term Term`
-static Status PrecedenceHandler(ParserContext *ctx, ParseTree *tree)
-{
-    ParseTree *production_tree = SubTree(tree, 1);
-    ParseTree *handler_tree    = SubTree(tree, 2);
-
-    // Convert the production and handler parse trees to expressions so we can
-    // evaluate them at parse time.
-    Expr *production, *handler;
-    TRY(BlimpParseTree_Eval(ctx->blimp, production_tree, &production));
-    if (BlimpParseTree_Eval(ctx->blimp, handler_tree, &handler) != BLIMP_OK) {
-        Blimp_FreeExpr(production);
-        return Reraise(ctx->blimp);
-    }
-
-    // Evaluate the production expression to get an Object which is a stream of
-    // symbols (the right-hand side of the production).
-    Object *production_obj;
-    TRY(Blimp_Eval(
-        ctx->blimp, production, (Object *)ctx->blimp->global, &production_obj));
-
-    // Evaluate the handler Object which will be attached to this macro, to run
-    // whenever it is reduced.
-    Object *handler_obj;
-    if (Blimp_Eval(
-            ctx->blimp,
-            handler,
-            (Object *)ctx->blimp->global,
-            &handler_obj
-        ) != BLIMP_OK)
-    {
-        return Reraise(ctx->blimp);
-    }
-
-    const Symbol *nt_sym;
-    Status ret = DefineMacro(
-        ctx->blimp, production_obj, handler_obj, ctx->range, &nt_sym);
-
-    BlimpObject_Release(production_obj);
-    BlimpObject_Release(handler_obj);
-    return ret;
-}
-
 ////////////////////////////////////////////////////////////////////////////////
 // Default grammar
 //
@@ -648,9 +602,9 @@ Status DefaultGrammar(Blimp *blimp, Grammar *grammar)
         NULL, NULL));
     //      \> Stmt Custom
     TRY(ADD_GRAMMAR_RULE(grammar, Stmt, (T(MACRO), NT(Stmt), NT(Custom)),
-        PrecedenceHandler, NULL));
+        NULL, NULL));
     TRY(ADD_GRAMMAR_RULE(grammar, StmtNoMsg, (T(MACRO), NT(Stmt), NT(Custom)),
-        PrecedenceHandler, NULL));
+        NULL, NULL));
     //      \ Custom[NoMsg]
     TRY(ADD_GRAMMAR_RULE(grammar, Stmt, (NT(Custom)),
         NULL, NULL));

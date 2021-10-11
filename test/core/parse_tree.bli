@@ -8,9 +8,9 @@
 # This is useful for tests of the protcol while the protocol is in development
 # and subject to frequent changes.
 
-{
+!(
     ############################################################################
-    # gramamr symbols: the items of a parse tree
+    # grammar symbols: the items of a parse tree
     #
 
     # A terminal symbol
@@ -312,4 +312,4 @@
     };
 
     .
-}
+)

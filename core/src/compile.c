@@ -65,10 +65,12 @@ static inline Status Emit_SEND(
     return Bytecode_Append(code, (Instruction *)&instr);
 }
 
-static inline Status Emit_MACRO(Bytecode *code, ResultType result_type)
+static inline Status Emit_MACRO(
+    Bytecode *code, ResultType result_type, SourceRange range)
 {
     MACRO instr = {
-        {INSTR_MACRO, result_type, sizeof(instr)}
+        {INSTR_MACRO, result_type, sizeof(instr)},
+        range,
     };
 
     return Bytecode_Append(code, (Instruction *)&instr);
@@ -246,7 +248,7 @@ static Status CompileStmt(
                 blimp, stmt->macro.production, RESULT_USE, depth, code));
             TRY(CompileExpr(
                 blimp, stmt->macro.handler, RESULT_USE, depth, code));
-            TRY(Emit_MACRO(code, result_type));
+            TRY(Emit_MACRO(code, result_type, stmt->range));
             break;
         default:
             assert(false);

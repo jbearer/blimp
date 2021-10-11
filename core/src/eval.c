@@ -862,6 +862,8 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
             }
 
             case INSTR_MACRO: {
+                MACRO *instr = (MACRO *)ip;
+
                 // Get the production and handler from the result stack. The
                 // handler is on top since it was evaluated second.
                 Object *handler = ObjectStack_Pop(blimp, &blimp->result_stack);
@@ -872,7 +874,8 @@ static Status ExecuteFrom(Blimp *blimp, const Instruction *ip, Object **result)
                 // the production.
                 const Symbol *nt;
                 if (DefineMacro(
-                        blimp, production, handler, NULL, &nt) != BLIMP_OK)
+                        blimp, production, handler, &instr->range, &nt)
+                    != BLIMP_OK)
                 {
                     BlimpObject_Release(production);
                     BlimpObject_Release(handler);

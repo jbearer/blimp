@@ -11,6 +11,8 @@
 # wraps a sub-tree and a pointer to the next node.
 #
 
+!(
+
 # __parse_tree_nil implements the __parse_tree_node interface, but it is a
 # singleton representing the empty list.
 __parse_tree_nil{^} ({
@@ -185,6 +187,8 @@ __parse_tree_from_inner{^} {^t
     }[]
 };
 
+.);
+
 ################################################################################
 # __kleene_for
 #
@@ -217,7 +221,7 @@ __parse_tree_from_inner{^} {^t
 #
 # This macro takes such a parse tree object and a block, and applies the block
 # to each term in the inner parse tree.
-{\> {^{`__kleene_for`} {^{``}; 6} {^{``}; 7}; 3} {^toks
+!(\> {^{`__kleene_for`} {^{``}; 6} {^{``}; 7}; 3} {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -249,7 +253,7 @@ __parse_tree_from_inner{^} {^t
           3
         }
     }[]
-}};
+});
 
 ################################################################################
 # QuasiQuote syntax for creating parse trees
@@ -264,8 +268,10 @@ __parse_tree_from_inner{^} {^t
 # parse_tree `recv`.
 #
 
+!(
+
 # Literal terms (which we convert to terminal parse trees).
-{\> {^{^{``}; symbol}; term}  {^toks
+\> {^{^{``}; symbol}; term}  {^toks
     {
         sym{^ ^};
         ^toks{^sub_tree
@@ -275,7 +281,7 @@ __parse_tree_from_inner{^} {^t
         };
         {^ {`(`} {`__new`} {`parse_tree`} (sym[]) {`)`}; 6}
     }[]
-}};
+};
 
 # For commonly used tokens which cannot be lexed as symbols even in a context
 # where a symbol is the only expected token, we define rules that accept that
@@ -284,25 +290,24 @@ __parse_tree_from_inner{^} {^t
 # This is only necessary due to current limitations of the lexer. The lexer
 # should be made extensible from bl:mp or at least given better defaults, after
 # which time we should be able to achieve this in a much more general way.
-{\> {^{`(`}; term}  {^toks
+\> {^{`(`}; term}  {^toks
     {^ {`(`} {`__new`} {`parse_tree`} {^{`(`}; 7} {`)`}; 6}
-}};
-{\> {^{`)`}; term}  {^toks
+};
+\> {^{`)`}; term}  {^toks
     {^ {`(`} {`__new`} {`parse_tree`} {^{`)`}; 7} {`)`}; 6}
-}};
-{\> {^{`{`}; term}  {^toks
+};
+\> {^{`{`}; term}  {^toks
     {^ {`(`} {`__new`} {`parse_tree`} {^{`{`}; 7} {`)`}; 6}
-}};
-{\> {^{`}`}; term}  {^toks
+};
+\> {^{`}`}; term}  {^toks
     {^ {`(`} {`__new`} {`parse_tree`} {^{`}`}; 7} {`)`}; 6}
-}};
-{\> {^{`!`}; term}  {^toks
+};
+\> {^{`!`}; term}  {^toks
     {^ {`(`} {`__new`} {`parse_tree`} {^{`!`}; 7} {`)`}; 6}
-}};
-
+};
 
 # Interpolated expressions as terms representing sub-trees.
-{\> {^{`$`} {`{`} {^{``}; 1} {`}`}; term} {^toks
+\> {^{`$`} {`{`} {^{``}; 1} {`}`}; term} {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -333,13 +338,13 @@ __parse_tree_from_inner{^} {^t
 
         term[]
     }[]
-}};
+};
 
-{\> {^{^{``}; term}; terms} {^toks
+\> {^{^{``}; term}; terms} {^toks
     {^ {(^toks) ^; 7}; 6}
-}};
+};
 
-{\> {^{^{``}; term} {^{``}; terms}; terms} {^toks
+\> {^{^{``}; term} {^{``}; terms}; terms} {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -369,10 +374,10 @@ __parse_tree_from_inner{^} {^t
             7
         }; 6}
     }[]
-}};
+};
 
 # The basic quasiquote syntax.
-{\> {^{`[`} {^{``}; 7} {`|`} {^{``}; terms} {`|]`}; 7} {^toks
+\> {^{`[`} {^{``}; 7} {`|`} {^{``}; terms} {`|]`}; 7} {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -415,11 +420,11 @@ __parse_tree_from_inner{^} {^t
             3
         }
     }[]
-}};
+};
 
 # `terms` is always non-empty, so we define a separate production for an empty
 # parse tree.
-{\> {^{`[`} {^{``}; 7} {`|`} {`|]`}; 7} {^toks
+\> {^{`[`} {^{``}; 7} {`|`} {`|]`}; 7} {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -452,10 +457,10 @@ __parse_tree_from_inner{^} {^t
 
         {^{`__new`} {`parse_tree`} (nt[]); 3}
     }[]
-}};
+};
 
 # If no non-terminal symbol is given, default to 1.
-{\> {^{`[|`} {^{``}; terms} {`|]`}; 7} {^toks
+\> {^{`[|`} {^{``}; terms} {`|]`}; 7} {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -487,7 +492,9 @@ __parse_tree_from_inner{^} {^t
             7
         }
     }[]
-}};
+};
+
+.);
 
 ################################################################################
 # grammar_symbol
@@ -498,9 +505,11 @@ __parse_tree_from_inner{^} {^t
 # <>).
 #
 
+!(
+
 # A non-terminal which just reduces symbols. This is just because it's slightly
 # nicer to write {symbol} than `\`sym\``.
-{\> {^{`\`sym\``}; symbol} {^toks
+\> {^{`\`sym\``}; symbol} {^toks
     {
         sym{^ ^};
         ^toks{^sym
@@ -508,10 +517,10 @@ __parse_tree_from_inner{^} {^t
         };
         {^{^{sym[]}; 7}; 6}
     }[]
-}};
+};
 
 # Terminal symbols.
-{\> {^{^{``}; symbol}; grammar_symbol}  {^toks
+\> {^{^{``}; symbol}; grammar_symbol}  {^toks
     {
         sym{^ ^};
         ^toks{^sub_tree
@@ -521,10 +530,10 @@ __parse_tree_from_inner{^} {^t
         };
         {^ {`{`} (sym[]) {`}`}; 6}
     }[]
-}};
+};
 
 # Non-terminal symbols.
-{\> {^ {<} {^{``}; symbol} {>}; grammar_symbol} {^toks
+\> {^ {<} {^{``}; symbol} {>}; grammar_symbol} {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -558,7 +567,9 @@ __parse_tree_from_inner{^} {^t
         # definitions.
         {^ {`{`} {`^`} {`{`} {``} {`}`} {`;`} (nt[]) {`}`}; 6}
     }[]
-}};
+};
+
+.);
 
 ################################################################################
 # pattern
@@ -575,8 +586,10 @@ __parse_tree_from_inner{^} {^t
 # `_`.
 #
 
+!(
+
 # No-name patterns.
-{\> {^{^{``}; grammar_symbol}; pattern} {^toks
+\> {^{^{``}; grammar_symbol}; pattern} {^toks
     {
         ret{^ ^};
 
@@ -591,10 +604,10 @@ __parse_tree_from_inner{^} {^t
         };
         ret[]
     }[]
-}};
+};
 
 # Named patterns.
-{\> {^{^{``}; symbol} {`@`} {^{``}; grammar_symbol}; pattern} {^toks
+\> {^{^{``}; symbol} {`@`} {^{``}; grammar_symbol}; pattern} {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -622,15 +635,15 @@ __parse_tree_from_inner{^} {^t
 
         {^{(binder[]) ^; (symbol[]) ^; 7}; 6}
     }[]
-}};
+};
 
 # A singleton Kleene sequence of patterns.
-{\> {^{^{``}; pattern}; patterns} {^toks
+\> {^{^{``}; pattern}; patterns} {^toks
     {^ {(^toks) ^; 7}; 6}
-}};
+};
 
 # A non-trivial Kleene sequence of patterns.
-{\> {^{^{``}; pattern} {^{``}; patterns}; patterns} {^toks
+\> {^{^{``}; pattern} {^{``}; patterns}; patterns} {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -660,11 +673,15 @@ __parse_tree_from_inner{^} {^t
             7
         }; 6}
     }[]
-}};
+};
+
+.);
 
 ################################################################################
 # Macro definitions
 #
+
+!(
 
 # Run-time functions used by macro handlers defined using `syntax`.
 __pat_head{^} {^iter
@@ -694,7 +711,7 @@ __pat_tail {^} {^iter {^visit
     }
 }};
 
-{\> {^ {`syntax`} {`\`sym\``} {`->`} {^{``}; patterns} {`{`} {^{``}; 1} {`}`}; 3} {^toks
+\> {^ {`syntax`} {`\`sym\``} {`->`} {^{``}; patterns} {`{`} {^{``}; 1} {`}`}; 3} {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -788,7 +805,7 @@ __pat_tail {^} {^iter {^visit
         };
 
         {^out
-            ^{`{`} {`\\>`} {`{`};
+            ^{`!`} {`(`} {`\\>`} {`{`};
                 visit_patterns (patterns[]) {^sym{^binder
                     ^out {`^`} ^sym {`;`}
                 }};
@@ -806,12 +823,14 @@ __pat_tail {^} {^iter {^visit
                         ^{`(`}(handler[]){`)`} {`__inner`};
                     ^{`}`};
                 ^{`}`} {`[]`};
-            ^{`}`} {`}`};
+            ^{`}`} {`)`};
 
             1
         }
     }[]
-}};
+};
+
+.);
 
 ################################################################################
 # Syntax for earlier modules, which are defined before this one because this
