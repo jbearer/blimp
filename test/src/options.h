@@ -34,6 +34,8 @@ typedef struct {
     float perf_factor;
     const char **preimport;
     size_t num_preimport;
+    const char **preload;
+    size_t num_preload;
     BlimpOptions blimp_options;
     FILE *perf_report;
 } Options;

@@ -62,12 +62,14 @@ static void PassTest(Test *test, size_t racket_ms, size_t blimp_ms)
         printf(ANSI_GREEN "passed!" ANSI_RESET " %s", test->name);
 
         // Print timing information.
-        if (test->options.use_blimp && test->options.use_racket) {
+        if (test->options.use_blimp &&
+            test->options.enable_racket &&
+            test->options.use_racket) {
             printf(" (%.3fs racket, %.3fs bl:mp)",
                 (float)racket_ms / 1000, (float)blimp_ms / 1000);
         } else if (test->options.use_blimp) {
             printf(" (%.3fs)", (float)blimp_ms / 1000);
-        } else if (test->options.use_racket) {
+        } else if (test->options.enable_racket && test->options.use_racket) {
             printf(" (%.3fs)", (float)racket_ms / 1000);
         }
 
@@ -178,7 +180,7 @@ static void RunTest(Test *test)
 
     BlimpParseTree tree;
     if (Blimp_Parse(test->blimp, test->stream, &tree) != BLIMP_OK) {
-        FailTest(test, "failed to parse");
+        FailTest(test, "bl:mp error");
         if (test->options.verbosity >= VERB_FAILURES) {
             Blimp_DumpLastError(test->blimp, stdout);
         }
@@ -187,13 +189,18 @@ static void RunTest(Test *test)
     BlimpExpr *expr;
     if (BlimpParseTree_Eval(test->blimp, &tree, &expr) != BLIMP_OK) {
         BlimpParseTree_Destroy(&tree);
-        FailTest(test, "failed to parse");
+        FailTest(test, "bl:mp error");
         if (test->options.verbosity >= VERB_FAILURES) {
             Blimp_DumpLastError(test->blimp, stdout);
         }
         return;
     }
     BlimpParseTree_Destroy(&tree);
+
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    size_t blimp_ns = (end  .tv_sec*1000000000 + end  .tv_nsec) -
+                      (start.tv_sec*1000000000 + start.tv_nsec);
+    clock_gettime(CLOCK_MONOTONIC, &start);
 
     if (test->options.enable_racket && test->options.use_racket) {
         if (test->options.verbosity >= VERB_DEBUG) {
@@ -231,29 +238,8 @@ static void RunTest(Test *test)
     clock_gettime(CLOCK_MONOTONIC, &end);
     size_t racket_ns = (end  .tv_sec*1000000000 + end  .tv_nsec) -
                        (start.tv_sec*1000000000 + start.tv_nsec);
-
-    clock_gettime(CLOCK_MONOTONIC, &start);
-
-    BlimpObject *result = NULL;
-    if (test->options.use_blimp) {
-        if (Blimp_Eval(
-                test->blimp, expr, Blimp_GlobalObject(test->blimp), &result)
-            != BLIMP_OK)
-        {
-            FailTest(test, "bl:mp error");
-            if (test->options.verbosity >= VERB_FAILURES) {
-                Blimp_DumpLastError(test->blimp, stdout);
-            }
-            goto cleanup_parsed;
-        }
-    }
-
-    clock_gettime(CLOCK_MONOTONIC, &end);
-    size_t blimp_ns = (end  .tv_sec*1000000000 + end  .tv_nsec) -
-                      (start.tv_sec*1000000000 + start.tv_nsec);
     PassTest(test, racket_ns/1000000, blimp_ns/1000000);
 
-    if (result) BlimpObject_Release(result);
 cleanup_parsed:
     Blimp_FreeExpr(expr);
 }
@@ -414,11 +400,15 @@ static void PrintUsage(FILE *f, int argc, char **argv)
     fprintf(f, "        TEST_PERF_FACTOR.\n");
     fprintf(f, "\n");
     fprintf(f, "    -i, --import FILE\n");
-    fprintf(f, "        Implicitly import FILE at the start of each test (as if by `{import|.}\n");
-    fprintf(f, "        FILE')\n");
+    fprintf(f, "        Implicitly import FILE at the start of each test (as if by `import FILE').\n");
     fprintf(f, "\n");
     fprintf(f, "        This option can be passed more than once to import multiple files. Files\n");
     fprintf(f, "        will be imported in the order the options are passed on the command line.\n");
+    fprintf(f, "\n");
+    fprintf(f, "    -l, --preload MOD\n");
+    fprintf(f, "        Prepend the given module to the input file. MOD will be searched in the\n");
+    fprintf(f, "        import path, using the same search procedure as `import MOD'. More than\n");
+    fprintf(f, "        one preload module may be given by passing this option more than once.\n");
     fprintf(f, "\n");
     fprintf(f, "    -f [no-]OPTION[=VALUE]\n");
     fprintf(f, "        Specify values for tunable interpreter properties. See below for a list\n");
@@ -465,6 +455,7 @@ typedef enum {
     FLAG_TEST               = 't',
     FLAG_FILTER             = 'F',
     FLAG_IMPORT             = 'i',
+    FLAG_PRELOAD            = 'l',
     FLAG_BLIMP_OPTION       = 'f',
     FLAG_OPTIMIZE           = 'O',
     FLAG_PERF_REPORT        = 'p',
@@ -505,6 +496,8 @@ static Options DefaultOptions(void)
             // for each build configuration.
         .preimport      = NULL,
         .num_preimport  = 0,
+        .preload        = NULL,
+        .num_preload    = 0,
         .blimp_options  = DEFAULT_BLIMP_OPTIONS,
         .perf_report    = NULL,
     };
@@ -545,6 +538,7 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
         {"perf-factor",    required_argument, NULL, FLAG_PERF_FACTOR },
         {"perf-report",    required_argument, NULL, FLAG_PERF_REPORT },
         {"import",         required_argument, NULL, FLAG_IMPORT },
+        {"preload",        required_argument, NULL, FLAG_PRELOAD },
         {"verbose",        optional_argument, NULL, FLAG_VERBOSE },
         {"help",           no_argument,       NULL, FLAG_HELP },
         {0, 0, 0, 0},
@@ -555,7 +549,7 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
         // parse test-specific options) we need to reset this global variable
         // each time.
     int option, i = 1;
-    while ((option = getopt_long(argc, argv, "t:g:F:i:f:Op:v::h", cli_options, &i)) != -1) {
+    while ((option = getopt_long(argc, argv, "t:g:F:i:l:f:Op:v::h", cli_options, &i)) != -1) {
         switch (option) {
             case FLAG_TEST:
                 ++options->num_tests;
@@ -665,6 +659,15 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
                 break;
             }
 
+            case FLAG_PRELOAD: {
+                ++options->num_preload;
+                options->preload = realloc(
+                    options->preload, options->num_preload*sizeof(char *));
+                options->preload[options->num_preload - 1] = optarg;
+
+                break;
+            }
+
             case FLAG_BLIMP_OPTION: {
                 const char *error = Blimp_ParseOption(
                     optarg, &options->blimp_options);
@@ -767,6 +770,87 @@ static int CompareTests(const void *p1, const void *p2)
 }
 
 static void DestroyGroup(Group *group);
+
+static BlimpStatus TestInputStream(
+    Blimp *blimp,
+    const char *filename,
+    FILE *file,
+    const Options *options,
+    const char **import_path,
+    BlimpStream **stream)
+{
+    *stream = NULL;
+
+    // First create a stream representing the concatenation of all preload
+    // modules.
+    for (size_t i = 0; i < options->num_preload; ++i) {
+        // Locate the preload module in the module search path.
+        const char *preload_path;
+        BlimpModuleType type = BLIMP_MODULE_TEXT;
+        if (BlimpModule_Search(
+                blimp,
+                options->preload[i],
+                import_path,
+                &type,
+                &preload_path
+            ) != BLIMP_OK)
+        {
+            if (*stream != NULL) {
+                BlimpStream_Delete(*stream);
+            }
+            return Blimp_Reraise(blimp);
+        }
+
+        // Open a stream for the preload module
+        BlimpStream *file_stream;
+        if (Blimp_FileStream(blimp, preload_path, &file_stream)
+                != BLIMP_OK)
+        {
+            free((void *)preload_path);
+            if (*stream != NULL) {
+                BlimpStream_Delete(*stream);
+            }
+            return Blimp_Reraise(blimp);
+        }
+        free((void *)preload_path);
+
+        // Append the new preload stream to the end of the stream we've already
+        // built up.
+        if (*stream == NULL) {
+            *stream = file_stream;
+        } else {
+            if (Blimp_ConcatStreams(blimp, *stream, file_stream, stream)
+                    != BLIMP_OK)
+            {
+                BlimpStream_Delete(*stream);
+                BlimpStream_Delete(file_stream);
+                return Blimp_Reraise(blimp);
+            }
+        }
+    }
+
+    // Append the open file stream for the test itself.
+    BlimpStream *test_stream;
+    if (Blimp_OpenFileStream(blimp, filename, file, &test_stream) != BLIMP_OK) {
+        if (*stream != NULL) {
+            BlimpStream_Delete(*stream);
+        }
+        return Blimp_Reraise(blimp);
+    }
+    if (*stream == NULL) {
+        *stream = test_stream;
+    } else {
+        if (Blimp_ConcatStreams(blimp, *stream, test_stream, stream)
+                != BLIMP_OK)
+        {
+            BlimpStream_Delete(*stream);
+            BlimpStream_Delete(test_stream);
+            return Blimp_Reraise(blimp);
+        }
+    }
+
+    return BLIMP_OK;
+}
 
 static Suite *FindTests(const Options *options)
 {
@@ -941,8 +1025,14 @@ static Suite *FindTests(const Options *options)
 
             // Create a bl:mp interpreter for the test.
             test->blimp = TestBlimp_New(test);
-            Blimp_Check(Blimp_OpenFileStream(
-                test->blimp, test_de->d_name, test_file, &test->stream));
+            Blimp_Check(TestInputStream(
+                test->blimp,
+                test_de->d_name,
+                test_file,
+                &test->options,
+                (const char **)group->import_path,
+                &test->stream
+            ));
 
             // Add it to our list of tests.
             if (group->num_tests >= tests_capacity) {

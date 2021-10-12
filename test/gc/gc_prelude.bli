@@ -1,0 +1,3 @@
+# Run the garbage collector after preloaded files like bootstrap.bli, so that we
+# know our tests are starting off with a clean heap.
+:gc_collect;

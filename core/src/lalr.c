@@ -1929,8 +1929,18 @@ static Status State_GetTransition(
                 ? "shift-reduce"
                 : "reduce-reduce";
 
-        const char *terminal_name = *(const char **)Vector_Index(
-            &grammar->terminal_strings, sym->terminal);
+        const char *terminal_name =
+            sym->terminal < grammar->num_terminals
+                // If the terminal is a real terminal (not a pseudo-terminal)
+                // use it's human-readable name.
+                ? *(const char **)Vector_Index(
+                        &grammar->terminal_strings, sym->terminal)
+                // Otherwise, it is a pseudo-terminal. Use the name of the
+                // corresponding non-terminal.
+                : *(const char **)Vector_Index(
+                        &grammar->non_terminal_strings,
+                        sym->terminal - grammar->num_terminals)
+                ;
 
         return ErrorMsg(Grammar_GetBlimp(grammar), BLIMP_AMBIGUOUS_PARSE,
             "potential ambiguous parse at input `%s' (%s conflict). "
@@ -3940,10 +3950,22 @@ static Status ParseStream(
                     if (tree.grammar_symbol.is_terminal) {
                         // If the input that caused the error is a terminal,
                         // include it in the error message.
-                        const char *name =
-                            Object_Type(tree.symbol) == OBJ_SYMBOL
-                                ? ((const Symbol *)tree.symbol)->name
-                                : "<object literal>";
+                        const char *name;
+                        if (tree.symbol == NULL) {
+                            // NULL usually means EOF.
+                            if (tree.grammar_symbol.terminal == TOK_EOF)
+                            {
+                                name = "EOF";
+                            } else {
+                                name = "???";
+                            }
+                        } else {
+                            if (Object_Type(tree.symbol) == OBJ_SYMBOL) {
+                                name = ((const Symbol *)tree.symbol)->name;
+                            } else {
+                                name = "<object literal>";
+                            }
+                        }
                         ErrorFrom(blimp, tree.range,
                             BLIMP_AMBIGUOUS_PARSE,
                             "ambiguous parse at input `%s' (%s conflict). "

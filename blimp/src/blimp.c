@@ -67,7 +67,7 @@ static void PrintUsage(FILE *f, int argc, char *const *argv)
     fprintf(f, "        Search for imported modules in DIR. Multiple directories\n");
     fprintf(f, "        may be given by passing this option more than once.\n");
     fprintf(f, "\n");
-    fprintf(f, "    -l, --preload MODULE\n");
+    fprintf(f, "    -l, --preload MOD\n");
     fprintf(f, "        Prepend the given module to the input file. MOD will be\n");
     fprintf(f, "        searched in the import path, using the same search\n");
     fprintf(f, "        procedure as `import MOD'. More than one preload module\n");
@@ -724,7 +724,8 @@ int main(int argc, char *const *argv)
 
     Blimp_Check(BlimpModule_Init(blimp, options.import_path));
 
-    // Automatically prepend the `std' prelude if requested by the user.
+    // Automatically prepend the `std_bootstrap' prelude if requested by the
+    // user.
     if (options.implicit_prelude) {
         options.prepend = realloc(
             options.prepend, ++options.prepend_len * sizeof(char *));
@@ -732,7 +733,7 @@ int main(int argc, char *const *argv)
             fprintf(stderr, "could not allocate preload");
             return EXIT_FAILURE;
         }
-        options.prepend[options.prepend_len-1] = "std";
+        options.prepend[options.prepend_len-1] = "std_bootstrap";
     }
 
     if (optind == argc) {

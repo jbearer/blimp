@@ -1,1 +1,1 @@
---skip-racket -O
+-lbootstrap --skip-racket -O

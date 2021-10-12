@@ -1,3 +1,13 @@
+# Define __run -> __run. We will use the keyword __run below to execute the
+# contents of the file appended to this one. But we don't want the high-
+# precedence terminal __run on the parser stack the whole time the input file is
+# being parsed, because that makes it impossible for the input file to add and
+# use new grammar rules during parsig. So we make sure that the terminal __run
+# is always immediately reduced to the low-precedence non-terminal __run.
+!(\> {^{`__run`}; `__run`} {^toks
+    {^{.}; 7}
+});
+
 # Define __run <expr>, which is exactly like !<expr>, except it takes (and
 # returns) an expression with precedence 1 instead of 7. This is necessary
 # because we are going to end this file with __run so that it can be prepended
@@ -5,7 +15,7 @@
 # we don't have the ability to append code _after_ the bootstrapped file, we
 # can't wrap it's contents in parentheses, so we have to work with the
 # precedence we get.
-!(\> {^{__run} {^{``}; 1}; 1} {^toks
+!(\> {^{^{``}; `__run`} {^{``}; 1}; 1} {^toks
     {
         n_ref{^ ^};
         n n_ref;
@@ -34,7 +44,7 @@
 # Define __run as a no-op. This makes this file valid bl:mp on its own, even
 # with the trailing `__run` below, so that it can be imported as well as
 # prepended.
-!(\> {^{__run}; 1} {^toks
+!(\> {^{^{``}; `__run`}; 1} {^toks
     {^ {.}; 1}
 });
 

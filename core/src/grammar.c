@@ -564,12 +564,30 @@ Status DefaultGrammar(Blimp *blimp, Grammar *grammar)
     // Add non-terminals used by the default productions to the parser, in order
     // of increasing precedence:
     NonTerminal NT_Expr, NT_ExprNoMsg, NT_Stmt, NT_StmtNoMsg, NT_Custom,
-        NT_CustomNoMsg, NT_Semi, NT_Term, NT_TermNoMsg;
+        NT_CustomNoMsg, NT_Semi, NT_Term, NT_TermNoMsg, NT_Run;
     TRY(GetNonTerminal(grammar,"1", &NT_Expr));
     TRY(GetNonTerminal(grammar,"2", &NT_ExprNoMsg));
     TRY(GetNonTerminal(grammar,"3", &NT_Stmt));
     TRY(GetNonTerminal(grammar,"4", &NT_StmtNoMsg));
     TRY(GetNonTerminal(grammar,"5", &NT_Semi));
+    // The bootstrap prelude needs some grammar symbol to prepend to the file it
+    // is bootstrapping to force that file to execute. It uses the symbol __run,
+    // but this cannot simply be a terminal, since leaving an unreduced terminal
+    // on the stack throughout the parsing of the bootstrapee would make it
+    // impossible for the bootstrapee to add and use new grammar rules. The
+    // __run terminal must be immediately reduced to a non-terminal with lower
+    // precedence than any rule the user might want to add. Since the user
+    // defines new rules at built-in precedence levels (custom1 and higher) any
+    // non-terminal defined in bootstrap prelude will have too high precedence.
+    // Therefore, we build in a non-terminal __run for this specific purpose,
+    // with precedence just lower than the first user-editable non-terminal.
+    //
+    // This is ugly, but it arises from the fact that the user-facing grammar
+    // defined by bootstrap is totally entangled with the built-in grammar.
+    // Eventually, the built-in grammar should be stripped down to a single,
+    // very low-precedence non-terminal, and bootstrap should be able to define
+    // __run itself.
+    TRY(GetNonTerminal(grammar,"__run", &NT_Run));
     // It's useful to have precedences in between the statement grammar (3, 4)
     // and the term grammar (6, 7). The user cannot define new left-recursive
     // forms at precedence 5 or lower, because there will always be statements
