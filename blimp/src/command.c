@@ -350,45 +350,6 @@ static BlimpStatus InspectExpr(
     return BLIMP_OK;
 }
 
-static BlimpStatus PrintParseTree(
-    Blimp *blimp, BlimpObject *context, BlimpObject *tree);
-
-static Status ParseTreePrinter(
-    Blimp *blimp,
-    BlimpObject *context,
-    BlimpObject *receiver,
-    BlimpObject *message,
-    BlimpObject **result)
-{
-    (void)receiver;
-
-    TRY(PrintParseTree(blimp, context, message));
-    printf(" ");
-
-    *result = BlimpObject_Borrow(receiver);
-    return BLIMP_OK;
-}
-
-static BlimpStatus PrintParseTree(
-    Blimp *blimp, BlimpObject *context, BlimpObject *tree)
-{
-    BlimpObject *printer;
-    TRY(BlimpObject_NewExtension(
-        blimp, context, NULL, ParseTreePrinter, NULL, &printer));
-
-    printf("(");
-    const BlimpSymbol *symbol;
-    if (Blimp_SendAndParseSymbol(blimp, context, tree, printer, &symbol)
-            == BLIMP_OK)
-    {
-        printf("; %s", BlimpSymbol_GetName(symbol));
-    }
-    printf(")");
-
-    BlimpObject_Release(printer);
-    return BLIMP_OK;
-}
-
 static BlimpStatus InspectParseTree(
     Blimp *blimp,
     BlimpObject *scope,
@@ -397,9 +358,14 @@ static BlimpStatus InspectParseTree(
     BlimpObject **result)
 {
     (void)arg;
+    (void)scope;
 
-    PrintParseTree(blimp, scope, args[0]);
-    printf("\n");
+    BlimpParseTree tree;
+    if (BlimpObject_ToParseTree(args[0], &tree) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+    BlimpParseTree_Print(stdout, &tree);
+    BlimpParseTree_Destroy(&tree);
 
     *result = BlimpObject_Borrow(args[0]);
     return BLIMP_OK;

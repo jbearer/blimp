@@ -23,12 +23,135 @@ each {^t
 };
 :expect ($children == [(__new parse_tree bar), (__new parse_tree baz)]);
 
+# Reparsing
+:expect ((__new parse_tree foo reparsed) == (__new parse_tree foo));
+:expect (
+    (
+        __new parse_tree 3
+            push (__new parse_tree foo)
+            push (__new parse_tree bar)
+            push (__new parse_tree baz)
+            reparsed
+    ) == (
+        __new parse_tree 3
+            push (__new parse_tree 3
+                push (__new parse_tree 3
+                    push (__new parse_tree custom1
+                        push (__new parse_tree 6
+                            push (__new parse_tree 7
+                                push (__new parse_tree foo)
+                            )
+                        )
+                    )
+                )
+                push (__new parse_tree custom1
+                    push (__new parse_tree 6
+                        push (__new parse_tree 7
+                            push (__new parse_tree bar)
+                        )
+                    )
+                )
+            )
+            push (__new parse_tree custom1
+                push (__new parse_tree 6
+                    push (__new parse_tree 7
+                        push (__new parse_tree baz)
+                    )
+                )
+            )
+    )
+);
+:expect_error {
+    __new parse_tree foo push (__new parse_tree bar) reparsed
+};
+:expect_error {
+    __new parse_tree 7
+        push (__new parse_tree foo)
+        push (__new parse_tree bar)
+        reparsed
+};
+
+# Building parse trees
+:expect ((
+    __new parse_tree_builder .
+        symbol foo
+        build
+) == (
+    __new parse_tree foo
+));
+:expect ((
+    __new parse_tree_builder .
+        symbol foo
+        push (__new parse_tree bar)
+        push (__new parse_tree baz)
+        raw
+        build
+) == (
+    __new parse_tree foo
+        push (__new parse_tree bar)
+        push (__new parse_tree baz)
+));
+:expect ((
+    __new parse_tree_builder .
+        symbol 3
+        push (__new parse_tree foo)
+        push (__new parse_tree bar)
+        push (__new parse_tree baz)
+        build
+) == (
+    __new parse_tree 3
+        push (__new parse_tree foo)
+        push (__new parse_tree bar)
+        push (__new parse_tree baz)
+        reparsed
+));
+:expect ((
+    __new parse_tree_builder .
+        symbol a
+        child {
+            ^ raw
+                symbol b
+                terminal c
+        }
+        raw
+        build
+) == (
+    __new parse_tree a
+        push (__new parse_tree b
+            push (__new parse_tree c)
+        )
+));
+
 # QuasiQuote
 :expect ([foo||] == (__new parse_tree foo));
-:expect ([|foo|] == (__new parse_tree 1 push (__new parse_tree foo)));
-:expect ([|foo ${[bar||]}|] == (__new parse_tree 1
+:expect ([raw:1|foo|] == (__new parse_tree 1 push (__new parse_tree foo)));
+:expect ([raw:1|foo ${[bar||]}|] == (__new parse_tree 1
     push (__new parse_tree foo)
     push (__new parse_tree bar)));
+
+# Reparsing
+:expect ([foo||] == (__new parse_tree foo reparsed));
+:expect ([|foo|] == (__new parse_tree 1 push (__new parse_tree foo) reparsed));
+:expect ([|foo ${[bar||]}|] == (__new parse_tree 1
+    push (__new parse_tree foo)
+    push (__new parse_tree bar)
+    reparsed));
+
+# Modifiers
+
+# A modifier that changes the symbol to `foo`.
+syntax quasiquote_modifier -> make_it_foo {
+    __new parse_tree {^t ^t symbol foo}
+};
+# A modifier that changes the symbol to `bar`.
+syntax quasiquote_modifier -> make_it_bar {
+    __new parse_tree {^t ^t symbol bar}
+};
+
+:expect ([make_it_foo make_it_bar raw:7|baz|] ==
+    (__new parse_tree bar push (__new parse_tree baz)));
+:expect ([make_it_foo make_it_bar raw:|baz|] ==
+    (__new parse_tree bar push (__new parse_tree baz)));
 
 # Equality
 :expect ([foo||] == [foo||]);

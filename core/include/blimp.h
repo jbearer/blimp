@@ -1003,6 +1003,11 @@ BlimpStatus BlimpParseTree_Eval(
     Blimp *blimp, BlimpParseTree *tree, BlimpExpr **expr);
 
 /**
+ * \brief Pretty-print a parse tree.
+ */
+void BlimpParseTree_Print(FILE *f, const BlimpParseTree *tree);
+
+/**
  * \brief Reclaim resources allocated to a BlimpParseTree.
  *
  * If `tree->symbol` is a non-terminal, this function destroys all sub-trees of
@@ -1462,6 +1467,25 @@ BlimpStatus BlimpObject_SetExtensionState(BlimpObject *obj, void *state);
  */
 BlimpStatus BlimpObject_ParseSymbol(
     const BlimpObject *obj, const BlimpSymbol **sym);
+
+/**
+ * \brief
+ *      Convert a BlimpObject that implements the parse tree protocol to a
+ *      BlimpParseTree.
+ *
+ * The parse tree protocol is based on a visitor pattern. An object which
+ * implements the protocol receives as a message a _parse tree visitor_. The
+ * object passes each of its sub-trees as a message to the visitor, and then
+ * returns a BlimpObject representing the grammar symbol. The resulting sequence
+ * of visted objects is then recursively converted to a sequence of parse trees,
+ * and the sequence of sub-trees is interpeted with the grammar symbol as a new
+ * parse tree.
+ *
+ * Parse tree visitors can accept any kind of object as a message, as long as
+ * the object implements the parse tree protocol. Parse tree visitors always
+ * return themselves, so that messages to them can be chained.
+ */
+BlimpStatus BlimpObject_ToParseTree(BlimpObject *obj, BlimpParseTree *tree);
 
 typedef struct {
     size_t refcount;

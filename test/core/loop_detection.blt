@@ -1,7 +1,21 @@
 #: --skip-racket -floop-errors
 
+################################################################################
+# An infinite loop where a symbol points to itself
+#
+
 loop{^} loop;
 
 :expect_error {
     loop[]
-}
+};
+
+################################################################################
+# An infinite loop where a parse tree visitor is sent to itself
+#
+
+:expect_error {
+    \> {^ ^} {^}
+};
+
+.

@@ -219,7 +219,7 @@ Tristate Expr_EvaluatesToSymbol(Expr *expr, const Symbol **sym)
         }
     } else if (expr->next == NULL) {
         // A single statement evaluates to a symbol if it is a symbol literal or
-        // a macro expression.
+        // a macro expression whose production returns a symbol.
         if (expr->tag == EXPR_OBJECT &&
             Object_Type(expr->object) == OBJ_SYMBOL)
         {
@@ -241,9 +241,11 @@ Tristate Expr_EvaluatesToSymbol(Expr *expr, const Symbol **sym)
                 //  Send_EvaluatesToSymbol(Expr *receiver, const Symbol **sym)
                 // But for now, this special case will catch most macro
                 // definitions.
-                *sym = production->block.code->analysis->sym_value;
+                return Expr_EvaluatesToSymbol(
+                    expr->macro.production->block.code, sym);
+            } else {
+                return MAYBE;
             }
-            return YES;
         } else {
             return MAYBE;
         }

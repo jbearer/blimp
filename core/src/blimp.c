@@ -59,10 +59,15 @@ Blimp *Blimp_New(const BlimpOptions *options)
         goto err_global;
     }
 
+    if (InitParseIntrinsic(blimp) != BLIMP_OK) {
+        goto err_parse;
+    }
+
     InitSignals(blimp, &blimp->signals);
 
     return blimp;
 
+err_parse:
 err_global:
     Optimizer_Destroy(&blimp->optimizer);
 err_optimizer:

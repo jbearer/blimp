@@ -3444,7 +3444,7 @@ Status ParseTree_Init(
             // If the token is a symbol representing the name of a non-terminal,
             // look up the non-terminal.
             Token tok;
-            TRY(TokenTrie_GetToken(
+            TRY_FROM(range, TokenTrie_GetToken(
                 &blimp->tokens, ((const Symbol *)symbol)->name, &tok));
             grammar_symbol.terminal = tok.type;
         } else {
@@ -3455,8 +3455,8 @@ Status ParseTree_Init(
         // Non-terminals must be symbols, so we can look them up in our non-
         // terminal map.
         const Symbol *sym;
-        TRY(BlimpObject_ParseSymbol(symbol, &sym));
-        TRY(Grammar_GetNonTerminal(
+        TRY_FROM(range, BlimpObject_ParseSymbol(symbol, &sym));
+        TRY_FROM(range, Grammar_GetNonTerminal(
             &blimp->grammar, sym, &grammar_symbol.non_terminal));
     }
 
@@ -3493,6 +3493,77 @@ Status ParseTree_Copy(Blimp *blimp, const ParseTree *from, ParseTree *to)
     }
 
     return BLIMP_OK;
+}
+
+typedef struct ParseTreePrintNode {
+    bool last_child;
+    struct ParseTreePrintNode *next;
+} ParseTreePrintNode;
+
+static void ParseTree_Print(
+    FILE *f, const ParseTree *tree, ParseTreePrintNode *parents)
+{
+    // We're going to print something that looks like this:
+    //      root
+    //      |- child1
+    //      |  |- "leaf1"
+    //      |- child2
+    //         |- "leaf2"
+    //
+    // Indent to the appropriate depth based on the length of `parents`. Add |
+    // characters as we go to continue to continue the "spine" descending from
+    // each parent, _unless_ a parent is the last child of _their_ parent (the
+    // spine for each node ends at the start of its last child).
+    //
+    // At the end of this loop, `self` will point to the last node in the
+    // `parents` list, which is us.
+    ParseTreePrintNode *self = NULL;
+    for (ParseTreePrintNode *parent = parents;
+         parent != NULL;
+         parent = parent->next)
+    {
+        if (parent->next == NULL) {
+            // If this is the last level of indentation, we output |- regardless
+            // of whether our parent is the last child of its parent or not,
+            // because this is _our_ spine with a tick mark indicating the start
+            // of a new child.
+            fprintf(f, "|-");
+            self = parent;
+        } else if (parent->last_child) {
+            fprintf(f, "  ");
+        } else {
+            fprintf(f, "| ");
+        }
+    }
+
+    // Output the symbol of this parse tree. If it is a terminal, surround it in
+    // quotes so that terminals are visually distinct in the output.
+    if (tree->num_sub_trees == 0) fputc('"', f);
+    BlimpObject_Print(f, tree->symbol);
+    if (tree->num_sub_trees == 0) fputc('"', f);
+    fputc('\n', f);
+
+    // Print our sub-trees, at the next level of indentation.
+    for (size_t i = 0; i < tree->num_sub_trees; ++i) {
+        ParseTreePrintNode child = {
+            .last_child = i + 1 == tree->num_sub_trees,
+            .next = NULL,
+        };
+        if (self != NULL) {
+            self->next = &child;
+        } else {
+            parents = &child;
+        }
+        ParseTree_Print(f, &tree->sub_trees[i], parents);
+        if (self != NULL) {
+            self->next = NULL;
+        }
+    }
+}
+
+void BlimpParseTree_Print(FILE *f, const ParseTree *tree)
+{
+    ParseTree_Print(f, tree, NULL);
 }
 
 ParseTree *SubTree(const ParseTree *tree, size_t index)

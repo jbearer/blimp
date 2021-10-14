@@ -420,6 +420,12 @@ static BlimpStatus DoAction(
 
 static int ReplMain(Blimp *blimp, const Options *options)
 {
+    // Initialize the REPL.
+    Readline_Init(options);
+    PrintVersion(stdout);
+    InitCommands(blimp);
+    printf("Type ?help for help.\n");
+
     // Create an input stream for the parser which yields the contents of
     // each preload file.
     BlimpStream *stream;
@@ -444,12 +450,6 @@ static int ReplMain(Blimp *blimp, const Options *options)
         BlimpParseTree_Destroy(&tree);
         Blimp_FreeExpr(expr);
     }
-
-    // Initialize the REPL.
-    Readline_Init(options);
-    PrintVersion(stdout);
-    InitCommands(blimp);
-    printf("Type ?help for help.\n");
 
     Debugger db;
     Debugger_Init(&db);

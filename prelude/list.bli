@@ -260,25 +260,17 @@ __bind list render {^self{^out
     ^out `]`
 }};
 
-# We represent a __list_elems as a [6||] enclosing a [7||] whose children are a
-# flat list of the elements. The outer [6||] is just to stop the inner [7||]
-# (which is not actually a valid parse tree) from being interpreted during
-# reparsing.
 syntax __list_elems -> elem@<custom1> {
-    [6| ${[7| ${$elem} |]} |]
+    [raw:__list_elems| ${$elem} |]
 };
 
 syntax __list_elems -> elem@<custom1> `,` elems@<__list_elems> {
-    t := [7| ${$elem} |];
-    $elems first each {^elem
-        $t push ^elem
-    };
-    [6| ${$t} |]
+    [raw:__list_elems| ${$elem} |] + $elems
 };
 
 syntax 7 -> `[` elems@<__list_elems> `]` {
     t := [3|${[3|__new list|]} . |];
-    $elems first each {^elem
+    $elems each {^elem
         t := [3|${[3|${$t} push|]} ${^elem}|]
     };
     $t

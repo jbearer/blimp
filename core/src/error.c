@@ -162,6 +162,20 @@ void PrintSourceRange(FILE *f, const SourceRange *range)
     }
 }
 
+bool HasRange(Status status)
+{
+    return status->has_range;
+}
+
+Status AddRange(const SourceRange *range, Status status)
+{
+    if (status != BLIMP_OK && range != NULL && !status->has_range) {
+        status->range = *range;
+        status->has_range = true;
+    }
+    return status;
+}
+
 static const char *GenericErrorCodeMessage(BlimpErrorCode code)
 {
     switch (code) {
@@ -314,6 +328,21 @@ Status Blimp_RuntimeErrorFrom(
     va_list args;
     va_start(args, fmt);
     VError(blimp, &range, code, true, fmt, args);
+    va_end(args);
+
+    return &blimp->last_error;
+}
+
+Status ErrorFromOpt(
+    Blimp *blimp,
+    const SourceRange *range,
+    BlimpErrorCode code,
+    const char *fmt,
+    ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    VError(blimp, range, code, false, fmt, args);
     va_end(args);
 
     return &blimp->last_error;

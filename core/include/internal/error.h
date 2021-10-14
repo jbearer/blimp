@@ -20,16 +20,17 @@
 #define RuntimeReraise(...) Blimp_RuntimeReraise(__VA_ARGS__)
 #define ReraiseFrom(...) Blimp_ReraiseFrom(__VA_ARGS__)
 
-#define TRY_FROM(range, e) \
-    do { \
-        Status s = (e); \
-        if (s != BLIMP_OK) { \
-            s->range = range; \
-            return s; \
-        } \
-    } while (0)
+#define TRY_FROM(RANGE, EXPR) TRY(AddRange(RANGE, EXPR))
 
+PRIVATE Status ErrorFromOpt(
+    Blimp *blimp,
+    const SourceRange *range,
+    BlimpErrorCode code,
+    const char *fmt,
+    ...);
 PRIVATE void AppendErrorMsg(Blimp *blimp, const char *fmt, ...);
 PRIVATE void PrintSourceRange(FILE *f, const SourceRange *range);
+PRIVATE bool HasRange(Status status);
+PRIVATE Status AddRange(const SourceRange *range, Status status);
 
 #endif

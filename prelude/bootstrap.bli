@@ -37,7 +37,7 @@
             }[]
         };
 
-        {^ {`!`} {`(`} (expr[]) {`)`}; 1 }
+        {^ {`!`} (expr[]); 7 }
     }[]
 });
 
@@ -45,7 +45,7 @@
 # with the trailing `__run` below, so that it can be imported as well as
 # prepended.
 !(\> {^{^{``}; `__run`}; 1} {^toks
-    {^ {.}; 1}
+    {^ {.}; 7}
 });
 
 # If this file is prepended to another, execute the code in that file.

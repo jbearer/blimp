@@ -29,7 +29,7 @@ contexts:
         1: punctuation.definition.variable
         2: variable.other
 
-    - match: '\[({{symbol}})?\|'
+    - match: '\[\s*(({{symbol}}\s*)*:)?\s*({{symbol}})\s*?\|'
       scope: keyword.other.quasibracket
       push: quasiquote
 

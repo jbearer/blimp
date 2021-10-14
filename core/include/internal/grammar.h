@@ -95,5 +95,22 @@ PRIVATE Status DefineMacro(
     const SourceRange *range,
     const Symbol **nt_sym);
 
+/**
+ * \brief Add an intrinsic function `parse` to a bl:mp state.
+ *
+ * This function binds a parsing method to the global symbol `parse`. When this
+ * method receives a message, it interprets the message as a parse tree using
+ * the parse tree protocol (as if by BlimpObject_ToParseTree()) and then parses
+ * the sequence of sub-trees of the parse tree according to the grammar rules
+ * for the grammar symbol of the parse tree, returning a new, parsed tree.
+ *
+ * This intrinsic is a temporary measure. It was added when reparsing was
+ * removed from the standard mechanism for processing macro expansions, to
+ * enable macros to explicitly reparse their output if they so choose. There is
+ * no reason this functionality cannot be implemented in bl:mp. That should be
+ * done and this intrinsic removed from the core intepreter as soon as possible.
+ */
+PRIVATE Status InitParseIntrinsic(Blimp *blimp);
+
 #endif
 
