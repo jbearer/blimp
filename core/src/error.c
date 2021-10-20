@@ -348,6 +348,11 @@ Status ErrorFromOpt(
     return &blimp->last_error;
 }
 
+Status ReraiseFromOpt(Blimp *blimp, const SourceRange *range)
+{
+    return AddRange(range, &blimp->last_error);
+}
+
 Status Blimp_ErrorFromExpr(
     Blimp *blimp, Expr *expr, BlimpErrorCode code, const char *fmt, ...)
 {

@@ -233,8 +233,10 @@ Status BlimpObject_ToParseTree(Object *obj, ParseTree **tree)
     size_t num_sub_trees;
     Vector_MoveOut(&arg.trees, &num_sub_trees, (void **)&sub_trees);
     Vector_Destroy(&arg.trees);
-    return ParseTree_New(
+    ret = ParseTree_New(
         blimp, symbol, sub_trees, num_sub_trees, NULL, tree);
+    BlimpObject_Release(symbol);
+    return ret;
 
 error:
     // Make sure `tree` is a valid parse tree even if we failed.
@@ -262,12 +264,12 @@ static Status MacroHandler(ParserContext *ctx, ParseTree **tree)
     // than the input sub-trees.
     Object *input_tree;
     TRY(BlimpObject_NewExtension(
-            ctx->blimp,
-            (Object *)ctx->blimp->global,
-            ParseTree_Borrow(*tree),
-            ParseTreeMethod,
-            ParseTreeFinalizer,
-            &input_tree
+        ctx->blimp,
+        (Object *)ctx->blimp->global,
+        ParseTree_Borrow(*tree),
+        ParseTreeMethod,
+        ParseTreeFinalizer,
+        &input_tree
     ));
 
     // Send the input tree to the macro handler, resulting in an Object
@@ -290,7 +292,13 @@ static Status MacroHandler(ParserContext *ctx, ParseTree **tree)
 
     // Interpret the output Object.
     ParseTree *output;
-    TRY_FROM(ctx->range, BlimpObject_ToParseTree(output_tree, &output));
+    if (BlimpObject_ToParseTree(output_tree, &output) != BLIMP_OK) {
+        BlimpObject_Release(output_tree);
+        return ReraiseFromOpt(ctx->blimp, ctx->range);
+    }
+    BlimpObject_Release(output_tree);
+
+    // Replace the input tree with the output one.
     ParseTree_Release(*tree);
     *tree = output;
 
@@ -603,6 +611,7 @@ static Status ParseObject(Blimp *blimp, Object *obj, ParseTree **tree)
     CHECK(BlimpObject_SetExtensionState(visitor, NULL));
     BlimpObject_Release(visitor);
     if (ret != BLIMP_OK) {
+        BlimpObject_Release(symbol);
         goto error;
     }
 
@@ -610,13 +619,16 @@ static Status ParseObject(Blimp *blimp, Object *obj, ParseTree **tree)
         Vector_Destroy(&arg.trees);
         // No sub-trees, this object represents a terminal. We do not need to
         // reparse terminals, we can just construct them directly.
-        return ParseTree_New(blimp, symbol, NULL, 0, NULL, tree);
+        ret = ParseTree_New(blimp, symbol, NULL, 0, NULL, tree);
+        BlimpObject_Release(symbol);
+        return ret;
     } else {
         // This object represents a non-terminal via a sequence of sub-trees
         // which must be reparsed to create a single tree. Non-terminals are
         // required to be symbols.
         const Symbol *sym;
         if (BlimpObject_ParseSymbol(symbol, &sym) != BLIMP_OK) {
+            BlimpObject_Release(symbol);
             goto error;
         }
         NonTerminal nt;

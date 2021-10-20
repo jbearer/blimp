@@ -826,7 +826,7 @@ static Status Grammar_AddNonTerminal(
             Grammar_GetBlimp(grammar), productions, sizeof(size_t), NULL);
 
         char *string;
-        if (name == NULL || Grammar_NumTerminals(grammar) < nt) {
+        if (name == NULL || Grammar_NumNonTerminals(grammar) < nt) {
             // If we were not given a name, or if this is not the ultimate non-
             // terminal we're trying to add, create a default name of the form
             // NT(precedence).
@@ -2907,14 +2907,14 @@ static void DumpParseTable(
             Action action = state->actions[t];
             switch (Action_Type(action)) {
                 case SHIFT:
-                    fprintf(file, "   s%.2zu   |", Action_Data(action));
+                    fprintf(file, "  s%.4zu  |", Action_Data(action));
                     break;
                 case REDUCE: {
                     Production *production = (Production *)Action_Data(action);
                     if (production->index == PSEUDO_PRODUCTION_INDEX) {
                         fprintf(file, "   r*    |");
                     } else {
-                        fprintf(file, "   r%.2zu   |", production->index);
+                        fprintf(file, "  r%.4zu  |", production->index);
                     }
                     break;
                 }

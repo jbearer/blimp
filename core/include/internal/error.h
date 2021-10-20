@@ -28,6 +28,7 @@ PRIVATE Status ErrorFromOpt(
     BlimpErrorCode code,
     const char *fmt,
     ...);
+PRIVATE Status ReraiseFromOpt(Blimp *blimp, const SourceRange *range);
 PRIVATE void AppendErrorMsg(Blimp *blimp, const char *fmt, ...);
 PRIVATE void PrintSourceRange(FILE *f, const SourceRange *range);
 PRIVATE bool HasRange(Status status);
