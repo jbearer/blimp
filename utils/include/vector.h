@@ -178,5 +178,9 @@ static inline void ExprDestructor(void *p)
     Blimp_FreeExpr(*(Expr **)p);
 }
 
+static inline void ParseTreeDestructor(void *p)
+{
+    BlimpParseTree_Release(*(ParseTree **)p);
+}
 
 #endif

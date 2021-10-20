@@ -436,18 +436,18 @@ static int ReplMain(Blimp *blimp, const Options *options)
 
     if (stream != NULL) {
         // Execute the preloaded files.
-        BlimpParseTree tree;
+        BlimpParseTree *tree;
         if (Blimp_Parse(blimp, stream, &tree) != BLIMP_OK) {
             Blimp_DumpLastError(blimp, stderr);
             return 1;
         }
         BlimpExpr *expr;
-        if (BlimpParseTree_Eval(blimp, &tree, &expr) != BLIMP_OK) {
-            BlimpParseTree_Destroy(&tree);
+        if (BlimpParseTree_Eval(blimp, tree, &expr) != BLIMP_OK) {
+            BlimpParseTree_Release(tree);
             Blimp_DumpLastError(blimp, stderr);
             return 1;
         }
-        BlimpParseTree_Destroy(&tree);
+        BlimpParseTree_Release(tree);
         Blimp_FreeExpr(expr);
     }
 
@@ -533,7 +533,7 @@ static int EvalMain(Blimp *blimp, const char *path, const Options *options)
         options->debug ? &db : NULL
     );
     PushInterruptHandler(InterruptAction, blimp);
-    BlimpParseTree tree;
+    BlimpParseTree *tree;
     if (Blimp_Parse(blimp, stream, &tree) != BLIMP_OK) {
         Blimp_DumpLastError(blimp, stderr);
         if (options->debug) {
@@ -542,15 +542,15 @@ static int EvalMain(Blimp *blimp, const char *path, const Options *options)
         return 1;
     }
     BlimpExpr *expr;
-    if (BlimpParseTree_Eval(blimp, &tree, &expr) != BLIMP_OK) {
-        BlimpParseTree_Destroy(&tree);
+    if (BlimpParseTree_Eval(blimp, tree, &expr) != BLIMP_OK) {
+        BlimpParseTree_Release(tree);
         Blimp_DumpLastError(blimp, stderr);
         if (options->debug) {
             Debugger_Detach(&db);
         }
         return 1;
     }
-    BlimpParseTree_Destroy(&tree);
+    BlimpParseTree_Release(tree);
     PopInterruptHandler();
 
     int ret = EXIT_SUCCESS;

@@ -229,7 +229,7 @@ Expr *Readline_ReadExpr(
         // Try to parse the input we have so far. This will tell us if the input
         // is a complete expression or not. If not, we will ask the user for
         // more lines of input.
-        ParseTree tree;
+        ParseTree *tree;
         while (Blimp_ParseString(blimp, input, &tree) != BLIMP_OK) {
             if (Blimp_GetLastErrorCode(blimp) == BLIMP_UNEXPECTED_EOF) {
                 // If we were expecting more input, print a continuation prompt
@@ -269,9 +269,9 @@ Expr *Readline_ReadExpr(
 
         // Convert the parse tree to an expression, and return the expression if
         // successful.
-        if (BlimpParseTree_Eval(blimp, &tree, &expr) == BLIMP_OK) {
+        if (BlimpParseTree_Eval(blimp, tree, &expr) == BLIMP_OK) {
             free(input);
-            BlimpParseTree_Destroy(&tree);
+            BlimpParseTree_Release(tree);
             break;
         }
         // This can fail if the parse tree is not a valid expression (can happen
@@ -279,7 +279,7 @@ Expr *Readline_ReadExpr(
         // like lack of memory. If it fails, clean up, report the error, and ask
         // for more input.
         free(input);
-        BlimpParseTree_Destroy(&tree);
+        BlimpParseTree_Release(tree);
         Blimp_DumpLastError(blimp, stdout);
     }
 

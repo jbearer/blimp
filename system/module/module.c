@@ -147,18 +147,17 @@ static BlimpStatus ImportExtensionMethod(
 }
 
 // Handler for the `import module` macro.
-static BlimpStatus ImportHandler(BlimpParserContext *ctx, BlimpParseTree *tree)
+static BlimpStatus ImportHandler(BlimpParserContext *ctx, BlimpParseTree **tree)
 {
     const char **path = (const char **)ctx->arg;
 
-    assert(tree->sub_trees[1].grammar_symbol.is_terminal);
+    BlimpObject *sym = BlimpParseTree_Symbol(BlimpParseTree_SubTree(*tree, 1));
     const BlimpSymbol *module;
-    if (BlimpObject_ParseSymbol(tree->sub_trees[1].symbol, &module) != BLIMP_OK)
-    {
+    if (BlimpObject_ParseSymbol(sym, &module) != BLIMP_OK) {
         return Blimp_Reraise(ctx->blimp);
     }
 
-    BlimpParseTree parsed;
+    BlimpParseTree *parsed;
     if (BlimpModule_StaticImport(
             ctx->blimp, BlimpSymbol_GetName(module), path, &parsed)
         != BLIMP_OK)
@@ -166,7 +165,7 @@ static BlimpStatus ImportHandler(BlimpParserContext *ctx, BlimpParseTree *tree)
         return Blimp_Reraise(ctx->blimp);
     }
 
-    BlimpParseTree_Destroy(tree);
+    BlimpParseTree_Release(*tree);
     *tree = parsed;
     return BLIMP_OK;
 }
@@ -351,16 +350,16 @@ BlimpStatus BlimpModule_Import(
     BlimpObject **result)
 {
     // Locate the module and parse it into an expression.
-    BlimpParseTree tree;
+    BlimpParseTree *tree;
     if (BlimpModule_StaticImport(blimp, module, path, &tree) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
     BlimpExpr *expr;
-    if (BlimpParseTree_Eval(blimp, &tree, &expr) != BLIMP_OK) {
-        BlimpParseTree_Destroy(&tree);
+    if (BlimpParseTree_Eval(blimp, tree, &expr) != BLIMP_OK) {
+        BlimpParseTree_Release(tree);
         return Blimp_Reraise(blimp);
     }
-    BlimpParseTree_Destroy(&tree);
+    BlimpParseTree_Release(tree);
 
     // Evaluate the expression.
     BlimpStatus ret = Blimp_Eval(blimp, expr, context, result);
@@ -369,7 +368,10 @@ BlimpStatus BlimpModule_Import(
 }
 
 BlimpStatus BlimpModule_StaticImport(
-    Blimp *blimp, const char *module, const char **path, BlimpParseTree *result)
+    Blimp *blimp,
+    const char *module,
+    const char **path,
+    BlimpParseTree **result)
 {
     const BlimpSymbol *prec3;
     if (Blimp_GetSymbol(blimp, "3", &prec3) != BLIMP_OK) {
@@ -427,11 +429,11 @@ BlimpStatus BlimpModule_StaticImport(
             }
 
             // Now we can construct the send:
-            BlimpParseTree *sub_trees = malloc(2*sizeof(BlimpParseTree));
+            BlimpParseTree **sub_trees = malloc(2*sizeof(BlimpParseTree *));
             if (sub_trees == NULL) {
                 return Blimp_Error(blimp, BLIMP_OUT_OF_MEMORY);
             }
-            if (BlimpParseTree_Init(
+            if (BlimpParseTree_New(
                     blimp,
                     (BlimpObject *)import_extension,
                     NULL,
@@ -443,7 +445,7 @@ BlimpStatus BlimpModule_StaticImport(
                 free(sub_trees);
                 return Blimp_Reraise(blimp);
             }
-            if (BlimpParseTree_Init(
+            if (BlimpParseTree_New(
                     blimp,
                     (BlimpObject *)path_sym,
                     NULL,
@@ -452,16 +454,16 @@ BlimpStatus BlimpModule_StaticImport(
                     &sub_trees[1]
                 ) != BLIMP_OK)
             {
-                BlimpParseTree_Destroy(&sub_trees[0]);
+                BlimpParseTree_Release(sub_trees[0]);
                 free(sub_trees);
                 return Blimp_Reraise(blimp);
             }
-            if (BlimpParseTree_Init(
+            if (BlimpParseTree_New(
                     blimp, (BlimpObject *)prec3, sub_trees, 2, NULL, result)
                 != BLIMP_OK)
             {
-                BlimpParseTree_Destroy(&sub_trees[1]);
-                BlimpParseTree_Destroy(&sub_trees[0]);
+                BlimpParseTree_Release(sub_trees[1]);
+                BlimpParseTree_Release(sub_trees[0]);
                 free(sub_trees);
                 return Blimp_Reraise(blimp);
             }
@@ -483,16 +485,16 @@ BlimpStatus BlimpModule_ImportSource(
     BlimpObject **result)
 {
     // Parse the file.
-    BlimpParseTree tree;
+    BlimpParseTree *tree;
     if (Blimp_ParseFile(blimp, path, &tree) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
     BlimpExpr *expr;
-    if (BlimpParseTree_Eval(blimp, &tree, &expr) != BLIMP_OK) {
-        BlimpParseTree_Destroy(&tree);
+    if (BlimpParseTree_Eval(blimp, tree, &expr) != BLIMP_OK) {
+        BlimpParseTree_Release(tree);
         return Blimp_Reraise(blimp);
     }
-    BlimpParseTree_Destroy(&tree);
+    BlimpParseTree_Release(tree);
 
     // Evaluate the parsed expression.
     BlimpStatus ret = Blimp_Eval(blimp, expr, context, result);

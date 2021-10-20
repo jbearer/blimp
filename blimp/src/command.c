@@ -360,12 +360,12 @@ static BlimpStatus InspectParseTree(
     (void)arg;
     (void)scope;
 
-    BlimpParseTree tree;
+    BlimpParseTree *tree;
     if (BlimpObject_ToParseTree(args[0], &tree) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
-    BlimpParseTree_Print(stdout, &tree);
-    BlimpParseTree_Destroy(&tree);
+    BlimpParseTree_Print(stdout, tree);
+    BlimpParseTree_Release(tree);
 
     *result = BlimpObject_Borrow(args[0]);
     return BLIMP_OK;

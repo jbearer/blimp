@@ -500,19 +500,18 @@ typedef struct {
 // All pseudo-productions are handled during parsing by PseudoHandler(), which
 // simply returns the top-level expression from the parse tree represented by
 // the pseudo-terminal.
-static Status PseudoHandler(ParserContext *ctx, ParseTree *tree)
+static Status PseudoHandler(ParserContext *ctx, ParseTree **tree)
 {
     (void)ctx;
 
-    assert(!tree->grammar_symbol.is_terminal);
-    assert(tree->num_sub_trees > 0);
+    assert(!(*tree)->grammar_symbol.is_terminal);
+    assert((*tree)->num_sub_trees > 0);
 
     // Make a copy of the nested parse tree represented by the pseudo-terminal.
-    ParseTree sub_tree;
-    TRY(ParseTree_Copy(ctx->blimp, &tree->sub_trees[0], &sub_tree));
+    ParseTree *sub_tree = ParseTree_Borrow((*tree)->sub_trees[0]);
 
     // Completely replace the output tree with the copied sub-tree.
-    ParseTree_Destroy(tree);
+    ParseTree_Release(*tree);
     *tree = sub_tree;
 
     return BLIMP_OK;
@@ -3364,15 +3363,17 @@ static inline void Lexer_Commit(Lexer *lex)
 // Parsing
 //
 
-static Status ParseTree_InitWithGrammarSymbol(
+static Status ParseTree_NewWithGrammarSymbol(
     Blimp *blimp,
     GrammarSymbol grammar_symbol,
     Object *symbol,
-    ParseTree *children,
+    ParseTree **children,
     size_t num_children,
     const SourceRange *range,
-    ParseTree *tree)
+    ParseTree **tree)
 {
+    TRY(Malloc(blimp, sizeof(ParseTree), tree));
+
     // Check if this is an untether expression. If it is, it takes flight now,
     // the instant the parse tree is created. Untether parse trees look like
     //      7 -> {`!` <expr>}
@@ -3381,14 +3382,15 @@ static Status ParseTree_InitWithGrammarSymbol(
         symbol != NULL &&
         Object_Type(symbol) == OBJ_SYMBOL &&
         strcmp("7", ((const Symbol *)symbol)->name) == 0 &&
-        children[0].grammar_symbol.is_terminal &&
-        children[0].grammar_symbol.terminal == TOK_BANG
+        children[0]->grammar_symbol.is_terminal &&
+        children[0]->grammar_symbol.terminal == TOK_BANG
     ) {
         // Construct an expression from the parse tree.
         Expr *expr;
-        TRY(ParseTreeToExpr(blimp, &children[1], &expr));
+        TRY(ParseTreeToExpr(blimp, children[1], &expr));
         if (BlimpExpr_Resolve(blimp, expr) != BLIMP_OK) {
             Blimp_FreeExpr(expr);
+            Free(blimp, tree);
             return Reraise(blimp);
         }
 
@@ -3399,41 +3401,49 @@ static Status ParseTree_InitWithGrammarSymbol(
                 != BLIMP_OK)
         {
             Blimp_FreeExpr(expr);
+            Free(blimp, tree);
             return Reraise(blimp);
         }
 
-        tree->grammar_symbol = (GrammarSymbol) {
+        (*tree)->grammar_symbol = (GrammarSymbol) {
             .is_terminal = true,
             .terminal = TOK_OBJECT,
         };
-        tree->symbol = obj;
-        tree->sub_trees = NULL;
-        tree->num_sub_trees = 0;
+        (*tree)->symbol = obj;
+        (*tree)->sub_trees = NULL;
+        (*tree)->num_sub_trees = 0;
 
         Blimp_FreeExpr(expr);
+        for (ParseTree **child = children;
+             child < children + num_children;
+             ++child)
+        {
+            ParseTree_Release(*child);
+        }
         free(children);
     } else {
-        tree->grammar_symbol = grammar_symbol;
-        tree->symbol = symbol != NULL ? BlimpObject_Borrow(symbol) : NULL;
-        tree->sub_trees = children;
-        tree->num_sub_trees = num_children;
+        (*tree)->grammar_symbol = grammar_symbol;
+        (*tree)->symbol = symbol != NULL ? BlimpObject_Borrow(symbol) : NULL;
+        (*tree)->sub_trees = children;
+        (*tree)->num_sub_trees = num_children;
     }
 
+    (*tree)->refcount = 1;
     if (range != NULL) {
-        tree->range = *range;
+        (*tree)->range = *range;
     } else {
-        tree->range = (SourceRange){0};
+        (*tree)->range = (SourceRange){0};
     }
     return BLIMP_OK;
 }
 
-Status ParseTree_Init(
+Status ParseTree_New(
     Blimp *blimp,
     Object *symbol,
-    ParseTree *children,
+    ParseTree **children,
     size_t num_children,
     const SourceRange *range,
-    ParseTree *tree)
+    ParseTree **tree)
 {
     // Convert the symbol to a grammar symbol based on whether it is expected to
     // be a terminal or a non-terminal.
@@ -3460,39 +3470,29 @@ Status ParseTree_Init(
             &blimp->grammar, sym, &grammar_symbol.non_terminal));
     }
 
-    return ParseTree_InitWithGrammarSymbol(
+    return ParseTree_NewWithGrammarSymbol(
         blimp, grammar_symbol, symbol, children, num_children, range, tree);
 }
 
-void ParseTree_Destroy(ParseTree *tree)
+void ParseTree_Release(ParseTree *tree)
 {
-    for (size_t i = 0; i < tree->num_sub_trees; ++i) {
-        ParseTree_Destroy(&tree->sub_trees[i]);
-    }
-    free(tree->sub_trees);
-    if (tree->symbol != NULL) {
-        BlimpObject_Release(tree->symbol);
+    assert(tree->refcount > 0);
+    if (--tree->refcount == 0) {
+        for (size_t i = 0; i < tree->num_sub_trees; ++i) {
+            ParseTree_Release(tree->sub_trees[i]);
+        }
+        free(tree->sub_trees);
+        if (tree->symbol != NULL) {
+            BlimpObject_Release(tree->symbol);
+        }
+        free(tree);
     }
 }
 
-Status ParseTree_Copy(Blimp *blimp, const ParseTree *from, ParseTree *to)
+ParseTree *ParseTree_Borrow(ParseTree *tree)
 {
-    to->grammar_symbol = from->grammar_symbol;
-    to->symbol = from->symbol != NULL ? BlimpObject_Borrow(from->symbol) : NULL;
-    to->range = from->range;
-    to->num_sub_trees = from->num_sub_trees;
-
-    TRY(Malloc(blimp, from->num_sub_trees*sizeof(ParseTree), &to->sub_trees));
-    for (size_t i = 0; i < from->num_sub_trees; ++i) {
-        if (ParseTree_Copy(blimp, &from->sub_trees[i], &to->sub_trees[i])
-                != BLIMP_OK)
-        {
-            free(to->sub_trees);
-            return Reraise(blimp);
-        }
-    }
-
-    return BLIMP_OK;
+    ++tree->refcount;
+    return tree;
 }
 
 typedef struct ParseTreePrintNode {
@@ -3554,7 +3554,7 @@ static void ParseTree_Print(
         } else {
             parents = &child;
         }
-        ParseTree_Print(f, &tree->sub_trees[i], parents);
+        ParseTree_Print(f, tree->sub_trees[i], parents);
         if (self != NULL) {
             self->next = NULL;
         }
@@ -3569,7 +3569,17 @@ void BlimpParseTree_Print(FILE *f, const ParseTree *tree)
 ParseTree *SubTree(const ParseTree *tree, size_t index)
 {
     assert(index < tree->num_sub_trees);
-    return &tree->sub_trees[index];
+    return tree->sub_trees[index];
+}
+
+size_t BlimpParseTree_NumSubTrees(const ParseTree *tree)
+{
+    return tree->num_sub_trees;
+}
+
+Object *BlimpParseTree_Symbol(const ParseTree *tree)
+{
+    return tree->symbol;
 }
 
 // A ParseTreeStream is an input abstraction for the parser which yields
@@ -3595,7 +3605,7 @@ typedef struct {
             Token cache;
         } lexer;
         struct {
-            const Vector/*<ParseTree>*/ *trees;
+            const Vector/*<ParseTree *>*/ *trees;
             size_t offset;
         } vector;
     };
@@ -3609,7 +3619,7 @@ static void ParseTreeStream_InitLexer(ParseTreeStream *stream, Lexer *lexer)
 }
 
 static void ParseTreeStream_InitVector(
-    ParseTreeStream *stream, const Vector/*<ParseTree>*/ *trees)
+    ParseTreeStream *stream, const Vector/*<ParseTree *>*/ *trees)
 {
     stream->type = STREAM_VECTOR;
     stream->vector.trees = trees;
@@ -3643,7 +3653,7 @@ static inline void ParseTreeStream_Invalidate(ParseTreeStream *stream)
 
 static Status ParseTreeStream_Peek(
     ParseTreeStream *stream,
-    ParseTree *tree,
+    ParseTree **tree,
     const StateMachine *m,
     const Vector/*<StateIndex>*/ *stack)
 {
@@ -3673,7 +3683,7 @@ static Status ParseTreeStream_Peek(
             }
 
             // Convert the peeked Token to a ParseTree with a Terminal symbol.
-            return ParseTree_InitWithGrammarSymbol(
+            return ParseTree_NewWithGrammarSymbol(
                 blimp,
                 (GrammarSymbol){ .is_terminal = true, .terminal = tok.type },
                 (Object *)tok.symbol,
@@ -3686,11 +3696,8 @@ static Status ParseTreeStream_Peek(
             if (stream->vector.offset < Vector_Length(stream->vector.trees)) {
                 // If there are more trees in the input vector, return the next
                 // one.
-                TRY(ParseTree_Copy(
-                    blimp,
-                    Vector_Index(stream->vector.trees, stream->vector.offset),
-                    tree
-                ));
+                *tree = ParseTree_Borrow(*(ParseTree **)Vector_Index(
+                        stream->vector.trees, stream->vector.offset));
 
                 // Mimic the behavior of the lexer, where TOK_SYMBOL acts as a
                 // fallback. If we were given an unexpected terminal, but we are
@@ -3700,15 +3707,16 @@ static Status ParseTreeStream_Peek(
                 // expected. We can be optimistic, and if it is not expected,
                 // the parser will generate an error message using the normal
                 // unexpected token error path.
-                if (tree->grammar_symbol.is_terminal &&
-                    !TerminalExpected(m, stack, tree->grammar_symbol.terminal))
+                if ((*tree)->grammar_symbol.is_terminal &&
+                    !TerminalExpected(
+                        m, stack, (*tree)->grammar_symbol.terminal))
                 {
-                    tree->grammar_symbol.terminal = TOK_SYMBOL;
+                    (*tree)->grammar_symbol.terminal = TOK_SYMBOL;
                 }
                 return BLIMP_OK;
             } else {
                 // Otherwise, return EOF.
-                return ParseTree_InitWithGrammarSymbol(
+                return ParseTree_NewWithGrammarSymbol(
                     blimp,
                     (GrammarSymbol){
                         .is_terminal = true,
@@ -3762,7 +3770,7 @@ static Status ParseStream(
     Grammar *grammar,
     NonTerminal start,
     void *parser_state,
-    ParseTree *result)
+    ParseTree **result)
 {
     assert(start > START_SYMBOL);
 
@@ -3791,9 +3799,8 @@ static Status ParseStream(
     // larger tree, and push that back onto `output`. At the end of parsing
     // (when we reach an ACCEPT state), `output` should contain just a single
     // expression, which is the result of parsing.
-    Vector/*ParseTree*/ output;
-    Vector_Init(
-        blimp, &output, sizeof(ParseTree), (Destructor)ParseTree_Destroy);
+    Vector/*<ParseTree *>*/ output;
+    Vector_Init(blimp, &output, sizeof(ParseTree *), ParseTreeDestructor);
 
     // `output_precedences` is a multiset of the symbols in `tree`, ordered by
     // precedence.
@@ -3812,14 +3819,14 @@ static Status ParseStream(
         const State *state = StateMachine_GetState(
             m, *(StateIndex *)Vector_RIndex(&stack, 0));
 
-        ParseTree tree;
+        ParseTree *tree;
         if (ParseTreeStream_Peek(stream, &tree, m, &stack) != BLIMP_OK) {
             goto error;
         }
 
         Action action;
-        if (tree.grammar_symbol.is_terminal) {
-            action = state->actions[tree.grammar_symbol.terminal];
+        if (tree->grammar_symbol.is_terminal) {
+            action = state->actions[tree->grammar_symbol.terminal];
         } else {
             // If the input is a non-terminal, we need to convert it to a
             // terminal so we can look up the appropriate Action. We do this by
@@ -3827,7 +3834,8 @@ static Status ParseStream(
             // pseudo-terminals created by the addition of pseudo-productions
             // during the construction of the state machine.
             action = state->actions[
-                StateMachine_PseudoTerminal(m, tree.grammar_symbol.non_terminal)
+                StateMachine_PseudoTerminal(
+                    m, tree->grammar_symbol.non_terminal)
             ];
         }
 
@@ -3838,14 +3846,14 @@ static Status ParseStream(
 
                 // Push the tree onto the parse tree stack.
                 if (Vector_PushBack(&output, &tree) != BLIMP_OK) {
-                    ParseTree_Destroy(&tree);
+                    ParseTree_Release(tree);
                     goto error;
                 }
 
                 // Update the count of `tree.symbol` symbols in the
                 // `output_precedences` multiset.
                 if (OrderedMultiset_Insert(
-                        &output_precedences, &tree.grammar_symbol) != BLIMP_OK)
+                        &output_precedences, &tree->grammar_symbol) != BLIMP_OK)
                 {
                     goto error;
                 }
@@ -3892,8 +3900,8 @@ static Status ParseStream(
 
                 // Begin constructing the new parse tree, starting with its
                 // sub-trees.
-                ParseTree *sub_trees = malloc(
-                    production->num_symbols*sizeof(ParseTree));
+                ParseTree **sub_trees = malloc(
+                    production->num_symbols*sizeof(ParseTree *));
                 if (sub_trees == NULL) {
                     Error(blimp, BLIMP_OUT_OF_MEMORY);
                     goto error;
@@ -3904,11 +3912,11 @@ static Status ParseStream(
                 // Set the source range to encompass the range of all the sub-
                 // trees.
                 SourceRange range = {
-                    .start = sub_trees[0].range.start,
-                    .end = sub_trees[production->num_symbols-1].range.end,
+                    .start = sub_trees[0]->range.start,
+                    .end = sub_trees[production->num_symbols-1]->range.end,
                 };
-                ParseTree fragment;
-                if (ParseTree_InitWithGrammarSymbol(
+                ParseTree *fragment;
+                if (ParseTree_NewWithGrammarSymbol(
                         blimp,
                         grammar_symbol,
                         (Object *)symbol,
@@ -3933,11 +3941,11 @@ static Status ParseStream(
                     .blimp = blimp,
                     .parser_state = parser_state,
                     .arg = production->handler_arg,
-                    .range = &fragment.range
+                    .range = &fragment->range
                 };
                 if (production->handler != NULL) {
                     if (production->handler(&ctx, &fragment) != BLIMP_OK) {
-                        ParseTree_Destroy(&fragment);
+                        ParseTree_Release(fragment);
                         goto error;
                     }
                 }
@@ -3995,11 +4003,12 @@ static Status ParseStream(
 
             case ACCEPT: {
                 // Get the result from the parse tree.
-                assert(tree.grammar_symbol.is_terminal);
-                assert(tree.grammar_symbol.terminal == TOK_EOF);
+                assert(tree->grammar_symbol.is_terminal);
+                assert(tree->grammar_symbol.terminal == TOK_EOF);
                 assert(Vector_Length(&output) == 1);
                 Vector_PopBack(&output, result);
 
+                ParseTree_Release(tree);
                 Grammar_Unlisten(grammar, &listener);
                 Vector_Destroy(&stack);
                 Vector_Destroy(&output);
@@ -4018,58 +4027,58 @@ static Status ParseStream(
                             ? "shift-reduce"
                             : "reduce-reduce";
 
-                    if (tree.grammar_symbol.is_terminal) {
+                    if (tree->grammar_symbol.is_terminal) {
                         // If the input that caused the error is a terminal,
                         // include it in the error message.
                         const char *name;
-                        if (tree.symbol == NULL) {
+                        if (tree->symbol == NULL) {
                             // NULL usually means EOF.
-                            if (tree.grammar_symbol.terminal == TOK_EOF)
+                            if (tree->grammar_symbol.terminal == TOK_EOF)
                             {
                                 name = "EOF";
                             } else {
                                 name = "???";
                             }
                         } else {
-                            if (Object_Type(tree.symbol) == OBJ_SYMBOL) {
-                                name = ((const Symbol *)tree.symbol)->name;
+                            if (Object_Type(tree->symbol) == OBJ_SYMBOL) {
+                                name = ((const Symbol *)tree->symbol)->name;
                             } else {
                                 name = "<object literal>";
                             }
                         }
-                        ErrorFrom(blimp, tree.range,
+                        ErrorFrom(blimp, tree->range,
                             BLIMP_AMBIGUOUS_PARSE,
                             "ambiguous parse at input `%s' (%s conflict). "
                             "Perhaps you need to add parentheses?",
                             name, conflict
                         );
                     } else {
-                        ErrorFrom(blimp, tree.range,
+                        ErrorFrom(blimp, tree->range,
                             BLIMP_AMBIGUOUS_PARSE,
                             "ambiguous parse at expression with precedence %zu "
                             "(%s conflict). Perhaps you need to add "
                             "parentheses?",
-                            tree.grammar_symbol.non_terminal, conflict);
+                            tree->grammar_symbol.non_terminal, conflict);
                     }
-                } else if (tree.grammar_symbol.is_terminal &&
-                           tree.grammar_symbol.terminal == grammar->eof_terminal)
+                } else if (tree->grammar_symbol.is_terminal &&
+                           tree->grammar_symbol.terminal == grammar->eof_terminal)
                 {
                     // If this is not a grammar conflict (it's just an
                     // unexpected input) and the unexpected symbol was EOF, we
                     // have a special error message. The automatic line
                     // continuation feature of the REPL relies on a unique error
                     // code being returned when the unexpected input was EOF.
-                    ErrorFrom(blimp, tree.range,
+                    ErrorFrom(blimp, tree->range,
                         BLIMP_UNEXPECTED_EOF,
                         "unexpected end of input");
-                } else if (tree.grammar_symbol.is_terminal) {
+                } else if (tree->grammar_symbol.is_terminal) {
                     // If the unexpected input was a terminal, include it in the
                     // output.
                     const char *name =
-                        Object_Type(tree.symbol) == OBJ_SYMBOL
-                            ? ((const Symbol *)tree.symbol)->name
+                        Object_Type(tree->symbol) == OBJ_SYMBOL
+                            ? ((const Symbol *)tree->symbol)->name
                             : "<object literal>";
-                    ErrorFrom(blimp, tree.range,
+                    ErrorFrom(blimp, tree->range,
                         BLIMP_UNEXPECTED_TOKEN,
                         "unexpected token `%s'", name);
                 } else {
@@ -4077,8 +4086,8 @@ static Status ParseStream(
                     // non-terminal.
                     const char *name = *(const char **)Vector_Index(
                         &grammar->non_terminal_strings,
-                        tree.grammar_symbol.non_terminal);
-                    ErrorFrom(blimp, tree.range,
+                        tree->grammar_symbol.non_terminal);
+                    ErrorFrom(blimp, tree->range,
                         BLIMP_UNEXPECTED_TOKEN,
                         "unexpected expression with non-terminal %s", name);
                 }
@@ -4101,7 +4110,7 @@ Status Parse(
     Grammar *grammar,
     NonTerminal target,
     void *parser_state,
-    ParseTree *parsed)
+    ParseTree **parsed)
 {
     ParseTreeStream stream;
     ParseTreeStream_InitLexer(&stream, lex);
@@ -4109,11 +4118,11 @@ Status Parse(
 }
 
 Status Reparse(
-    const Vector/*<ParseTree>*/ *input,
+    const Vector/*<ParseTree *>*/ *input,
     Grammar *grammar,
     NonTerminal target,
     void *parser_state,
-    ParseTree *parsed)
+    ParseTree **parsed)
 {
     ParseTreeStream stream;
     ParseTreeStream_InitVector(&stream, input);

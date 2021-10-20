@@ -952,21 +952,9 @@ typedef struct {
  * structured form which corresponds to the hierarchy of grammar productions
  * used to parse the input.
  */
-typedef struct BlimpParseTree {
-    BlimpGrammarSymbol grammar_symbol;
-        ///< The symbol the parser used to match the input.
-    struct BlimpObject *symbol;
-        ///< `bl:mp`-facing, BlimpSymbol representation of `grammar_symbol`.
-    struct BlimpParseTree *sub_trees;
-        ///< malloc()-allocated array of sub-trees.
-    size_t num_sub_trees;
-        ///< \brief Length of `sub_trees`.
-        ///
-        /// For terminals, `num_sub_trees` is 0. For non-terminals, it is
-        /// non-zero.
-    BlimpSourceRange range;
-        ///< Range in a source file corresponding to the parsed input.
-} BlimpParseTree;
+typedef struct BlimpParseTree BlimpParseTree;
+
+struct BlimpObject;
 
 /**
  * Construct a new parse tree from a symbol and a list of sub-trees.
@@ -980,21 +968,40 @@ typedef struct BlimpParseTree {
  * \param children
  *      The sub-trees of the new parse tree. `children` must be an array of size
  *      `num_children`, and it must be allocated on the heap using malloc().
- *      After BlimpParseTree_Init() returns succesfully, the new parse tree
- *      takes ownership of `children`, and `children` should no longer be used
- *      outside the context of that parse tree.
+ *      After BlimpParseTree_New() returns succesfully, the new parse tree takes
+ *      ownership of `children`, and `children` should no longer be used outside
+ *      the context of that parse tree.
  * \param range
  *      Optional source range for the new tree.
  * \param[out] tree
  *      The new parse tree.
  */
-BlimpStatus BlimpParseTree_Init(
+BlimpStatus BlimpParseTree_New(
     Blimp *blimp,
     struct BlimpObject *symbol,
-    BlimpParseTree *children,
+    BlimpParseTree **children,
     size_t num_children,
     const BlimpSourceRange *range,
-    BlimpParseTree *tree);
+    BlimpParseTree **tree);
+
+/**
+ * \brief Get the grammar symbol of a parse tree.
+ */
+struct BlimpObject *BlimpParseTree_Symbol(const BlimpParseTree *tree);
+
+/**
+ * \brief Get the number of sub-trees of a parse tree.
+ *
+ * 0 indicates that the tree is a terminal. Otherwise it is a non-terminal.
+ */
+size_t BlimpParseTree_NumSubTrees(const BlimpParseTree *tree);
+
+/**
+ * \brief Get a sub-tree of a parse tree.
+ *
+ * \pre `0 <= i < BlimpParseTree_NumSubTrees(tree)`
+ */
+BlimpParseTree *BlimpParseTree_SubTree(const BlimpParseTree *tree, size_t i);
 
 /**
  * \brief Convert a BlimpParseTree to a BlimpExpr.
@@ -1015,7 +1022,7 @@ void BlimpParseTree_Print(FILE *f, const BlimpParseTree *tree);
  * nothing, since terminal parse trees do not own any dynamically allocated
  * resources.
  */
-void BlimpParseTree_Destroy(BlimpParseTree *tree);
+void BlimpParseTree_Release(BlimpParseTree *tree);
 
 /**
  * Information about an in-progress parsing pass which macro handlers can
@@ -1044,7 +1051,7 @@ typedef struct {
  * macro, and it may modify that parse tree as it sees fit.
  */
 typedef BlimpStatus(*BlimpMacroHandler)(
-    BlimpParserContext *ctx, BlimpParseTree *tree);
+    BlimpParserContext *ctx, BlimpParseTree **tree);
 
 /**
  * \brief
@@ -1082,20 +1089,20 @@ BlimpStatus Blimp_DefineMacro(
  *      parsing is done.
  */
 BlimpStatus Blimp_Parse(
-    Blimp *blimp, BlimpStream *input, BlimpParseTree *output);
+    Blimp *blimp, BlimpStream *input, BlimpParseTree **output);
 
 /**
  * \brief
  *      Parse the contents of the file `path` and construct a `BlimpParseTree`.
  */
 BlimpStatus Blimp_ParseFile(
-    Blimp *blimp, const char *path, BlimpParseTree *output);
+    Blimp *blimp, const char *path, BlimpParseTree **output);
 
 /**
  * \brief Parse the contents of `str` and construct a `BlimpParseTree`.
  */
 BlimpStatus Blimp_ParseString(
-    Blimp *blimp, const char *str, BlimpParseTree *output);
+    Blimp *blimp, const char *str, BlimpParseTree **output);
 
 /**
  * @}
@@ -1485,7 +1492,7 @@ BlimpStatus BlimpObject_ParseSymbol(
  * the object implements the parse tree protocol. Parse tree visitors always
  * return themselves, so that messages to them can be chained.
  */
-BlimpStatus BlimpObject_ToParseTree(BlimpObject *obj, BlimpParseTree *tree);
+BlimpStatus BlimpObject_ToParseTree(BlimpObject *obj, BlimpParseTree **tree);
 
 typedef struct {
     size_t refcount;

@@ -165,7 +165,7 @@ Status Blimp_DefineMacro(
         handler_arg);
 }
 
-Status Blimp_Parse(Blimp *blimp, Stream *input, ParseTree *output)
+Status Blimp_Parse(Blimp *blimp, Stream *input, ParseTree **output)
 {
     Lexer lex;
     Lexer_Init(&lex, blimp, input);
@@ -188,14 +188,14 @@ Status Blimp_Parse(Blimp *blimp, Stream *input, ParseTree *output)
     return ret;
 }
 
-Status Blimp_ParseFile(Blimp *blimp, const char *path, ParseTree *output)
+Status Blimp_ParseFile(Blimp *blimp, const char *path, ParseTree **output)
 {
     Stream *stream;
     TRY(Blimp_FileStream(blimp, path, &stream));
     return Blimp_Parse(blimp, stream, output);
 }
 
-Status Blimp_ParseString(Blimp *blimp, const char *str, ParseTree *output)
+Status Blimp_ParseString(Blimp *blimp, const char *str, ParseTree **output)
 {
     Stream *stream;
     TRY(Blimp_StringStream(blimp, str, &stream));
@@ -217,9 +217,9 @@ Status BlimpParseTree_Eval(Blimp *blimp, ParseTree *tree, Expr **expr)
     return BLIMP_OK;
 }
 
-void BlimpParseTree_Destroy(ParseTree *tree)
+void BlimpParseTree_Release(ParseTree *tree)
 {
-    ParseTree_Destroy(tree);
+    ParseTree_Release(tree);
 }
 
 ////////////////////////////////////////////////////////////////////////////////

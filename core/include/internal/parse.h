@@ -158,11 +158,26 @@ typedef struct {
         // Cached, up-to-date parse table.
 } Grammar;
 
-#define ParseTree_Init BlimpParseTree_Init
-PRIVATE void ParseTree_Destroy(ParseTree *tree);
-PRIVATE Status ParseTree_Copy(
-    Blimp *blimp, const ParseTree *from, ParseTree *to);
-PRIVATE ParseTree *SubTree(const ParseTree *tree, size_t index);
+struct BlimpParseTree {
+    GrammarSymbol grammar_symbol;
+        ///< The symbol the parser used to match the input.
+    Object *symbol;
+        ///< `bl:mp`-facing, BlimpSymbol representation of `grammar_symbol`.
+    ParseTree **sub_trees;
+        ///< malloc()-allocated array of sub-trees.
+    size_t num_sub_trees;
+        ///< \brief Length of `sub_trees`.
+        ///
+        /// For terminals, `num_sub_trees` is 0. For non-terminals, it is
+        /// non-zero.
+    SourceRange range;
+        ///< Range in a source file corresponding to the parsed input.
+    size_t refcount;
+};
+
+#define ParseTree_New BlimpParseTree_New
+PRIVATE void ParseTree_Release(ParseTree *tree);
+PRIVATE ParseTree *ParseTree_Borrow(ParseTree *tree);
 
 typedef BlimpMacroHandler ProductionHandler;
 
@@ -194,12 +209,12 @@ PRIVATE Status Parse(
     Grammar *grammar,
     NonTerminal target,
     void *parser_state,
-    ParseTree *parsed);
+    ParseTree **parsed);
 PRIVATE Status Reparse(
-    const Vector/*<ParseTree>*/ *input,
+    const Vector/*<ParseTree *>*/ *input,
     Grammar *grammar,
     NonTerminal target,
     void *parser_state,
-    ParseTree *parsed);
+    ParseTree **parsed);
 
 #endif

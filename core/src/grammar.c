@@ -41,8 +41,7 @@ static Status GetNonTerminal(
 static void ParseTreeFinalizer(void *arg)
 {
     ParseTree *tree = (ParseTree *)arg;
-    ParseTree_Destroy(tree);
-    free(tree);
+    ParseTree_Release(tree);
 }
 
 // Method for a parse tree extension object. This object represents a parse tree
@@ -63,39 +62,26 @@ static Status ParseTreeMethod(
     CHECK(BlimpObject_ParseExtension(receiver, NULL, (void **)&tree));
 
     size_t num_trees = tree->num_sub_trees;
-    ParseTree *sub_trees = tree->sub_trees;
+    ParseTree **sub_trees = tree->sub_trees;
 
     // Send each sub-tree to the `message`.
-    for (ParseTree *sub_tree = sub_trees;
+    for (ParseTree **sub_tree = sub_trees;
          sub_tree < sub_trees + num_trees;
          ++sub_tree)
     {
-        // Get an object representing the sub-tree `sub_tree`. We give the
-        // sub-tree object a copy of the `sub_tree` since, while unlikely, the
-        // visitor to which we are going to send the sub-tree may save a
-        // reference to it which lives longer than the ParseTree `tree`.
-        ParseTree *sub_arg;
-        TRY(Malloc(blimp, sizeof(ParseTree), &sub_arg));
-        if (ParseTree_Copy(blimp, sub_tree, sub_arg) != BLIMP_OK) {
-            free(sub_arg);
-            return Reraise(blimp);
-        }
-
-        // Create a parse tree extension object representing the sub-tree.
+        // Get an object representing the sub-tree `sub_tree`. The sub-tree must
+        // own a reference to `sub_tree` since, while unlikely, the visitor to
+        // which we are going to send the sub-tree may save a reference to it
+        // which lives longer than the ParseTree `tree`.
         Object *sub_tree_obj;
-        if (BlimpObject_NewExtension(
-                blimp,
-                (Object *)blimp->global,
-                sub_arg,
-                ParseTreeMethod,
-                ParseTreeFinalizer,
-                &sub_tree_obj
-            ) != BLIMP_OK)
-        {
-            ParseTree_Destroy(sub_arg);
-            free(sub_arg);
-            return Reraise(blimp);
-        }
+        TRY(BlimpObject_NewExtension(
+            blimp,
+            (Object *)blimp->global,
+            ParseTree_Borrow(*sub_tree),
+            ParseTreeMethod,
+            ParseTreeFinalizer,
+            &sub_tree_obj
+        ));
 
         // Send the sub-tree to the `message`.
         if (Blimp_Send(
@@ -113,7 +99,7 @@ static Status ParseTreeMethod(
 }
 
 typedef struct {
-    Vector/*<ParseTree>*/ trees;
+    Vector/*<ParseTree *>*/ trees;
 } ParseTreeVisitorArg;
 
 // Method for a parse tree visitor extension object, which can be used to
@@ -162,7 +148,7 @@ static Status ParseTreeVisitor(
     // caller will nullify `arg` once the interpreter moves on from the context
     // in which the effects of this method have meaning.
     if (arg != NULL) {
-        ParseTree tree = {0};
+        ParseTree *tree;
         TRY(BlimpObject_ToParseTree(message, &tree));
             // Recursively visit the sub-trees of the parse tree object we are
             // visiting and convert those sub-trees into a single ParseTree.
@@ -178,7 +164,7 @@ static Status ParseTreeVisitor(
 }
 
 // Extract a ParseTree from an Object which conforms to the parse tree protocol.
-Status BlimpObject_ToParseTree(Object *obj, ParseTree *tree)
+Status BlimpObject_ToParseTree(Object *obj, ParseTree **tree)
 {
     Blimp *blimp = Object_Blimp(obj);
 
@@ -200,9 +186,7 @@ Status BlimpObject_ToParseTree(Object *obj, ParseTree *tree)
         //  2. Parse tree extensions conform to the parse tree protocol in the
         //     expected way, so that visiting them and rebuilding the parse tree
         //     should always yield the original parse tree.
-        if (ParseTree_Copy(blimp, tree_arg, tree) != BLIMP_OK) {
-            goto error;
-        }
+        *tree = ParseTree_Borrow(tree_arg);
         return BLIMP_OK;
     }
 
@@ -211,7 +195,7 @@ Status BlimpObject_ToParseTree(Object *obj, ParseTree *tree)
     // parse trees into one larger tree.
     ParseTreeVisitorArg arg;
     Vector_Init(
-        blimp, &arg.trees, sizeof(ParseTree), (Destructor)ParseTree_Destroy);
+        blimp, &arg.trees, sizeof(ParseTree *), ParseTreeDestructor);
     Object *visitor;
     if (BlimpObject_NewExtension(
             blimp,
@@ -245,17 +229,17 @@ Status BlimpObject_ToParseTree(Object *obj, ParseTree *tree)
     }
 
     // Collect the parsed sub-trees into a new parse tree.
-    ParseTree *sub_trees;
+    ParseTree **sub_trees;
     size_t num_sub_trees;
     Vector_MoveOut(&arg.trees, &num_sub_trees, (void **)&sub_trees);
     Vector_Destroy(&arg.trees);
-    return ParseTree_Init(
+    return ParseTree_New(
         blimp, symbol, sub_trees, num_sub_trees, NULL, tree);
 
 error:
     // Make sure `tree` is a valid parse tree even if we failed.
     TRY(Blimp_GetSymbol(blimp, "", (const Symbol **)&symbol));
-    TRY(ParseTree_Init(blimp, symbol, NULL, 0, NULL, tree));
+    TRY(ParseTree_New(blimp, symbol, NULL, 0, NULL, tree));
     return Reraise(blimp);
 }
 
@@ -266,38 +250,25 @@ typedef struct {
 } MacroArg;
 
 // Handler called when a macro is reduced.
-static Status MacroHandler(ParserContext *ctx, ParseTree *tree)
+static Status MacroHandler(ParserContext *ctx, ParseTree **tree)
 {
     MacroArg *arg = (MacroArg *)ctx->arg;
     Object *handler = arg->handler;
 
     // Create the argument for a parse tree extension object which we will use
-    // to convey the input sub-trees to the handler object. We give the parse
-    // tree object a copy of the input trees, since, while unlikely, the macro
-    // handler may save a reference to the parse tree which lives longer than
-    // the input sub-trees.
-    ParseTree *input_arg;
-    TRY(Malloc(ctx->blimp, sizeof(ParseTree), &input_arg));
-    if (ParseTree_Copy(ctx->blimp, tree, input_arg) != BLIMP_OK) {
-        free(input_arg);
-        return Reraise(ctx->blimp);
-    }
-
-    // Create the parse tree extension object representing the input trees.
+    // to convey the input sub-trees to the handler object. The parse tree
+    // object must own a reference to the input tree, since, while unlikely, the
+    // macro handler may save a reference to the parse tree which lives longer
+    // than the input sub-trees.
     Object *input_tree;
-    if (BlimpObject_NewExtension(
+    TRY(BlimpObject_NewExtension(
             ctx->blimp,
             (Object *)ctx->blimp->global,
-            input_arg,
+            ParseTree_Borrow(*tree),
             ParseTreeMethod,
             ParseTreeFinalizer,
             &input_tree
-        ) != BLIMP_OK)
-    {
-        ParseTree_Destroy(input_arg);
-        free(input_arg);
-        return Reraise(ctx->blimp);
-    }
+    ));
 
     // Send the input tree to the macro handler, resulting in an Object
     // representing the output parse tree. This result object (`output_tree`)
@@ -318,9 +289,9 @@ static Status MacroHandler(ParserContext *ctx, ParseTree *tree)
     BlimpObject_Release(input_tree);
 
     // Interpret the output Object.
-    ParseTree output;
+    ParseTree *output;
     TRY_FROM(ctx->range, BlimpObject_ToParseTree(output_tree, &output));
-    ParseTree_Destroy(tree);
+    ParseTree_Release(*tree);
     *tree = output;
 
     // Restore the source range to the location where the macro was invoked.
@@ -330,7 +301,7 @@ static Status MacroHandler(ParserContext *ctx, ParseTree *tree)
     // macro backtrace, but parse trees do not yet support multiple source
     // ranges.
     if (ctx->range != NULL) {
-        tree->range = *ctx->range;
+        (*tree)->range = *ctx->range;
     }
 
     return BLIMP_OK;
@@ -345,9 +316,9 @@ Status DefineMacro(
 {
     // Convert the production into a ParseTree in order to extract a
     // non-terminal symbol and a list of grammar symbols for the new production.
-    ParseTree tree;
+    ParseTree *tree;
     TRY(BlimpObject_ToParseTree(production, &tree));
-    if (tree.grammar_symbol.is_terminal) {
+    if (tree->grammar_symbol.is_terminal) {
         // The production of a macro definition must be a non-terminal parse
         // tree, because we cannot define new rules for how terminals are
         // parsed.
@@ -359,20 +330,22 @@ Status DefineMacro(
         // handling object literals in macro definition productions, since
         // object literals are terminals generated by a non-trivial parse trees
         // of the form (! <expr>).
+        ParseTree_Release(tree);
         return ErrorFromOpt(blimp, range, BLIMP_INVALID_PARSE_TREE,
             "the production of a macro definition must be a non-temrinal");
     }
-    assert(Object_Type(tree.symbol) == OBJ_SYMBOL);
-    *nt_sym = (const Symbol *)tree.symbol;
+    assert(Object_Type(tree->symbol) == OBJ_SYMBOL);
+    *nt_sym = (const Symbol *)tree->symbol;
 
     // Extract the list of grammar symbols for the new production.
     Vector symbols;
     Vector_Init(blimp, &symbols, sizeof(GrammarSymbol), NULL);
-    for (size_t i = 0; i < tree.num_sub_trees; ++i) {
-        ParseTree *sub_tree = &tree.sub_trees[i];
+    for (size_t i = 0; i < tree->num_sub_trees; ++i) {
+        ParseTree *sub_tree = tree->sub_trees[i];
         GrammarSymbol *symbol;
         if (Vector_EmplaceBack(&symbols, (void **)&symbol) != BLIMP_OK) {
             Vector_Destroy(&symbols);
+            ParseTree_Release(tree);
             return Reraise(blimp);
         }
         *symbol = sub_tree->grammar_symbol;
@@ -387,6 +360,7 @@ Status DefineMacro(
                     != BLIMP_OK)
             {
                 Vector_Destroy(&symbols);
+                ParseTree_Release(tree);
                 return Reraise(blimp);
             }
 
@@ -396,10 +370,12 @@ Status DefineMacro(
                     != BLIMP_OK)
             {
                 Vector_Destroy(&symbols);
+                ParseTree_Release(tree);
                 return Reraise(blimp);
             }
         }
     }
+    ParseTree_Release(tree);
 
     // Collect information needed by MacroHandler().
     MacroArg *handler_arg;
@@ -593,14 +569,13 @@ Status DefaultGrammar(Blimp *blimp, Grammar *grammar)
 // Extract a ParseTree from an Object which conforms to the parse tree protocol.
 // This function modifies the parse tree represented by `obj` by running its
 // sequence of sub-trees through the parser, with its grammar symbol as a goal.
-static Status ParseObject(Blimp *blimp, Object *obj, ParseTree *tree)
+static Status ParseObject(Blimp *blimp, Object *obj, ParseTree **tree)
 {
     // Use a ParseTreeVisitor to collect ParseTrees for each of the sub-trees
     // into the vector `arg.trees`. We will then parse that sequence of parse
     // trees into one larger tree.
     ParseTreeVisitorArg arg;
-    Vector_Init(
-        blimp, &arg.trees, sizeof(ParseTree), (Destructor)ParseTree_Destroy);
+    Vector_Init(blimp, &arg.trees, sizeof(ParseTree *), ParseTreeDestructor);
     Object *visitor;
     if (BlimpObject_NewExtension(
             blimp,
@@ -635,7 +610,7 @@ static Status ParseObject(Blimp *blimp, Object *obj, ParseTree *tree)
         Vector_Destroy(&arg.trees);
         // No sub-trees, this object represents a terminal. We do not need to
         // reparse terminals, we can just construct them directly.
-        return ParseTree_Init(blimp, symbol, NULL, 0, NULL, tree);
+        return ParseTree_New(blimp, symbol, NULL, 0, NULL, tree);
     } else {
         // This object represents a non-terminal via a sequence of sub-trees
         // which must be reparsed to create a single tree. Non-terminals are
@@ -661,7 +636,7 @@ error:
 
     // Make sure `tree` is a valid parse tree even if we failed.
     TRY(Blimp_GetSymbol(blimp, "", (const Symbol **)&symbol));
-    TRY(ParseTree_Init(blimp, symbol, NULL, 0, NULL, tree));
+    TRY(ParseTree_New(blimp, symbol, NULL, 0, NULL, tree));
     return Reraise(blimp);
 }
 
@@ -678,11 +653,7 @@ static Status ParseMethod(
 
     // Convert the object to a parse tree and reparse it.
     ParseTree *tree;
-    TRY(Malloc(blimp, sizeof(ParseTree), &tree));
-    if (ParseObject(blimp, message, tree) != BLIMP_OK) {
-        Free(blimp, &tree);
-        return Reraise(blimp);
-    }
+    TRY(ParseObject(blimp, message, &tree));
 
     // Create an extension object to represent the resulting tree via the parse
     // tree protocol.
@@ -695,8 +666,7 @@ static Status ParseMethod(
             result
     ) != BLIMP_OK)
     {
-        ParseTree_Destroy(tree);
-        free(tree);
+        ParseTree_Release(tree);
         return Reraise(blimp);
     }
 

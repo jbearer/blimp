@@ -178,7 +178,7 @@ static void RunTest(Test *test)
     struct timespec start, end;
     clock_gettime(CLOCK_MONOTONIC, &start);
 
-    BlimpParseTree tree;
+    BlimpParseTree *tree;
     if (Blimp_Parse(test->blimp, test->stream, &tree) != BLIMP_OK) {
         FailTest(test, "bl:mp error");
         if (test->options.verbosity >= VERB_FAILURES) {
@@ -187,15 +187,15 @@ static void RunTest(Test *test)
         return;
     }
     BlimpExpr *expr;
-    if (BlimpParseTree_Eval(test->blimp, &tree, &expr) != BLIMP_OK) {
-        BlimpParseTree_Destroy(&tree);
+    if (BlimpParseTree_Eval(test->blimp, tree, &expr) != BLIMP_OK) {
+        BlimpParseTree_Release(tree);
         FailTest(test, "bl:mp error");
         if (test->options.verbosity >= VERB_FAILURES) {
             Blimp_DumpLastError(test->blimp, stdout);
         }
         return;
     }
-    BlimpParseTree_Destroy(&tree);
+    BlimpParseTree_Release(tree);
 
     clock_gettime(CLOCK_MONOTONIC, &end);
     size_t blimp_ns = (end  .tv_sec*1000000000 + end  .tv_nsec) -

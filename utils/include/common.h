@@ -24,6 +24,8 @@ typedef BlimpGrammarSymbol GrammarSymbol;
 typedef BlimpParseTree ParseTree;
 typedef BlimpParserContext ParserContext;
 
+#define SubTree BlimpParseTree_SubTree
+
 #ifdef NDEBUG
 # ifdef assert
 #  undef assert

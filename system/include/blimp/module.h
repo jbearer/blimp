@@ -107,7 +107,10 @@ BlimpStatus BlimpModule_Import(
  * resulting parse tree.
  */
 BlimpStatus BlimpModule_StaticImport(
-    Blimp *blimp, const char *module, const char **path, BlimpParseTree *result);
+    Blimp *blimp,
+    const char *module,
+    const char **path,
+    BlimpParseTree **result);
 
 /**
  * \brief Import the source module located at `path`.
