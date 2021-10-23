@@ -1,4 +1,4 @@
-import std;
+import `std.lib`;
 
 # Assign to a mutable global variable.
 global := bar;

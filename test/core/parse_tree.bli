@@ -7,6 +7,54 @@
 # readable than code which does not and agnostic to the details of the protocol.
 # This is useful for tests of the protcol while the protocol is in development
 # and subject to frequent changes.
+#
+
+!(
+    # A macro argument which may be the result of expanding another macro, and
+    # therefore has unknown non-terminal, can be wrapped in a parse tree with
+    # the non-terminal __macro_arg to be used where a term is expected in a
+    # reparsed parse tree.
+    \> {^ {^{``}; __macro_arg}; 7} {^toks
+        {
+            arg{^ ^};
+            ^toks {^arg
+                ^arg {^tree
+                    arg{(^tree)}
+                }
+            };
+            arg[]
+        }[]
+    };
+
+    # [tree] is the parse tree, `tree`, wrapped in a __macro_arg non-terminal.
+    \> {^{`[`} {^{``}; 1} {`]`}; 7} {^toks
+        {
+            n_ref{^ ^};
+            n n_ref;
+            n_ref 0;
+
+            arg{^ ^};
+            ^toks {^tok
+                {
+                    0{^{{
+                        n_ref 1
+                    }}};
+                    1{^{{
+                        arg{(^tok)};
+                        n_ref 2
+                    }}};
+                    2{^{{
+                        n_ref 3
+                    }}};
+
+                    n[] []
+                }[]
+            };
+
+            parse {^ {`{`} {`^`} {^ (arg[]); __macro_arg}  {`;`} {`__macro_arg`} {`}`}; 7}
+        }[]
+    }
+);
 
 !(
     ############################################################################
@@ -24,7 +72,7 @@
             ^toks {^tok
                 {
                     0{^{{
-                        t {(^tok [])};
+                        t {(^tok)};
                         n_ref 1
                     }}};
 
@@ -32,7 +80,7 @@
                 }[]
             };
 
-            {^ {`{`}{t[]}{`}`}; 7 }
+            parse {^ {`{`} [t[] ] {`}`}; 7 }
         }[]
     };
 
@@ -62,7 +110,7 @@
                 }[]
             };
 
-            parse {^ {`{`} {`^`} {`{`} {`dummy`} {`}`} {`;`} {`(`} (nt[]) {`)`} {`}`}; 7 }
+            parse {^ {`{`} {`^`} {`{`} {`dummy`} {`}`} {`;`} {`(`} [nt[] ] {`)`} {`}`}; 7 }
         }[]
     };
 
@@ -91,7 +139,43 @@
                 }[]
             };
 
-            {^{`(`}(sub_tree[]){`)`}; 7 }
+            parse {^{`[`} [sub_tree[] ] {`]`}; 7 }
+        }[]
+    };
+
+    # A nested parse tree used with the non-terminal that it actually has,
+    # rather than wrapping it in the __macro_arg non-terminal.
+    \> {^ {`{`} {`raw`} {`:`} {^{``};1} {`}`}; grammar_symbol} {^toks
+        {
+            n_ref{^ ^};
+            n n_ref;
+            n_ref 0;
+
+            sub_tree{^ ^};
+            ^toks {^tok
+                {
+                    0{^{{
+                        n_ref 1
+                    }}};
+                    1{^{{
+                        n_ref 2
+                    }}};
+                    2{^{{
+                        n_ref 3
+                    }}};
+                    3{^{{
+                        sub_tree {(^tok)};
+                        n_ref 4
+                    }}};
+                    4{^{{
+                        n_ref 5
+                    }}};
+
+                    n[] []
+                }[]
+            };
+
+            sub_tree[]
         }[]
     };
 
@@ -158,7 +242,7 @@
                 }[]
             };
 
-            {^ {`^`} (head[]); grammar_symbols }
+            {^ {`^`} [head[] ]; grammar_symbols }
         }[]
     };
 
@@ -187,7 +271,7 @@
 
             {
                 (init[]) ^;
-                ^ (last[]);
+                ^ [last[] ];
                 grammar_symbols
             }
         }[]
@@ -232,7 +316,7 @@
             parse {
                 ^{`{`};
                 (syms[]) ^;
-                ^ {`;`} (nt[]) {`}`};
+                ^ {`;`} [nt[] ] {`}`};
                 7
             }
         }[]
@@ -266,9 +350,27 @@
                 }[]
             };
 
-            parse {^ {`{`} {`(`}(tree[]){`)`} {`^`} {`;`} (nt[]) {`}`}; 7 }
+            parse {^ {`{`} {`(`}[tree[] ]{`)`} {`^`} {`;`} [nt[] ] {`}`}; 7 }
         }[]
     };
+
+    __visit_parse_tree{^} {^tree{^visitor
+        ^tree {^child
+            {
+                if_terminal_ref{^ ^};
+                if_terminal if_terminal_ref;
+                if_terminal_ref {^t{^f ^t[]}};
+                __sym{^} (^child {
+                    if_terminal_ref {^t{^f ^f[]}}
+                });
+                if_terminal {
+                    (^visitor) (__sym[])
+                } {
+                    (^visitor) ^child
+                }
+            }[]
+        }
+    }};
 
     # Iterate over a parse tree.
     \> {^{`for`} {`^tok`} {`in`} {^{``}; 6} {`{`}{^{``}; 1}{`}`}; 3} {^toks
@@ -313,8 +415,7 @@
 
             parse {
                 ^ {`{`}
-                    {`(`}{`import`} {`parse_tree_visitor`}{`)`}{`;`}
-                    {`__visit_parse_tree`} (tree[]) {`{`} {msg_name[]} (body[]) {`}`}
+                    {`__visit_parse_tree`} [tree[] ] {`{`} {msg_name[]} [body[] ] {`}`}
                 {`}`} {`[]`};
                 1
             }

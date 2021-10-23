@@ -1,4 +1,4 @@
-import std;
+import `std.lib`;
 
 # Can we handle a block which isn't actually a scope; that is, we are in a block
 # but still running in the same stack frame as the outer block.

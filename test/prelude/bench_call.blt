@@ -1,4 +1,4 @@
-import std;
+import `std.lib`;
 
 :benchmark{n{^ 250000}; call} {
     __call{.}

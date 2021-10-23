@@ -1,0 +1,43 @@
+# Search for and import a source module.
+import 1 source_module;
+import 1 `test_module.source_module`;
+import_source 1 `test_module/source_module.bli`;
+
+# Search for and import a binary module.
+import 1 `test.binary_module`;
+import_extension (:extension_path `test/libbinary_module.so`);
+
+# If there is a source module and a binary module with the same name, the source
+# module is preferred.
+:expect_eq (import 1 ambiguous_module) source;
+
+# We can import the binary module explicitly.
+:expect_eq
+    (import_extension (:extension_path `test/libambiguous_module.so`)) binary;
+
+# Imported modules are evaluated in the scope of the import statement.
+{
+    module_symbol{^} {bar};
+    :expect_eq (import 1 scope_module) bar
+}[];
+:expect_eq (import 1 scope_module) module_symbol;
+{
+    binary_symbol{^} bar;
+    :expect_eq (import 1 `test.binary_module`) bar
+}[];
+:expect_eq (import 1 `test.binary_module`) foo;
+
+# Import a module with a custom non-terminal.
+\> {^{test_terminal}; test_nt} {{^{foo}; _7}};
+:expect_eq (import test_nt test_nt_module) foo;
+
+# Importing a module that doesn't exist.
+:expect_error {import 1 fake_module};
+:expect_error {import_source 1 fake_module};
+:expect_error {import_extension fake_module};
+
+# Importing an invalid module.
+:expect_error {import 1 invalid_source};
+:expect_error {import_extension `test.invalid_extension`};
+
+.

@@ -148,6 +148,16 @@ Status Blimp_GetNonTerminal(
     return Grammar_GetNonTerminal(&blimp->grammar, sym, non_terminal);
 }
 
+NonTerminal Blimp_DefaultNonTerminal(Blimp *blimp)
+{
+    // Get the top-level expression non-terminal;
+    const Symbol *nt_symbol;
+    CHECK(Blimp_GetSymbol(blimp, "_1", &nt_symbol));
+    NonTerminal nt;
+    CHECK(Grammar_GetNonTerminal(&blimp->grammar, nt_symbol, &nt));
+    return nt;
+}
+
 Status Blimp_DefineMacro(
     Blimp *blimp,
     NonTerminal nt,
@@ -165,22 +175,11 @@ Status Blimp_DefineMacro(
         handler_arg);
 }
 
-Status Blimp_Parse(Blimp *blimp, Stream *input, ParseTree **output)
+Status Blimp_Parse(
+    Blimp *blimp, Stream *input, NonTerminal nt, ParseTree **output)
 {
     Lexer lex;
     Lexer_Init(&lex, blimp, input);
-
-    // Get the expression non-terminal;
-    const Symbol *nt_symbol;
-    if (Blimp_GetSymbol(blimp, "1", &nt_symbol) != BLIMP_OK) {
-        Lexer_Destroy(&lex);
-        return Reraise(blimp);
-    }
-    NonTerminal nt;
-    if (Grammar_GetNonTerminal(&blimp->grammar, nt_symbol, &nt) != BLIMP_OK) {
-        Lexer_Destroy(&lex);
-        return Reraise(blimp);
-    }
 
     Status ret = Parse(&lex, &blimp->grammar, nt, NULL, output);
     Lexer_Destroy(&lex);
@@ -188,18 +187,20 @@ Status Blimp_Parse(Blimp *blimp, Stream *input, ParseTree **output)
     return ret;
 }
 
-Status Blimp_ParseFile(Blimp *blimp, const char *path, ParseTree **output)
+Status Blimp_ParseFile(
+    Blimp *blimp, const char *path, NonTerminal nt, ParseTree **output)
 {
     Stream *stream;
     TRY(Blimp_FileStream(blimp, path, &stream));
-    return Blimp_Parse(blimp, stream, output);
+    return Blimp_Parse(blimp, stream, nt, output);
 }
 
-Status Blimp_ParseString(Blimp *blimp, const char *str, ParseTree **output)
+Status Blimp_ParseString(
+    Blimp *blimp, const char *str, NonTerminal nt, ParseTree **output)
 {
     Stream *stream;
     TRY(Blimp_StringStream(blimp, str, &stream));
-    return Blimp_Parse(blimp, stream, output);
+    return Blimp_Parse(blimp, stream, nt, output);
 }
 
 void Blimp_DumpGrammarVitals(FILE *file, Blimp *blimp)

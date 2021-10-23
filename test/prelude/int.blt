@@ -1,4 +1,4 @@
-import std;
+import `std.lib`;
 
 # Test basic equality
 :expect_eq (%0% == %0%) true;

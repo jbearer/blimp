@@ -139,6 +139,10 @@ Status Bytecode_MoveToEnd(
     memcpy(dst, src, src->size);
     code->size += dst->size;
 
+    // Leave a pointer from the new instruction to the old instruction, in case
+    // we have to undo this relocation.
+    dst->relocated_from = offset;
+
     // Replace the old instruction with a NOP.
     src->type = INSTR_NOP;
     src->result_type = RESULT_IGNORE;
@@ -214,18 +218,27 @@ void Bytecode_RemoveNops(Bytecode *code)
         // Recompute size.
 }
 
-void Bytecode_Truncate(Bytecode *code, size_t offset)
+void Bytecode_Restore(Bytecode *code, size_t offset)
 {
+    assert(offset <= code->size);
+
     if (offset >= code->size) {
         return;
     }
 
     // Clean up references owned by instructions between the new end of the
-    // procedure and the current end.
+    // procedure and the current end. For any instructions in the rollback
+    // period which were relocated, relocate them back to their original
+    // locations.
     const Instruction *ip = Bytecode_Get(code, offset);
     while (ip < Bytecode_End(code)) {
         const Instruction *next = Instruction_Next(ip);
-        Instruction_Destroy(ip);
+        if (ip->relocated_from == NOT_RELOCATED) {
+            Instruction_Destroy(ip);
+        } else {
+            Instruction *from = Bytecode_Get(code, ip->relocated_from);
+            memcpy(from, ip, ip->size);
+        }
         ip = next;
     }
 

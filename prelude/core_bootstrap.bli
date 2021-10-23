@@ -1,0 +1,187 @@
+!(
+    \> {^{`__decl_nts0`}; __decl_nts} {^};
+    \> {^{`__decl_nts`}
+         {^{``}; 1} {`__decl_nts`}
+         {^{``}; 2} {`__decl_nts`}
+         {^{``}; 3} {`__decl_nts`}
+         {^{``}; 4} {`__decl_nts`}
+         {^{``}; 5} {`__decl_nts`}
+         {^{``}; __run} {`__decl_nts`}
+         {^{``}; custom1} {`__decl_nts`}
+         {^{``}; custom2} {`__decl_nts`}
+         {^{``}; 6} {`__decl_nts`}
+         {^{``}; 7} {`__decl_nts`}
+    ; __decl_nts} {^};
+
+    # Expr[NoMsg] = Stmt[NoMsg] Semi Expr
+    \> {^{^{``}; 3} {^{``}; 5} {^{``}; 1}; 1} {^toks
+        {(^toks) ^; _1}
+    };
+    \> {^{^{``}; 4} {^{``}; 5} {^{``}; 1}; 2} {^toks
+        {(^toks) ^; _2}
+    };
+    #   \ Stmt[NoMsg]
+    \> {^{^{``}; 3}; 1} {^toks
+        {(^toks) ^; _1}
+    };
+    \> {^{^{``}; 4}; 2} {^toks
+        {(^toks) ^; _2}
+    };
+
+    # Stmt[NoMsg] = Stmt[NoMsg] Custom
+    \> {^{^{``}; 3} {^{``}; custom1}; 3} {^toks
+        {(^toks) ^; _3}
+    };
+    \> {^{^{``}; 4} {^{``}; custom1}; 4} {^toks
+        {(^toks) ^; _4}
+    };
+    #   \ \> Stmt Custom
+    \> {^ {`\\>`} {^{``}; 3} {^{``}; custom1}; 3} {^toks
+        {(^toks) ^; _3}
+    };
+    \> {^ {`\\>`} {^{``}; 3} {^{``}; custom1}; 4} {^toks
+        {(^toks) ^; _4}
+    };
+    #   \ Custom[NoMsg]
+    \> {^ {^{``}; custom1}; 3} {^toks
+        {(^toks) ^; _3}
+    };
+    \> {^ {^{``}; custom2}; 4} {^toks
+        {(^toks) ^; _4}
+    };
+
+    # Semi = ";"
+    \> {^{`;`}; 5} {^};
+
+    # Custom[NoMsg] = Term[NoMsg]
+    \> {^ {^{``}; 6}; custom1} {^toks
+        {(^toks) ^; _custom1}
+    };
+    \> {^ {^{``}; 7}; custom2} {^toks
+        {(^toks) ^; _custom2}
+    };
+
+    # Term = TermNoMsg \ Msg
+    \> {^ {^{``}; 7}; 6} {^toks
+        {(^toks) ^; _6}
+    };
+    \> {^{`^msg`}; 6} {^toks
+        {(^toks) ^; _6}
+    };
+
+    # TermNoMsg = "(" Expr ")"
+    \> {^ {`(`} {^{``}; 1} {`)`}; 7} {^toks
+        {(^toks) ^; _7}
+    };
+    #   \ "{" [msg] Expr "}"
+    \> {^ {`{`} {^{``}; 2} {`}`}; 7} {^toks
+        {(^toks) ^; _7}
+    };
+    \> {^ {`{`} {`^msg`} {^{``}; 1} {`}`}; 7} {^toks
+        {(^toks) ^; _7}
+    };
+    #   \ "!" Term
+    \> {^ {`!`} {^{``}; 6}; 7} {^toks
+        {(^toks) ^; _7}
+    };
+    #   \ symbol
+    \> {^ {`\`sym\``}; 7} {^toks
+        {(^toks) ^; _7}
+    };
+    #   \ "^"
+    \> {^ {`^`}; 7} {^toks
+        {(^toks) ^; _7}
+    };
+
+    .
+);
+
+# Define __run -> __run. We will use the keyword __run below to execute the
+# contents of the file appended to this one. But we don't want the high-
+# precedence terminal __run on the parser stack the whole time the input file is
+# being parsed, because that makes it impossible for the input file to add and
+# use new grammar rules during parsing. So we make sure that the terminal __run
+# is always immediately reduced to the low-precedence non-terminal __run.
+!(\> {^{`__run`}; `__run`} {^toks
+    {^{.}; _7}
+});
+
+# Define __run <expr>, which is exactly like !<expr>, except it takes (and
+# returns) an expression with precedence 1 instead of 7. This is necessary
+# because we are going to end this file with __run so that it can be prepended
+# to another file, whose contents will in general be a 1-level expression. Since
+# we don't have the ability to append code _after_ the bootstrapped file, we
+# can't wrap it's contents in parentheses, so we have to work with the
+# precedence we get.
+!(\> {^{^{``}; `__run`} {^{``}; 1}; _1} {^toks
+    {
+        n_ref{^ ^};
+        n n_ref;
+        n_ref _0;
+
+        expr{^ ^};
+        ^toks {^tok
+            {
+                _0{^{{
+                    # __run
+                    n_ref _1
+                }}};
+                _1{^{{
+                    expr {(^tok)};
+                    n_ref _2
+                }}};
+
+                n[] []
+            }[]
+        };
+
+        {^ {`!`} (expr[]); _7 }
+    }[]
+});
+
+# Define __run as a no-op. This makes this file valid bl:mp on its own, even
+# with the trailing `__run` below, so that it can be imported as well as
+# prepended.
+!(\> {^{^{``}; `__run`}; _1} {^toks
+    {^ {.}; _7}
+});
+
+# Define __core { expr } as a way to temporarily move from raw bl:mp to core
+# bl:mp.
+!(\> {^{`__core`} {`{`} {^{``}; 1} {`}`}; _3} {^toks
+     {
+        n_ref{^ ^};
+        n n_ref;
+        n_ref _0;
+
+        expr{^ ^};
+        ^toks {^tok
+            {
+                _0{^{{
+                    # __core
+                    n_ref _1
+                }}};
+                _1{^{{
+                    # {
+                    n_ref _2
+                }}};
+                _2{^{{
+                    expr {(^tok)};
+                    n_ref _3
+                }}};
+                _3{^{{
+                    # }
+                    n_ref _4
+                }}};
+
+                n[] []
+            }[]
+        };
+
+        {^ {`!`} (expr[]); _7 }
+    }[]
+});
+
+# If this file is prepended to another, execute the code in that file.
+# Otherwise, this is a no-op.
+__run

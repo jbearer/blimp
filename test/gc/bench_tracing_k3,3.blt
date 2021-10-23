@@ -2,7 +2,7 @@
 
 # Tests garbage collection of complete bipartite graphs (K3,3).
 
-import std;
+import `std.lib`;
 
 node{^
     {

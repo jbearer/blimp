@@ -152,7 +152,59 @@ __bind parse_tree push {^self{^tree
 # (and potentially the symbol) have been modified by applying the parser with
 # this tree's symbol as a goal.
 __bind parse_tree reparsed {^self
-    __parse_tree_from_inner (parse (^self __inner))
+    __parse_tree_from_inner (parse {^out
+        ^self each {^child
+            ^out (^child _head{^} if_nil {
+                # If the child is a terminal, pass it through as-is.
+                (^child __inner)
+            } {
+                # If it is a non-terminal, it might want to be reparsed as a
+                # different non-terminal than it actually is, via `reparse_as`.
+                # If the child's `_reparse_symbol` is different from its actual
+                # symbol, we will wrap it in a singleton parse tree whose symbol
+                # is the reparse symbol. Otherwise we will pass it through
+                # as-is.
+                #
+                # Note that this is an imperfect implementation of reparsing,
+                # because the child will be wrapped in the resulting tree as
+                # well, instead of being treated as its reparse symbol during
+                # reparsing but then appearing as itself in the resulting parse
+                # tree. This is because reparsing is still implemented using the
+                # intrinsic parser, which does not natively understand "reparse
+                # as". When we replace this with a parser written in bl:mp, we
+                # should make the parser simply work with high-level parse trees
+                # and understand the "reparse as" mechanism. Then this wrapping
+                # workaround will be unnecessary.
+                (^child) symbol {^} (__cell[]);
+                # Set the value of `^child symbol` in this scope to a function
+                # which outputs the wrapped child. If
+                # `^child _reparse_symbol{^}` is the same symbol, we will later
+                # replace this with a function which outputs the child
+                # unmodified.
+                ^child symbol {
+                    {
+                        {^ (^child __inner); ^child _reparse_symbol{^}}
+                    }
+                };
+                ^child _reparse_symbol{^} {
+                    # If `^child _reparse_symbol{^}` is the same as
+                    # `^child symbol`, then this block is an argument to the
+                    # `__cell` created above. We will set the value of the cell
+                    # to a function which returns the unmodified child.
+                    #
+                    # Otherwise, this is an initializer for
+                    #  `^child _reparse_symbol{^}` in this scope. Since we do
+                    # not send to the argument, this is a no-op.
+                    {(^child __inner)}
+                };
+
+                # Get the function which was ultimately assigned to
+                # `^child symbol` and call it.
+                ^child symbol{^} []
+            })
+        };
+        ^self symbol
+    })
 };
 
 __bind parse_tree clone {^self
@@ -468,6 +520,32 @@ __bind parse_tree_builder build {^self
     }[]
 };
 
+!(
+    __quasiquote_parse_tree{^} {^mods{^nt{^terms
+        parse {^out
+            # Create a local closure which will take the builder (to be
+            # constructed syntactically later, as a message to the closure) and
+            # apply each modifier to it, in order.
+            ^{`{`} {`^t`};
+                ^mods {^mod
+                    ^out {^ ^mod; 7} {`^t`} {`;`}
+                };
+                # Return a parse tree built with the modified builder.
+                ^{`^t`} {`build`};
+            ^{`}`};
+            # Now construct the builder itself, as a message to the closure
+            # above.
+            ^{`(`} {`__new`} {`parse_tree_builder`} {`.`}
+                {`symbol`} {^ ^nt; 7};
+                ^terms {^term
+                    ^out {`push`} {(^term) ^; 7}
+                };
+            ^{`)`};
+            3
+        }
+    }}}
+);
+
 # The basic quasiquote syntax.
 \> {^
     {`[`}
@@ -517,27 +595,7 @@ __bind parse_tree_builder build {^self
             }[]
         };
 
-        parse {^out
-            # Create a local closure which will take the builder (to be
-            # constructed syntactically later, as a message to the closure) and
-            # apply each modifier to it, in order.
-            ^{`{`} {`^t`};
-                mods[] {^mod
-                    ^out ^mod {`^t`} {`;`}
-                };
-                # Return a parse tree built with the modified builder.
-                ^{`^t`} {`build`};
-            ^{`}`};
-            # Now construct the builder itself, as a message to the closure
-            # above.
-            ^{`(`} {`__new`} {`parse_tree_builder`} {`.`}
-                {`symbol`} (nt[]);
-                (terms[]) {^term
-                    ^out {`push`} {(^term) ^; 7}
-                };
-            ^{`)`};
-            3
-        }
+        __quasiquote_parse_tree (mods[]) (nt[]) (terms[])
     }[]
 };
 
@@ -577,8 +635,7 @@ __bind parse_tree_builder build {^self
             }[]
         };
 
-        # Delegate to the modifier form with an empty list of modifiers.
-        parse {^{`[`} {`:`} (nt[]) {`|`} (terms[]) {`|]`}; 7}
+        __quasiquote_parse_tree {quasiquote_modifiers} (nt[]) (terms[])
     }[]
 };
 
@@ -615,7 +672,7 @@ __bind parse_tree_builder build {^self
             }[]
         };
 
-        parse {^{`__new`} {`parse_tree`} (nt[]); 3}
+        __quasiquote_parse_tree {quasiquote_modifiers} (nt[]) {terms}
     }[]
 };
 
@@ -647,11 +704,7 @@ __bind parse_tree_builder build {^self
             }[]
         };
 
-        # Delegate to the explicit-symbol form with a non-terminal `1`.
-        parse {
-            ^{`[`} {`1`} {`|`} (terms[]) {`|]`};
-            7
-        }
+        __quasiquote_parse_tree {quasiquote_modifiers} {^{`1`}; _7} (terms[])
     }[]
 };
 
@@ -691,10 +744,7 @@ __bind parse_tree_builder build {^self
             }[]
         };
 
-        parse {
-            ^{`[`} (mods[]) {`1`} {`|`} (terms[]) {`|]`};
-            7
-        }
+        __quasiquote_parse_tree (mods[]) {^{`1`}; _7} (terms[])
     }[]
 };
 
@@ -971,7 +1021,7 @@ __pat_tail {^} {^iter {^visit
         parse {^out
             ^{`!`} {`(`} {`\\>`} {`{`};
                 visit_patterns (patterns[]) {^sym{^binder
-                    ^out {`^`} ^sym {`;`}
+                    ^out {`^`} {^ ^sym; 7} {`;`}
                 }};
                 ^(nt[]);
             ^{`}`};
@@ -980,7 +1030,7 @@ __pat_tail {^} {^iter {^visit
                 ^ {`{`};
                     ^ {`__call`} {`{`};
                         visit_patterns (patterns[]) {^sym{^binder
-                            ^out ^binder {`:=`}
+                            ^out {^ ^binder; 7} {`:=`}
                                 {`(`} {`__parse_tree_from_inner`}
                                     {`(`} (next_tok[]) {`)`}
                                     # The input tree might have come from a
@@ -1005,11 +1055,11 @@ __pat_tail {^} {^iter {^visit
                                     # will be treated as if it had that grammar
                                     # symbol.
                                     {`reparse_as`} {`(`}
-                                        ^sym {`{`} {`^`} {`}`}
+                                        {^ ^sym; 7} {`{`} {`^`} {`}`}
                                     {`)`}
                                 {`)`} {`;`}
                         }};
-                        ^{`(`}(handler[]){`)`} {`__inner`};
+                        ^{`(`}{^(handler[]); 7}{`)`} {`__inner`};
                     ^{`}`};
                 ^{`}`} {`[]`};
             ^{`}`} {`)`};

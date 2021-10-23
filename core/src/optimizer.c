@@ -624,7 +624,7 @@ OptimizerCheckpoint Optimizer_SaveCheckpoint(Optimizer *opt)
 void Optimizer_RestoreCheckpoint(
     Optimizer *opt, OptimizerCheckpoint checkpoint)
 {
-    Bytecode_Truncate(opt->code, checkpoint.code_offset);
+    Bytecode_Restore(opt->code, checkpoint.code_offset);
 
     while (SymbolicObjectStack_Size(&opt->result_stack) >
            checkpoint.stack_size)

@@ -1,4 +1,4 @@
-import std;
+import `std.lib`;
 
 __call {
     sym := a;

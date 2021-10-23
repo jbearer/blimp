@@ -8,7 +8,7 @@
 # counting version of the test, otherwise reference counting isn't gaining us
 # anything compared to tracing.
 
-import std;
+import `std.lib`;
 
 node{^
     {

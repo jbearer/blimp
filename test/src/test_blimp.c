@@ -83,6 +83,31 @@ static BlimpStatus ExpectEQ(
     return VoidReturn(blimp, result);
 }
 
+static BlimpStatus ExpectNE(
+    Blimp *blimp, Test *test, BlimpObject **args, BlimpObject **result)
+{
+    (void)test;
+
+    const BlimpSymbol *sym1;
+    if (BlimpObject_ParseSymbol(args[0], &sym1) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    const BlimpSymbol *sym2;
+    if (BlimpObject_ParseSymbol(args[1], &sym2) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    if (sym1 == sym2) {
+        return Blimp_ErrorMsg(blimp, BLIMP_ERROR,
+            "expected unequal, but both sides are `%s'",
+            BlimpSymbol_GetName(sym1)
+        );
+    }
+
+    return VoidReturn(blimp, result);
+}
+
 static BlimpStatus ExpectLT(
     Blimp *blimp, Test *test, BlimpObject **args, BlimpObject **result)
 {
@@ -488,18 +513,17 @@ static BlimpStatus PrintCode(
     return VoidReturn(blimp, result);
 }
 
-static BlimpStatus Eval(
-    Blimp *blimp, Test *test, BlimpObject **args, BlimpObject **result)
+static BlimpStatus EvalAsNonTerminal(
+    Blimp *blimp, BlimpObject *obj, BlimpNonTerminal nt, BlimpObject **result)
 {
-    (void)test;
-
     const BlimpSymbol *code;
-    if (BlimpObject_ParseSymbol(args[0], &code) != BLIMP_OK) {
+    if (BlimpObject_ParseSymbol(obj, &code) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
 
     BlimpParseTree *tree;
-    if (Blimp_ParseString(blimp, BlimpSymbol_GetName(code), &tree) != BLIMP_OK)
+    if (Blimp_ParseString(blimp, BlimpSymbol_GetName(code), nt, &tree)
+            != BLIMP_OK)
     {
         return Blimp_Reraise(blimp);
     }
@@ -514,6 +538,56 @@ static BlimpStatus Eval(
         blimp, expr, Blimp_CurrentScope(blimp), result);
     Blimp_FreeExpr(expr);
     return status;
+}
+
+static BlimpStatus EvalAs(
+    Blimp *blimp, Test *test, BlimpObject **args, BlimpObject **result)
+{
+    (void)test;
+
+    const BlimpSymbol *nt_sym;
+    if (BlimpObject_ParseSymbol(args[0], &nt_sym) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+    BlimpNonTerminal nt;
+    if (Blimp_GetNonTerminal(blimp, nt_sym, &nt) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    return EvalAsNonTerminal(blimp, args[1], nt, result);
+}
+
+static BlimpStatus Eval(
+    Blimp *blimp, Test *test, BlimpObject **args, BlimpObject **result)
+{
+    (void)test;
+    return EvalAsNonTerminal(
+        blimp, args[0], Blimp_DefaultNonTerminal(blimp), result);
+}
+
+static BlimpStatus ExtensionPath(
+    Blimp *blimp, Test *test, BlimpObject **args, BlimpObject **result)
+{
+    (void)test;
+
+    const BlimpSymbol *sym;
+    if (BlimpObject_ParseSymbol(args[0], &sym) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    const char *name = BlimpSymbol_GetName(sym);
+    char *path = malloc(strlen(EXTENSIONS_PATH) + strlen(name) + 1);
+    if (path == NULL) {
+        return Blimp_Error(blimp, BLIMP_OUT_OF_MEMORY);
+    }
+    strcpy(path, EXTENSIONS_PATH);
+    strcat(path, name);
+    if (Blimp_GetSymbol(blimp, path, &sym) != BLIMP_OK) {
+        free(path);
+        return Blimp_Reraise(blimp);
+    }
+    free(path);
+    return BlimpObject_NewSymbol(blimp, sym, result);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -619,6 +693,7 @@ static BlimpStatus TestBlimpMethodCall_New(
 static const TestBlimpMethod methods[] = {
     {"expect",              1,  Expect          },
     {"expect_eq",           2,  ExpectEQ        },
+    {"expect_ne",           2,  ExpectNE        },
     {"expect_lt",           2,  ExpectLT        },
     {"expect_percent",      3,  ExpectPercent   },
     {"expect_error",        1,  ExpectError     },
@@ -630,6 +705,8 @@ static const TestBlimpMethod methods[] = {
     {"gc_print_stats",      0,  GC_PrintStats   },
     {"print_code",          0,  PrintCode       },
     {"eval",                1,  Eval            },
+    {"eval_as",             2,  EvalAs          },
+    {"extension_path",      1,  ExtensionPath   },
 };
 
 static BlimpStatus TestBlimp_Receive(

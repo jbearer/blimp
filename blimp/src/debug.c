@@ -161,11 +161,12 @@ static void Debugger_DropOut(Debugger *db)
         db->blimp, DEBUGGER_SIGNAL, Debugger_IgnoreInstruction, db);
 }
 
-void Debugger_Init(Debugger *db)
+void Debugger_Init(Debugger *db, const BlimpSymbol *command_nt)
 {
     db->blimp = NULL;
         // Set `blimp` to `NULL` to indicate we are not attached to any bl:mp.
         // The rest of the initialization will be done when we attach.
+    db->command_nt = command_nt;
 }
 
 Status Debugger_Attach(Debugger *db, Blimp *blimp)
@@ -307,13 +308,19 @@ Status Debugger_Repl(Debugger *db)
     // Detach while we execute debugger commands.
     Debugger_DropOut(db);
 
+    // Get the non-terminal we will use to parse the command.
+    BlimpNonTerminal nt;
+    if (Blimp_GetNonTerminal(db->blimp, db->command_nt, &nt) != BLIMP_OK) {
+        return Blimp_Reraise(db->blimp);
+    }
+
     // Read and execute expressions from the command line until either
     //  1. we get EOF, which we interpret as quitting the debugger
     //  2. the evaluation of an expression executes a debugger command that sets
     //     `db->resume` (such as `?db continue`), in which case we return to
     //     the user's program
     Expr *expr;
-    while ((expr = Readline_ReadExpr(db->blimp, "bl:db> ", true)) != NULL) {
+    while ((expr = Readline_ReadExpr(db->blimp, "bl:db> ", nt, true)) != NULL) {
         if (Blimp_Eval(db->blimp, expr, Blimp_CurrentScope(db->blimp), NULL)
                 != BLIMP_OK)
         {

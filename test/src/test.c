@@ -14,6 +14,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
+#include <unistd.h>
 #include <wordexp.h>
 
 #include <blimp.h>
@@ -179,7 +180,13 @@ static void RunTest(Test *test)
     clock_gettime(CLOCK_MONOTONIC, &start);
 
     BlimpParseTree *tree;
-    if (Blimp_Parse(test->blimp, test->stream, &tree) != BLIMP_OK) {
+    if (Blimp_Parse(
+            test->blimp,
+            test->stream,
+            Blimp_DefaultNonTerminal(test->blimp),
+            &tree
+        ) != BLIMP_OK)
+    {
         FailTest(test, "bl:mp error");
         if (test->options.verbosity >= VERB_FAILURES) {
             Blimp_DumpLastError(test->blimp, stdout);
@@ -260,6 +267,17 @@ static void RunGroup(Group *group)
             group->name);
     }
 
+    // Run the tests in the directory where they are defined.
+    char old_dir[1024];
+    bool dir_set = false;
+    if (getcwd(old_dir, sizeof(old_dir)) == NULL) {
+        perror("unable to set working directory");
+    } else if (chdir(TEST_DIRECTORY) || chdir(group->name)) {
+        perror("unable to set working directory");
+    } else {
+        dir_set = true;
+    }
+
     for (size_t i = 0; i < group->num_tests; ++i) {
         Test *test = group->tests[i];
         if (skipped) {
@@ -275,6 +293,7 @@ static void RunGroup(Group *group)
                     test->options.preimport[i],
                     Blimp_GlobalObject(test->blimp),
                     (const char **)group->import_path,
+                    Blimp_DefaultNonTerminal(test->blimp),
                     NULL
                 ));
             }
@@ -282,6 +301,13 @@ static void RunGroup(Group *group)
             RunTest(test);
         }
         ++group->results[test->result];
+    }
+
+    if (dir_set) {
+        // Go back to the original directory.
+        if (chdir(old_dir)) {
+            perror("unable to restore working directory");
+        }
     }
 
     if (group->options.verbosity >= VERB_GROUP) {
@@ -410,6 +436,10 @@ static void PrintUsage(FILE *f, int argc, char **argv)
     fprintf(f, "        import path, using the same search procedure as `import MOD'. More than\n");
     fprintf(f, "        one preload module may be given by passing this option more than once.\n");
     fprintf(f, "\n");
+    fprintf(f, "    --no-preload MOD\n");
+    fprintf(f, "        Do not preload MOD. This can be used to override a previous use of\n");
+    fprintf(f, "        --preload MOD\n");
+    fprintf(f, "\n");
     fprintf(f, "    -f [no-]OPTION[=VALUE]\n");
     fprintf(f, "        Specify values for tunable interpreter properties. See below for a list\n");
     fprintf(f, "        of interpreter options.\n");
@@ -476,6 +506,7 @@ typedef enum {
     FLAG_RACKET_TIMEOUT,
     FLAG_BLIMP_TIMEOUT,
     FLAG_PERF_FACTOR,
+    FLAG_NO_PRELOAD,
 } Flag;
 
 static Options DefaultOptions(void)
@@ -505,6 +536,32 @@ static Options DefaultOptions(void)
     regcomp(&options.filter, ".*", REG_EXTENDED);
 
     return options;
+}
+
+static void CloneOptions(const Options *src, Options *dst)
+{
+    *dst = *src;
+
+    if (src->tests != NULL) {
+        dst->tests = malloc(src->num_tests*sizeof(char *));
+        memcpy(dst->tests, src->tests, src->num_tests*sizeof(char *));
+    }
+
+    if (src->groups != NULL) {
+        dst->groups = malloc(src->num_groups*sizeof(char *));
+        memcpy(dst->groups, src->groups, src->num_groups*sizeof(char *));
+    }
+
+    if (src->preimport != NULL) {
+        dst->preimport = malloc(src->num_preimport*sizeof(char *));
+        memcpy(
+            dst->preimport, src->preimport, src->num_preimport*sizeof(char *));
+    }
+
+    if (src->preload != NULL) {
+        dst->preload = malloc(src->num_preload*sizeof(char *));
+        memcpy(dst->preload, src->preload, src->num_preload*sizeof(char *));
+    }
 }
 
 // Parse the options in the given command line, and store the result in the
@@ -539,6 +596,7 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
         {"perf-report",    required_argument, NULL, FLAG_PERF_REPORT },
         {"import",         required_argument, NULL, FLAG_IMPORT },
         {"preload",        required_argument, NULL, FLAG_PRELOAD },
+        {"no-preload",     required_argument, NULL, FLAG_NO_PRELOAD },
         {"verbose",        optional_argument, NULL, FLAG_VERBOSE },
         {"help",           no_argument,       NULL, FLAG_HELP },
         {0, 0, 0, 0},
@@ -665,6 +723,19 @@ static bool ParseOptions(int argc, char **argv, Options *options, int *status)
                     options->preload, options->num_preload*sizeof(char *));
                 options->preload[options->num_preload - 1] = optarg;
 
+                break;
+            }
+
+            case FLAG_NO_PRELOAD: {
+                const char **end = options->preload + options->num_preload;
+                const char **read, **write;
+                for (read = write = options->preload; read < end; ++read) {
+                    if (strcmp(*read, optarg) == 0) {
+                        --options->num_preload;
+                    } else {
+                        *write++ = *read;
+                    }
+                }
                 break;
             }
 
@@ -892,7 +963,7 @@ static Suite *FindTests(const Options *options)
         group->name = strdup(group_de->d_name);
         group->tests = NULL;
         group->num_tests = 0;
-        group->options = suite->options;
+        CloneOptions(&suite->options, &group->options);
         group->options_split = (wordexp_t) {0};
         group->import_path[0] = calloc(
             strlen(TEST_DIRECTORY) + 1 + strlen(group_de->d_name) + 1, 1);
@@ -967,7 +1038,7 @@ static Suite *FindTests(const Options *options)
             Test *test = malloc(sizeof(Test));
             test->name = strdup(test_de->d_name);
             test->group = group;
-            test->options = group->options;
+            CloneOptions(&group->options, &test->options);
             test->options_split = (wordexp_t) {0};
             FILE *test_file = fdopen(
                 openat(dirfd(group_dir), test_de->d_name, O_RDONLY), "r");

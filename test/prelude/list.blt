@@ -1,4 +1,4 @@
-import std;
+import `std.lib`;
 
 a := nil;
 b := nil;

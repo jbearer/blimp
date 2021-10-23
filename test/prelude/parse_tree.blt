@@ -1,4 +1,4 @@
-import std;
+import `std.lib`;
 
 # Terminals
 :expect (__new parse_tree foo is_terminal);
@@ -33,28 +33,28 @@ each {^t
             push (__new parse_tree baz)
             reparsed
     ) == (
-        __new parse_tree 3
-            push (__new parse_tree 3
-                push (__new parse_tree 3
-                    push (__new parse_tree custom1
-                        push (__new parse_tree 6
-                            push (__new parse_tree 7
+        __new parse_tree _3
+            push (__new parse_tree _3
+                push (__new parse_tree _3
+                    push (__new parse_tree _custom1
+                        push (__new parse_tree _6
+                            push (__new parse_tree _7
                                 push (__new parse_tree foo)
                             )
                         )
                     )
                 )
-                push (__new parse_tree custom1
-                    push (__new parse_tree 6
-                        push (__new parse_tree 7
+                push (__new parse_tree _custom1
+                    push (__new parse_tree _6
+                        push (__new parse_tree _7
                             push (__new parse_tree bar)
                         )
                     )
                 )
             )
-            push (__new parse_tree custom1
-                push (__new parse_tree 6
-                    push (__new parse_tree 7
+            push (__new parse_tree _custom1
+                push (__new parse_tree _6
+                    push (__new parse_tree _7
                         push (__new parse_tree baz)
                     )
                 )

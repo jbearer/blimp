@@ -22,7 +22,7 @@
 #       Test if one node is in the same set as another.
 #
 
-import std;
+import `std.lib`;
 
 nil {^} {^method
     if_nil{^{

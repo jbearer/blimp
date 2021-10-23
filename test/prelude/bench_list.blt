@@ -1,4 +1,4 @@
-import std;
+import `std.lib`;
 
 l := [ %0% ];
 i := %0%;

@@ -85,6 +85,38 @@ static BlimpStatus MakeModulePath(
     return BLIMP_OK;
 }
 
+typedef struct {
+    const char **path;
+    BlimpMethod method;
+    BlimpNonTerminal nt;
+} ImportArg;
+
+// Handler which receives one argument (a non-terminal symbol) and then
+// dispatches handling of the second argument to another method.
+static BlimpStatus DispatchMethod(
+    Blimp *blimp,
+    BlimpObject *context,
+    BlimpObject *receiver,
+    BlimpObject *message,
+    BlimpObject **result)
+{
+    ImportArg *arg;
+    if (BlimpObject_ParseExtension(receiver, NULL, (void **)&arg) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    const BlimpSymbol *nt_sym;
+    if (BlimpObject_ParseSymbol(message, &nt_sym) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+    if (Blimp_GetNonTerminal(blimp, nt_sym, &arg->nt) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
+
+    return BlimpObject_NewExtension(
+        blimp, context, arg, arg->method, NULL, result);
+}
+
 // Handler for the `import` function.
 static BlimpStatus ImportMethod(
     Blimp *blimp,
@@ -93,9 +125,8 @@ static BlimpStatus ImportMethod(
     BlimpObject *message,
     BlimpObject **result)
 {
-    const char **path;
-    if (BlimpObject_ParseExtension(
-            receiver, NULL, (void **)&path) != BLIMP_OK) {
+    ImportArg *arg;
+    if (BlimpObject_ParseExtension(receiver, NULL, (void **)&arg) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
 
@@ -105,7 +136,13 @@ static BlimpStatus ImportMethod(
     }
 
     return BlimpModule_Import(
-        blimp, BlimpSymbol_GetName(module), context, path, result);
+        blimp,
+        BlimpSymbol_GetName(module),
+        context,
+        arg->path,
+        arg->nt,
+        result
+    );
 }
 
 // Handler for the `import_source` function.
@@ -116,7 +153,10 @@ static BlimpStatus ImportSourceMethod(
     BlimpObject *message,
     BlimpObject **result)
 {
-    (void)receiver;
+    ImportArg *arg;
+    if (BlimpObject_ParseExtension(receiver, NULL, (void **)&arg) != BLIMP_OK) {
+        return Blimp_Reraise(blimp);
+    }
 
     const BlimpSymbol *path;
     if (BlimpObject_ParseSymbol(message, &path) != BLIMP_OK) {
@@ -124,7 +164,7 @@ static BlimpStatus ImportSourceMethod(
     }
 
     return BlimpModule_ImportSource(
-        blimp, BlimpSymbol_GetName(path), context, result);
+        blimp, BlimpSymbol_GetName(path), arg->nt, context, result);
 }
 
 // Handler for the `import_extension` function.
@@ -146,30 +186,6 @@ static BlimpStatus ImportExtensionMethod(
         blimp, BlimpSymbol_GetName(path), context, result);
 }
 
-// Handler for the `import module` macro.
-static BlimpStatus ImportHandler(BlimpParserContext *ctx, BlimpParseTree **tree)
-{
-    const char **path = (const char **)ctx->arg;
-
-    BlimpObject *sym = BlimpParseTree_Symbol(BlimpParseTree_SubTree(*tree, 1));
-    const BlimpSymbol *module;
-    if (BlimpObject_ParseSymbol(sym, &module) != BLIMP_OK) {
-        return Blimp_Reraise(ctx->blimp);
-    }
-
-    BlimpParseTree *parsed;
-    if (BlimpModule_StaticImport(
-            ctx->blimp, BlimpSymbol_GetName(module), path, &parsed)
-        != BLIMP_OK)
-    {
-        return Blimp_Reraise(ctx->blimp);
-    }
-
-    BlimpParseTree_Release(*tree);
-    *tree = parsed;
-    return BLIMP_OK;
-}
-
 BlimpStatus BlimpModule_Init(Blimp *blimp, const char **path)
 {
     // This function binds several global names as macros and functions:
@@ -188,55 +204,41 @@ BlimpStatus BlimpModule_Init(Blimp *blimp, const char **path)
     //    like `import_source`, except the module named by the path must be an
     //    extension module, not a source module.
 
-    const BlimpSymbol *import_sym, *import_source_sym, *import_extension_sym,
-        *symbol_sym, *prec3_sym;
-    if (Blimp_GetSymbol(blimp, "import", &import_sym) != BLIMP_OK) {
+    const BlimpSymbol *import, *import_source, *import_extension;
+    if (Blimp_GetSymbol(blimp, "import", &import) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
-    if (Blimp_GetSymbol(blimp, "import_source", &import_source_sym)
+    if (Blimp_GetSymbol(blimp, "import_source", &import_source)
             != BLIMP_OK)
     {
         return Blimp_Reraise(blimp);
     }
-    if (Blimp_GetSymbol(blimp, "import_extension", &import_extension_sym)
+    if (Blimp_GetSymbol(blimp, "import_extension", &import_extension)
             != BLIMP_OK)
     {
-        return Blimp_Reraise(blimp);
-    }
-    if (Blimp_GetSymbol(blimp, "``", &symbol_sym) != BLIMP_OK) {
-        return Blimp_Reraise(blimp);
-    }
-    if (Blimp_GetSymbol(blimp, "3", &prec3_sym) != BLIMP_OK) {
-        return Blimp_Reraise(blimp);
-    }
-
-    BlimpTerminal import, symbol;
-    if (Blimp_GetTerminal(blimp, import_sym, &import) != BLIMP_OK) {
-        return Blimp_Reraise(blimp);
-    }
-    if (Blimp_GetTerminal(blimp, symbol_sym, &symbol) != BLIMP_OK) {
-        return Blimp_Reraise(blimp);
-    }
-
-    BlimpNonTerminal prec3;
-    if (Blimp_GetNonTerminal(blimp, prec3_sym, &prec3) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
 
     // Define the `import` function.
+    ImportArg *arg = malloc(sizeof(ImportArg));
+    if (arg == NULL) {
+        return Blimp_Error(blimp, BLIMP_OUT_OF_MEMORY);
+    }
+    arg->method = ImportMethod;
+    arg->path = path;
     BlimpObject *method;
     if (BlimpObject_NewExtension(
             blimp,
             Blimp_GlobalObject(blimp),
-            (void *)path,
-            ImportMethod,
-            NULL,
+            arg,
+            DispatchMethod,
+            free,
             &method) != BLIMP_OK)
     {
+        free(arg);
         return Blimp_Reraise(blimp);
     }
-    if (BlimpObject_Set(
-            Blimp_GlobalObject(blimp), import_sym, method) != BLIMP_OK)
+    if (BlimpObject_Set(Blimp_GlobalObject(blimp), import, method) != BLIMP_OK)
     {
         BlimpObject_Release(method);
         return Blimp_Reraise(blimp);
@@ -244,18 +246,24 @@ BlimpStatus BlimpModule_Init(Blimp *blimp, const char **path)
     BlimpObject_Release(method);
 
     // Define the `import_source` function.
+    ImportArg *source_arg = malloc(sizeof(ImportArg));
+    if (source_arg == NULL) {
+        return Blimp_Error(blimp, BLIMP_OUT_OF_MEMORY);
+    }
+    source_arg->method = ImportSourceMethod;
+    source_arg->path = path;
     if (BlimpObject_NewExtension(
             blimp,
             Blimp_GlobalObject(blimp),
-            NULL,
-            ImportSourceMethod,
-            NULL,
+            source_arg,
+            DispatchMethod,
+            free,
             &method) != BLIMP_OK)
     {
         return Blimp_Reraise(blimp);
     }
-    if (BlimpObject_Set(
-            Blimp_GlobalObject(blimp), import_source_sym, method) != BLIMP_OK)
+    if (BlimpObject_Set(Blimp_GlobalObject(blimp), import_source, method)
+            != BLIMP_OK)
     {
         BlimpObject_Release(method);
         return Blimp_Reraise(blimp);
@@ -273,26 +281,13 @@ BlimpStatus BlimpModule_Init(Blimp *blimp, const char **path)
     {
         return Blimp_Reraise(blimp);
     }
-    if (BlimpObject_Set(
-            Blimp_GlobalObject(blimp), import_extension_sym, method)
-        != BLIMP_OK)
+    if (BlimpObject_Set(Blimp_GlobalObject(blimp), import_extension, method)
+            != BLIMP_OK)
     {
         BlimpObject_Release(method);
         return Blimp_Reraise(blimp);
     }
     BlimpObject_Release(method);
-
-    // Define the `import module` macro.
-    BlimpGrammarSymbol macro_symbols[2] = {
-        {.is_terminal=true, .terminal=import},
-        {.is_terminal=true, .non_terminal=symbol},
-    };
-    if (Blimp_DefineMacro(
-            blimp, prec3, macro_symbols, 2, ImportHandler, (void *)path)
-        != BLIMP_OK)
-    {
-        return Blimp_Reraise(blimp);
-    }
 
     return BLIMP_OK;
 }
@@ -347,11 +342,12 @@ BlimpStatus BlimpModule_Import(
     const char *module,
     BlimpObject *context,
     const char **path,
+    BlimpNonTerminal nt,
     BlimpObject **result)
 {
     // Locate the module and parse it into an expression.
     BlimpParseTree *tree;
-    if (BlimpModule_StaticImport(blimp, module, path, &tree) != BLIMP_OK) {
+    if (BlimpModule_StaticImport(blimp, module, path, nt, &tree) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
     BlimpExpr *expr;
@@ -371,6 +367,7 @@ BlimpStatus BlimpModule_StaticImport(
     Blimp *blimp,
     const char *module,
     const char **path,
+    BlimpNonTerminal nt,
     BlimpParseTree **result)
 {
     const BlimpSymbol *prec3;
@@ -390,8 +387,7 @@ BlimpStatus BlimpModule_StaticImport(
         case BLIMP_MODULE_TEXT: {
             // Parse the source file at `full_path` and return the resulting
             // expression.
-            BlimpStatus ret = Blimp_ParseFile(
-                blimp, full_path, result);
+            BlimpStatus ret = Blimp_ParseFile(blimp, full_path, nt, result);
             free((void *)full_path);
             return ret;
         }
@@ -481,12 +477,13 @@ BlimpStatus BlimpModule_StaticImport(
 BlimpStatus BlimpModule_ImportSource(
     Blimp *blimp,
     const char *path,
+    BlimpNonTerminal nt,
     BlimpObject *context,
     BlimpObject **result)
 {
     // Parse the file.
     BlimpParseTree *tree;
-    if (Blimp_ParseFile(blimp, path, &tree) != BLIMP_OK) {
+    if (Blimp_ParseFile(blimp, path, nt, &tree) != BLIMP_OK) {
         return Blimp_Reraise(blimp);
     }
     BlimpExpr *expr;

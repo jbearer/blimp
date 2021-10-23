@@ -286,7 +286,7 @@ static Status MacroHandler(ParserContext *ctx, ParseTree **tree)
         ) != BLIMP_OK)
     {
         BlimpObject_Release(input_tree);
-        return Reraise(ctx->blimp);
+        return ReraiseFromOpt(ctx->blimp, ctx->range);
     }
     BlimpObject_Release(input_tree);
 
@@ -325,7 +325,7 @@ Status DefineMacro(
     // Convert the production into a ParseTree in order to extract a
     // non-terminal symbol and a list of grammar symbols for the new production.
     ParseTree *tree;
-    TRY(BlimpObject_ToParseTree(production, &tree));
+    TRY_FROM(range, BlimpObject_ToParseTree(production, &tree));
     if (tree->grammar_symbol.is_terminal) {
         // The production of a macro definition must be a non-terminal parse
         // tree, because we cannot define new rules for how terminals are
@@ -354,7 +354,7 @@ Status DefineMacro(
         if (Vector_EmplaceBack(&symbols, (void **)&symbol) != BLIMP_OK) {
             Vector_Destroy(&symbols);
             ParseTree_Release(tree);
-            return Reraise(blimp);
+            return ReraiseFromOpt(blimp, range);
         }
         *symbol = sub_tree->grammar_symbol;
         if (symbol->is_terminal) {
@@ -369,7 +369,7 @@ Status DefineMacro(
             {
                 Vector_Destroy(&symbols);
                 ParseTree_Release(tree);
-                return Reraise(blimp);
+                return ReraiseFromOpt(blimp, range);
             }
 
             // If the grammar symbol is a terminal, it may represent a new
@@ -379,7 +379,7 @@ Status DefineMacro(
             {
                 Vector_Destroy(&symbols);
                 ParseTree_Release(tree);
-                return Reraise(blimp);
+                return ReraiseFromOpt(blimp, range);
             }
         }
     }
@@ -389,7 +389,7 @@ Status DefineMacro(
     MacroArg *handler_arg;
     if (Malloc(blimp, sizeof(MacroArg), &handler_arg) != BLIMP_OK) {
         Vector_Destroy(&symbols);
-        return Reraise(blimp);
+        return ReraiseFromOpt(blimp, range);
     }
     handler_arg->handler = BlimpObject_Borrow(handler);
     handler_arg->non_terminal_symbol = *nt_sym;
@@ -398,7 +398,7 @@ Status DefineMacro(
                 != BLIMP_OK)
         {
             Vector_Destroy(&symbols);
-            return Reraise(blimp);
+            return ReraiseFromOpt(blimp, range);
         }
         *handler_arg->macro_def_range = *range;
     }
@@ -418,7 +418,7 @@ Status DefineMacro(
         Vector_Destroy(&symbols);
         BlimpObject_Release(handler);
         free(handler_arg);
-        return Reraise(blimp);
+        return ReraiseFromOpt(blimp, range);
     }
 
     Vector_Destroy(&symbols);
@@ -468,11 +468,11 @@ Status DefaultGrammar(Blimp *blimp, Grammar *grammar)
     // of increasing precedence:
     NonTerminal NT_Expr, NT_ExprNoMsg, NT_Stmt, NT_StmtNoMsg, NT_Custom,
         NT_CustomNoMsg, NT_Semi, NT_Term, NT_TermNoMsg, NT_Run;
-    TRY(GetNonTerminal(grammar,"1", &NT_Expr));
-    TRY(GetNonTerminal(grammar,"2", &NT_ExprNoMsg));
-    TRY(GetNonTerminal(grammar,"3", &NT_Stmt));
-    TRY(GetNonTerminal(grammar,"4", &NT_StmtNoMsg));
-    TRY(GetNonTerminal(grammar,"5", &NT_Semi));
+    TRY(GetNonTerminal(grammar,"_1", &NT_Expr));
+    TRY(GetNonTerminal(grammar,"_2", &NT_ExprNoMsg));
+    TRY(GetNonTerminal(grammar,"_3", &NT_Stmt));
+    TRY(GetNonTerminal(grammar,"_4", &NT_StmtNoMsg));
+    TRY(GetNonTerminal(grammar,"_5", &NT_Semi));
     // The bootstrap prelude needs some grammar symbol to prepend to the file it
     // is bootstrapping to force that file to execute. It uses the symbol __run,
     // but this cannot simply be a terminal, since leaving an unreduced terminal
@@ -490,7 +490,7 @@ Status DefaultGrammar(Blimp *blimp, Grammar *grammar)
     // Eventually, the built-in grammar should be stripped down to a single,
     // very low-precedence non-terminal, and bootstrap should be able to define
     // __run itself.
-    TRY(GetNonTerminal(grammar,"__run", &NT_Run));
+    TRY(GetNonTerminal(grammar,"___run", &NT_Run));
     // It's useful to have precedences in between the statement grammar (3, 4)
     // and the term grammar (6, 7). The user cannot define new left-recursive
     // forms at precedence 5 or lower, because there will always be statements
@@ -498,10 +498,10 @@ Status DefaultGrammar(Blimp *blimp, Grammar *grammar)
     // lower precedence initial symbol will not be added to the parser state. On
     // the other hand, terms cannot be left-recursive at all, since they are the
     // highest precedence level, and that would create ambiguity.
-    TRY(GetNonTerminal(grammar,"custom1", &NT_Custom));
-    TRY(GetNonTerminal(grammar,"custom2", &NT_CustomNoMsg));
-    TRY(GetNonTerminal(grammar,"6", &NT_Term));
-    TRY(GetNonTerminal(grammar,"7", &NT_TermNoMsg));
+    TRY(GetNonTerminal(grammar,"_custom1", &NT_Custom));
+    TRY(GetNonTerminal(grammar,"_custom2", &NT_CustomNoMsg));
+    TRY(GetNonTerminal(grammar,"_6", &NT_Term));
+    TRY(GetNonTerminal(grammar,"_7", &NT_TermNoMsg));
 
     // And here are the productions:
 
@@ -611,7 +611,6 @@ static Status ParseObject(Blimp *blimp, Object *obj, ParseTree **tree)
     CHECK(BlimpObject_SetExtensionState(visitor, NULL));
     BlimpObject_Release(visitor);
     if (ret != BLIMP_OK) {
-        BlimpObject_Release(symbol);
         goto error;
     }
 

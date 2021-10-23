@@ -48,7 +48,33 @@ import parse_tree;
     # used in either context. This is a horrible mess and should be fixed by
     # improving the built-in grammar.
     \>  4 -> {`\\\\>` <3> <6>} {^toks
-        parse (3 => (^toks))
+        {
+            n_ref{^ ^};
+            n n_ref;
+            n_ref 0;
+
+            production{^ ^};
+            handler{^ ^};
+            for ^tok in ^toks {
+                {
+                    0{^{{
+                        n_ref 1
+                    }}};
+                    1{^{{
+                        production {(^tok)};
+                        n_ref 2
+                    }}};
+                    2{^{{
+                        handler {(^tok)};
+                        n_ref 3
+                    }}};
+
+                    n[] []
+                }[]
+            };
+
+            parse (3 -> {`!` `(``\\>` `(`{production[]}`)` `(`{handler[]}`)``)`})
+        }[]
     };
 
     .
@@ -393,7 +419,7 @@ subtract{^} {^lhs{^rhs
 
 # Mixing equal-precedence operators with different associativities causes an
 # ambiguous parse error.
-:expect_error { :eval `3 infixr- 2 infixl- 1` };
+:expect_error { :eval_as 1 `3 infixr- 2 infixl- 1` };
 
 # But adding parentheses fixes the issue;
 :expect_eq ((3 infixr- 2) infixl- 1) 0;
@@ -461,11 +487,11 @@ id{^} {^};
             }[]
         };
 
+        :expect_ne (arg[]{^}) 7;
         parse (6 -> {{arg[]}})
     }[]
 };
 :expect_eq uses_high_precedence foo foo;
-:expect_error { :eval `uses_high_precedence high_precedence...or_is_it?` };
 
 ################################################################################
 # Macros defined in a module can be used in an importing module.
@@ -671,14 +697,14 @@ import macro_module;
             }[]
         };
 
-        parse ((nt[]) -> {`cdr` `(` `cdr` `(` {syms[]} `)``)`})
+        parse ((nt[]) -> {`cdr` `(` `cdr` `(` {raw:syms[]} `)``)`})
             # Does not work if the non-terminal is in the expression tree, like
             # `1`.
     }[]
 };
 
 :expect_eq car(cdrcdr(symbols, foo bar baz)) baz;
-:expect_error { :eval `car(cdrcdr(1, foo bar baz))` };
+:expect_error { :eval_as 1 `car(cdrcdr(1, foo bar baz))` };
 
 ################################################################################
 # In a state where we expect only a symbol, any token should parse as a symbol,
@@ -724,7 +750,7 @@ import macro_module;
 
 :expect_eq special_token1 special_token2 foo;
 :expect_error {
-    :eval `special_token1 foo`
+    :eval_as 1 `special_token1 foo`
 };
 
 ################################################################################
@@ -752,7 +778,7 @@ import macro_module;
 :expect_eq this_will_not_be_defined_at_parse_time `this_will_not_be_defined_at_parse_time`;
 
 # But the macro above is defined at run-time.
-:eval `:expect_eq this_will_not_be_defined_at_parse_time foo`;
+:eval_as 1 `:expect_eq this_will_not_be_defined_at_parse_time foo`;
 
 ################################################################################
 # Object terminals in a macro production is an error

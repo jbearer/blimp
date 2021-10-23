@@ -1,6 +1,6 @@
 #: -frecursion-limit=100
 
-import std;
+import `std.lib`;
 
 direct_tail_call{^} {^n
     ((^n == 1) if_true { {^} } { direct_tail_call }) (^n - 1)

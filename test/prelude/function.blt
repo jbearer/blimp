@@ -1,4 +1,4 @@
-import std;
+import `std.lib`;
 
 # A simple identity function.
 :expect_eq ((function x {$x}) foo) foo;

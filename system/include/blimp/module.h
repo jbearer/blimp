@@ -24,7 +24,7 @@
  *
  * \param path  NULL-terminated array of file paths to search for modules.
  *
- * This will bind module-system methods and macros like `import symbol`.
+ * This will bind module-system methods like `import symbol`.
  */
 BlimpStatus BlimpModule_Init(Blimp *blimp, const char **path);
 
@@ -97,6 +97,7 @@ BlimpStatus BlimpModule_Import(
     const char *module,
     BlimpObject *context,
     const char **path,
+    BlimpNonTerminal nt,
     BlimpObject **result);
 
 /**
@@ -110,6 +111,7 @@ BlimpStatus BlimpModule_StaticImport(
     Blimp *blimp,
     const char *module,
     const char **path,
+    BlimpNonTerminal nt,
     BlimpParseTree **result);
 
 /**
@@ -122,6 +124,7 @@ BlimpStatus BlimpModule_StaticImport(
 BlimpStatus BlimpModule_ImportSource(
     Blimp *blimp,
     const char *path,
+    BlimpNonTerminal nt,
     BlimpObject *context,
     BlimpObject **result);
 

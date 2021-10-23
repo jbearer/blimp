@@ -9,11 +9,12 @@ typedef struct Debugger {
     HashMap/*<const Instruction *, Breakpoint>*/ breakpoints;
     const Instruction *ip;
     BlimpStackTrace *trace;
+    const BlimpSymbol *command_nt;
     bool stop_at_next_instruction;
     bool resume;
 } Debugger;
 
-void Debugger_Init(Debugger *db);
+void Debugger_Init(Debugger *db, const BlimpSymbol *command_nt);
 Status Debugger_Attach(Debugger *db, Blimp *blimp);
 void Debugger_Detach(Debugger *db);
 Blimp *Debugger_GetAttachedBlimp(const Debugger *db);

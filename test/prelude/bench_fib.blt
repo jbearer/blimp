@@ -1,4 +1,4 @@
-import std;
+import `std.lib`;
 import `system.types`;
 
 test_fib := (function [fib] {

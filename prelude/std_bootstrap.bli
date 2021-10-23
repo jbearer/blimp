@@ -1,9 +1,0 @@
-import std;
-import bootstrap;
-
-# The __run command from the bootstrap prelude forces whatever follows it to
-# be executed eagerly. Thus, if this file is prepended to another, the
-# contents of the second file will be automatically executed. __run is a no-op
-# if followed by EOF, so if this file is imported normally, this will have no
-# effect.
-__run

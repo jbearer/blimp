@@ -4,13 +4,23 @@ target_compile_options(blimp-test PRIVATE
     -Wall -Wextra -Werror -std=c99
     -DSEMANTICS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/src/semantics.rkt"
     -DTEST_DIRECTORY="${CMAKE_CURRENT_SOURCE_DIR}"
-    -DEXTENSIONS_PATH="${CMAKE_BINARY_DIR}"
+    -DEXTENSIONS_PATH="${CMAKE_BINARY_DIR}/"
     -DPRELUDE_PATH="${CMAKE_SOURCE_DIR}/prelude")
 target_include_directories(blimp-test PRIVATE src)
 target_link_libraries(blimp-test blimp)
 target_link_libraries(blimp-test blimpmodule)
 target_link_libraries(blimp-test blimprepl)
 target_link_libraries(blimp-test m)
+
+# Binary modules for system tests
+function(test_module NAME)
+    add_library(${NAME} SHARED system/${NAME}.c)
+    target_compile_options(${NAME} PRIVATE -Wall -Wextra -Werror -ansi -std=c99)
+    target_link_libraries(${NAME} blimpmodule)
+endfunction()
+test_module(binary_module)
+test_module(ambiguous_module)
+test_module(invalid_extension)
 
 if (NOT TEST_PERF_FACTOR)
     set(TEST_PERF_FACTOR 1)

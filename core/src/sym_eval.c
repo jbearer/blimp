@@ -70,7 +70,8 @@ static Status SymEvalObject(
     switch (obj->value_type) {
         case VALUE_SYMBOL: {
             SYMI new_instr = {
-                {INSTR_SYMI, result_type, sizeof(SYMI)}, obj->value.symbol
+                {INSTR_SYMI, result_type, sizeof(SYMI), NOT_RELOCATED},
+                obj->value.symbol
             };
             TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, result));
             break;
@@ -115,7 +116,7 @@ static Status SymEvalObject(
 
             if (obj->value.lambda.scope == NULL) {
                 BLOCKI new_instr = {
-                    {INSTR_BLOCKI, result_type, sizeof(BLOCKI)},
+                    {INSTR_BLOCKI, result_type, sizeof(BLOCKI), NOT_RELOCATED},
                     obj->value.lambda.msg_name,
                     obj->value.lambda.code,
                     obj->value.lambda.flags,
@@ -125,7 +126,7 @@ static Status SymEvalObject(
                 TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, result));
             } else {
                  CLOSEI new_instr = {
-                    {INSTR_CLOSEI, result_type, sizeof(CLOSEI)},
+                    {INSTR_CLOSEI, result_type, sizeof(CLOSEI), NOT_RELOCATED},
                     ScopedObject_Borrow(obj->value.lambda.scope),
                     obj->value.lambda.msg_name,
                     obj->value.lambda.code,
@@ -147,7 +148,8 @@ static Status SymEvalObject(
             }
 
             OBJI new_instr = {
-                {INSTR_OBJI, result_type, sizeof(OBJI)}, obj->value.object
+                {INSTR_OBJI, result_type, sizeof(OBJI), NOT_RELOCATED},
+                obj->value.object
             };
             TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, result));
             break;
@@ -350,7 +352,7 @@ static Status SymEvalSendTo(
 
         // Emit the CALLTO.
         CALLTO new_instr = {
-            {INSTR_CALLTO, result_type, sizeof(CALLTO)},
+            {INSTR_CALLTO, result_type, sizeof(CALLTO), NOT_RELOCATED},
             *range, ScopedObject_Borrow(call_scope),
             BlimpObject_Borrow(receiver), flags
         };
@@ -372,7 +374,7 @@ static Status SymEvalSendTo(
         // just emit a SENDTO instruction with the (possibly updated via
         // constant elision) receiver.
         SENDTO new_instr = {
-            {INSTR_SENDTO, result_type, sizeof(SENDTO)},
+            {INSTR_SENDTO, result_type, sizeof(SENDTO), NOT_RELOCATED},
             *range, BlimpObject_Borrow(receiver), flags
         };
         if (opt->stack && !opt->stack->tail_call) {
@@ -648,7 +650,7 @@ static Status SymEvalSend(
 
         // Emit the CALL.
         CALL new_instr = {
-            {INSTR_CALL, result_type, sizeof(CALL)},
+            {INSTR_CALL, result_type, sizeof(CALL), NOT_RELOCATED},
             *range, ScopedObject_Borrow(call_scope), flags
         };
         if (opt->stack && !opt->stack->tail_call) {
@@ -670,7 +672,8 @@ static Status SymEvalSend(
         // will be on the call stack at runtime, since we're not inlining.
         // Therefore, we can emit a SEND.
         SEND new_instr = {
-            {INSTR_SEND, result_type, sizeof(SEND)}, *range, flags
+            {INSTR_SEND, result_type, sizeof(SEND), NOT_RELOCATED},
+            *range, flags
         };
         if (opt->stack && !opt->stack->tail_call) {
             new_instr.flags &= ~SEND_TAIL;
@@ -786,7 +789,8 @@ static Status SymEvalInstructionAndPushResult(
                     // all subsequent captures would be shifted by 1 and have
                     // the wrong index. So push a NULL object onto the stack.
                     OBJI push_null = {
-                        {INSTR_OBJI, RESULT_USE, sizeof(OBJI)}, NULL
+                        {INSTR_OBJI, RESULT_USE, sizeof(OBJI), NOT_RELOCATED},
+                        NULL
                     };
                     TRY(Optimizer_Emit(
                         opt, (Instruction *)&push_null, &capture));
@@ -867,7 +871,7 @@ static Status SymEvalInstructionAndPushResult(
                 // If the parent of the new object is supposed to be the scope
                 // from the runtime call stack, emit a BLOCKI instruction.
                 BLOCKI new_instr = {
-                    {INSTR_BLOCKI, ip->result_type, sizeof(BLOCKI)},
+                    {INSTR_BLOCKI, ip->result_type, sizeof(BLOCKI), NOT_RELOCATED},
                     instr->msg_name, code, flags,
                     instr->captures + num_captures
                 };
@@ -876,7 +880,7 @@ static Status SymEvalInstructionAndPushResult(
                 // Otherwise, use the statically-known parent object to emit a
                 // CLOSEI instruction.
                 CLOSEI new_instr = {
-                    {INSTR_CLOSEI, ip->result_type, sizeof(CLOSEI)},
+                    {INSTR_CLOSEI, ip->result_type, sizeof(CLOSEI), NOT_RELOCATED},
                     ScopedObject_Borrow(parent), instr->msg_name, code,
                     flags, instr->captures + num_captures
                 };
@@ -1036,7 +1040,7 @@ static Status SymEvalInstructionAndPushResult(
                 // looking for, emit a MSGOF instruction to retrieve the message
                 // from that scope.
                 MSGOF new_instr = {
-                    {INSTR_MSGOF, ip->result_type, sizeof(MSGOF)},
+                    {INSTR_MSGOF, ip->result_type, sizeof(MSGOF), NOT_RELOCATED},
                     ScopedObject_Borrow(parent), index
                 };
                 TRY(Optimizer_Emit(
@@ -1045,7 +1049,8 @@ static Status SymEvalInstructionAndPushResult(
                 // Otherwise, the desired object is captured by the scope on the
                 // runtime call stack.
                 MSG new_instr = {
-                    {INSTR_MSG, ip->result_type, sizeof(MSG)}, index
+                    {INSTR_MSG, ip->result_type, sizeof(MSG), NOT_RELOCATED},
+                    index
                 };
                 TRY(Optimizer_Emit(opt, (Instruction *)&new_instr, result));
             }

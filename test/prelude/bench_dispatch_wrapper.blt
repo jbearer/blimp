@@ -1,4 +1,4 @@
-import std;
+import `std.lib`;
 
 __bind class method {^arg
     ^arg

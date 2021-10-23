@@ -10,7 +10,7 @@ static inline Status Emit_SYMI(
     Bytecode *code, ResultType result_type, const Symbol *symbol)
 {
     SYMI instr = {
-        {INSTR_SYMI, result_type, sizeof(instr)},
+        {INSTR_SYMI, result_type, sizeof(instr), NOT_RELOCATED},
         symbol
     };
 
@@ -21,7 +21,7 @@ static inline Status Emit_OBJI(
     Bytecode *code, ResultType result_type, Object *obj)
 {
     OBJI instr = {
-        {INSTR_OBJI, result_type, sizeof(instr)},
+        {INSTR_OBJI, result_type, sizeof(instr), NOT_RELOCATED},
         BlimpObject_Borrow(obj)
     };
 
@@ -36,7 +36,7 @@ static inline Status Emit_BLOCKI(
     BlockFlags flags)
 {
     BLOCKI instr = {
-        {INSTR_BLOCKI, result_type, sizeof(instr)},
+        {INSTR_BLOCKI, result_type, sizeof(instr), NOT_RELOCATED},
         msg_name, block_code, flags, 0
     };
 
@@ -47,7 +47,7 @@ static inline Status Emit_MSG(
     Bytecode *code, ResultType result_type, size_t index)
 {
     MSG instr = {
-        {INSTR_MSG, result_type, sizeof(instr)},
+        {INSTR_MSG, result_type, sizeof(instr), NOT_RELOCATED},
         index
     };
 
@@ -58,7 +58,7 @@ static inline Status Emit_SEND(
     Bytecode *code, ResultType result_type, SourceRange range, SendFlags flags)
 {
     SEND instr = {
-        {INSTR_SEND, result_type, sizeof(instr)},
+        {INSTR_SEND, result_type, sizeof(instr), NOT_RELOCATED},
         range, flags
     };
 
@@ -69,7 +69,7 @@ static inline Status Emit_MACRO(
     Bytecode *code, ResultType result_type, SourceRange range)
 {
     MACRO instr = {
-        {INSTR_MACRO, result_type, sizeof(instr)},
+        {INSTR_MACRO, result_type, sizeof(instr), NOT_RELOCATED},
         range,
     };
 
@@ -84,7 +84,7 @@ static inline Status Emit_SENDTO(
     Object *receiver)
 {
     SENDTO instr = {
-        {INSTR_SENDTO, result_type, sizeof(instr)},
+        {INSTR_SENDTO, result_type, sizeof(instr), NOT_RELOCATED},
         range, receiver, flags
     };
 
@@ -94,7 +94,7 @@ static inline Status Emit_SENDTO(
 static inline Status Emit_RET(Bytecode *code)
 {
     RET instr = {
-        {INSTR_RET, RESULT_IGNORE, sizeof(instr)}
+        {INSTR_RET, RESULT_IGNORE, sizeof(instr), NOT_RELOCATED}
     };
 
     return Bytecode_Append(code, (Instruction *)&instr);

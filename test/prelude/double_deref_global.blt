@@ -1,4 +1,4 @@
-import std;
+import `std.lib`;
 
 sym := a;
 a := a;

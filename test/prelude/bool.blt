@@ -1,4 +1,4 @@
-import std;
+import `std.lib`;
 
 :expect_eq (true and true)   true;
 :expect_eq (true and false)  false;

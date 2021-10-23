@@ -4,6 +4,12 @@
 #include <blimp.h>
 
 typedef enum {
+    DIALECT_RAW,
+    DIALECT_CORE,
+    DIALECT_STD,
+} Dialect;
+
+typedef enum {
     ACTION_DEFAULT,
     ACTION_EVAL,
     ACTION_PARSE,
@@ -26,10 +32,13 @@ typedef struct {
     size_t history_limit;
     bool no_history_limit;
 
-    bool implicit_prelude;
+    Dialect dialect;
+    const char *non_terminal;
     bool debug;
 } Options;
 
 void DefaultOptions(Options *options);
+BlimpStatus Options_NonTerminal(
+    const Options *options, Blimp *blimp, const BlimpSymbol **nt);
 
 #endif

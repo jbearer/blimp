@@ -3376,12 +3376,12 @@ static Status ParseTree_NewWithGrammarSymbol(
 
     // Check if this is an untether expression. If it is, it takes flight now,
     // the instant the parse tree is created. Untether parse trees look like
-    //      7 -> {`!` <expr>}
+    //      _7 -> {`!` <expr>}
     if (
         num_children == 2 &&
         symbol != NULL &&
         Object_Type(symbol) == OBJ_SYMBOL &&
-        strcmp("7", ((const Symbol *)symbol)->name) == 0 &&
+        strcmp("_7", ((const Symbol *)symbol)->name) == 0 &&
         children[0]->grammar_symbol.is_terminal &&
         children[0]->grammar_symbol.terminal == TOK_BANG
     ) {

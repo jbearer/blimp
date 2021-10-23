@@ -2,7 +2,7 @@
 
 # Tests garbage collection of 10 element simple cycles (C10).
 
-import std;
+import `std.lib`;
 
 node{^
     {

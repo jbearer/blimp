@@ -1,53 +1,66 @@
-# Define __run -> __run. We will use the keyword __run below to execute the
-# contents of the file appended to this one. But we don't want the high-
-# precedence terminal __run on the parser stack the whole time the input file is
-# being parsed, because that makes it impossible for the input file to add and
-# use new grammar rules during parsig. So we make sure that the terminal __run
-# is always immediately reduced to the low-precedence non-terminal __run.
-!(\> {^{`__run`}; `__run`} {^toks
-    {^{.}; 7}
-});
+# The definition of the core grammar is in `core_bootstrap`, so import that
+# first (using the built- in, non-macro version of import).
+!(import _1 core_bootstrap.bli);
 
-# Define __run <expr>, which is exactly like !<expr>, except it takes (and
-# returns) an expression with precedence 1 instead of 7. This is necessary
-# because we are going to end this file with __run so that it can be prepended
-# to another file, whose contents will in general be a 1-level expression. Since
-# we don't have the ability to append code _after_ the bootstrapped file, we
-# can't wrap it's contents in parentheses, so we have to work with the
-# precedence we get.
-!(\> {^{^{``}; `__run`} {^{``}; 1}; 1} {^toks
-    {
-        n_ref{^ ^};
-        n n_ref;
-        n_ref _0;
-
-        expr{^ ^};
-        ^toks {^tok
+# Add features that not every user of `core_bootstrap` may want, such as
+# first-class import statements.
+__core {
+    !(
+        \> {^ {`import`} {`\`sym\``}; 3} {^toks
             {
-                _0{^{{
-                    # __run
-                    n_ref _1
-                }}};
-                _1{^{{
-                    expr {(^tok)};
-                    n_ref _2
-                }}};
+                n_ref{^ ^};
+                n n_ref;
+                n_ref _0;
 
-                n[] []
+                module{^ ^};
+                ^toks {^tok
+                    {
+                        _0{^{{
+                            # import
+                            n_ref _1
+                        }}};
+                        _1{^{{
+                            module {(^tok)};
+                            n_ref _2
+                        }}};
+
+                        n[] []
+                    }[]
+                };
+
+                {^ {`!`} (parse {^ {^ {`import`}; _7} {`1`} (module[]); _3}) ; _7 }
+            }[]
+        };
+        \> {^ {`import`} {`\`sym\``}; 4} {^toks
+           {
+                n_ref{^ ^};
+                n n_ref;
+                n_ref _0;
+
+                module{^ ^};
+                ^toks {^tok
+                    {
+                        _0{^{{
+                            # import
+                            n_ref _1
+                        }}};
+                        _1{^{{
+                            module {(^tok)};
+                            n_ref _2
+                        }}};
+
+                        n[] []
+                    }[]
+                };
+
+                {^ {`!`} (parse {^ {^ {`import`}; _7} {`1`} (module[]); _3}) ; _7 }
             }[]
         };
 
-        {^ {`!`} (expr[]); 7 }
-    }[]
-});
+        .
+    )
+};
 
-# Define __run as a no-op. This makes this file valid bl:mp on its own, even
-# with the trailing `__run` below, so that it can be imported as well as
-# prepended.
-!(\> {^{^{``}; `__run`}; 1} {^toks
-    {^ {.}; 7}
-});
-
-# If this file is prepended to another, execute the code in that file.
-# Otherwise, this is a no-op.
+# If this file is being prepended to another, cause the contents of the
+# remaining input to be parsed using the core grammar, non-terminal 1.
 __run

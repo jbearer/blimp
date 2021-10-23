@@ -1,5 +1,5 @@
 #: -floop-errors
 
-import std;
+import `std.lib`;
 import macro_tests;
 .

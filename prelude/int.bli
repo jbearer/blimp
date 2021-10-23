@@ -760,10 +760,10 @@ syntax number -> 7 { [|__dcons __digit7 __dpos|] };
 syntax number -> 8 { [|__dcons __digit8 __dpos|] };
 syntax number -> 9 { [|__dcons __digit9 __dpos|] };
 syntax number -> n@<number> d@<digit> {
-    [|__dcons (${$d}) (${$n})|]
+    [|__dcons ${$d reparse_as 7} ${$n reparse_as 7}|]
 };
 syntax `7` -> `%` n@<number> `%` {
-    [| !(__wrap integer (${$n})) |]
+    [| !(__wrap integer (${$n reparse_as 7})) |]
 };
 
 __bind integer __digits {^x

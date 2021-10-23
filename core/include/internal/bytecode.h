@@ -32,7 +32,17 @@ struct BlimpInstruction {
 
     ResultType result_type;
     size_t size;
+    size_t relocated_from;
+        // During optimization, instructions will sometimes be relocated to
+        // another part of the procedure. This can happen in a speculative
+        // branch of the optimizer, and so the effects of relocation may
+        // occasionally need to be rolled back. For instructions which have been
+        // relocated, `relocated_from` will contain the offset of their original
+        // location, so that they can be relocated back if necessary. For other
+        // instructions, this field will be `NOT_RELOCATED`.
 };
+
+static const size_t NOT_RELOCATED = (size_t)-1;
 
 ////////////////////////////////////////////////////////////////////////////////
 // Bytecode programs
@@ -74,7 +84,7 @@ PRIVATE Status Bytecode_MoveToEnd(
     Bytecode *code, const Instruction *instr, size_t *new_offset);
 PRIVATE void Bytecode_Delete(Bytecode *code, Instruction *instr);
 PRIVATE void Bytecode_RemoveNops(Bytecode *code);
-PRIVATE void Bytecode_Truncate(Bytecode *code, size_t offset);
+PRIVATE void Bytecode_Restore(Bytecode *code, size_t offset);
 
 // Get the first instruction in a procedure.
 static inline const Instruction *Bytecode_Begin(const Bytecode *code)

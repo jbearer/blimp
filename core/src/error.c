@@ -162,6 +162,16 @@ void PrintSourceRange(FILE *f, const SourceRange *range)
     }
 }
 
+static inline bool RangeIsUseless(const SourceRange *range)
+{
+    return range->start.file == NULL
+        && range->start.row == 0
+        && range->start.col == 0
+        && range->end.file == NULL
+        && range->end.row == 0
+        && range->end.col == 0;
+}
+
 bool HasRange(Status status)
 {
     return status->has_range;
@@ -169,7 +179,9 @@ bool HasRange(Status status)
 
 Status AddRange(const SourceRange *range, Status status)
 {
-    if (status != BLIMP_OK && range != NULL && !status->has_range) {
+    if (status != BLIMP_OK && range != NULL &&
+        (!status->has_range || RangeIsUseless(&status->range)))
+    {
         status->range = *range;
         status->has_range = true;
     }

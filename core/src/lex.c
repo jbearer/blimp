@@ -433,6 +433,9 @@ const char *StringOfTokenType(TokenType t)
         case TOK_MSG_THIS:  return "^";
         case TOK_SYMBOL:    return "symbol";
         case TOK_EOF:       return "end of input";
+        case TOK_WHITESPACE:return "whitespace";
+        case TOK_BANG:      return "!";
+        case TOK_OBJECT:    return "object literal";
         default:            return "invalid token";
     }
 }

@@ -85,22 +85,15 @@ syntax 7 -> quotes_in_def2 {
 #
 
 syntax 7 -> fake_high_precedence {
-    [1|foo|]
+    [raw:1|foo|]
 };
 :expect_eq fake_high_precedence foo;
 
 syntax 7 -> uses_high_precedence arg@<7> {
     :expect_eq ($arg symbol) 1;
     :expect_eq ($arg _reparse_symbol{^}) 7;
-
-    # This test is disabled, because it relies on the `reparse_as` feature of
-    # parse_trees. This feature is not yet integrated into the reparser, which
-    # currently works with low-level parse trees that lack this information.
-    # Un-comment this and remove the following line when the reparser is fixed.
-    # [6| ${$arg} |]
-    [6| foo |]
+    [6| ${$arg} |]
 };
 :expect_eq uses_high_precedence fake_high_precedence foo;
 
 .
-

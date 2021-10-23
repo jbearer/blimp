@@ -185,7 +185,10 @@ static BlimpStatus AppendLine(Blimp *blimp, char **input, const char *line)
 }
 
 Expr *Readline_ReadExpr(
-    Blimp *blimp, const char *prompt, bool blank_line_repeats)
+    Blimp *blimp,
+    const char *prompt,
+    BlimpNonTerminal nt,
+    bool blank_line_repeats)
 {
     char *line;
 
@@ -230,7 +233,7 @@ Expr *Readline_ReadExpr(
         // is a complete expression or not. If not, we will ask the user for
         // more lines of input.
         ParseTree *tree;
-        while (Blimp_ParseString(blimp, input, &tree) != BLIMP_OK) {
+        while (Blimp_ParseString(blimp, input, nt, &tree) != BLIMP_OK) {
             if (Blimp_GetLastErrorCode(blimp) == BLIMP_UNEXPECTED_EOF) {
                 // If we were expecting more input, print a continuation prompt
                 // and read another line.
@@ -243,7 +246,8 @@ Expr *Readline_ReadExpr(
                     // If we were interrupted by Ctrl+C, cancel the expression
                     // we are in the middle of parsing and start over from the
                     // beginning, asking for another expression.
-                    return Readline_ReadExpr(blimp, prompt, blank_line_repeats);
+                    return Readline_ReadExpr(
+                        blimp, prompt, nt, blank_line_repeats);
                 } else if (!*line) {
                     continue;
                 }
@@ -263,7 +267,7 @@ Expr *Readline_ReadExpr(
                 // The user entered an expression, but it didn't parse, so we
                 // have nothing to return. Start from scratch, asking for
                 // another expression.
-                return Readline_ReadExpr(blimp, prompt, blank_line_repeats);
+                return Readline_ReadExpr(blimp, prompt, nt, blank_line_repeats);
             }
         }
 

@@ -1,4 +1,4 @@
-import std;
+import `std.lib`;
 
 __push_stack_frame[];
 

@@ -12,7 +12,7 @@
 #include "internal/stack.h"
 #include "internal/symbol.h"
 
-#define ERR_MSG_LEN 100
+#define ERR_MSG_LEN 512
 
 struct Blimp {
     BlimpOptions options;

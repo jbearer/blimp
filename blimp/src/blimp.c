@@ -47,6 +47,19 @@ static void PrintUsage(FILE *f, int argc, char *const *argv)
     fprintf(f, "        Use core bl:mp. This disables the implicit import of\n");
     fprintf(f, "        the `std' prelude.\n");
     fprintf(f, "\n");
+    fprintf(f, "    --raw\n");
+    fprintf(f, "        Use raw bl:mp. This disables even the implicit import\n");
+    fprintf(f, "        of the `bootstrap` prelude.\n");
+    fprintf(f, "\n");
+    fprintf(f, "    --non-terminal NT\n");
+    fprintf(f, "        Parse input as the non-terminal NT. The default is 1,\n");
+    fprintf(f, "        unless --raw, in which case the default is the bl:mp\n");
+    fprintf(f, "        default non-terminal.\n");
+    fprintf(f, "\n");
+    fprintf(f, "        This option is only meaningful for interactive input\n");
+    fprintf(f, "        (REPL expressions and debugger commands). Files will be\n");
+    fprintf(f, "        parsed based on the preloaded preludes.\n");
+    fprintf(f, "\n");
     fprintf(f, "    -g, --debug\n");
     fprintf(f, "        Run with an attached debugger. This is the default mode\n");
     fprintf(f, "        in interactive sessions, but must be specified explicitly\n");
@@ -204,10 +217,10 @@ static bool IsRenderableWrapperInstance(Blimp *blimp, BlimpObject *obj)
 
 static bool FancyRender(Blimp *blimp, BlimpObject *obj, const Options *options)
 {
-    if (!options->implicit_prelude) {
-        // If --core is given, don't try to do anything fancy and format the
-        // object, since the user is probably working with a lot of objects that
-        // don't conform to the core library formatting protocol.
+    if (options->dialect != DIALECT_STD) {
+        // If --core or --raw is given, don't try to do anything fancy and
+        // format the object, since the user is probably working with a lot of
+        // objects that don't conform to the core library formatting protocol.
         return false;
     }
 
@@ -437,7 +450,9 @@ static int ReplMain(Blimp *blimp, const Options *options)
     if (stream != NULL) {
         // Execute the preloaded files.
         BlimpParseTree *tree;
-        if (Blimp_Parse(blimp, stream, &tree) != BLIMP_OK) {
+        if (Blimp_Parse(blimp, stream, Blimp_DefaultNonTerminal(blimp), &tree)
+                != BLIMP_OK)
+        {
             Blimp_DumpLastError(blimp, stderr);
             return 1;
         }
@@ -451,12 +466,25 @@ static int ReplMain(Blimp *blimp, const Options *options)
         Blimp_FreeExpr(expr);
     }
 
+    // Evaluate interactive input using a non-terminal specified at the command
+    // line, or determined by the dialect.
+    const BlimpSymbol *nt_sym;
+    if (Options_NonTerminal(options, blimp, &nt_sym) != BLIMP_OK) {
+        Blimp_DumpLastError(blimp, stderr);
+        return 1;
+    }
+    BlimpNonTerminal nt;
+    if (Blimp_GetNonTerminal(blimp, nt_sym, &nt) != BLIMP_OK) {
+        Blimp_DumpLastError(blimp, stderr);
+        return 1;
+    }
+
     Debugger db;
-    Debugger_Init(&db);
+    Debugger_Init(&db, nt_sym);
     InitDebuggerCommands(blimp, &db);
 
     BlimpExpr *expr;
-    while ((expr = Readline_ReadExpr(blimp, "bl:mp> ", false)) != NULL) {
+    while ((expr = Readline_ReadExpr(blimp, "bl:mp> ", nt, false)) != NULL) {
         if (DoAction(blimp, expr, options, &db) != BLIMP_OK) {
             Blimp_DumpLastError(blimp, stdout);
         }
@@ -511,7 +539,14 @@ static int EvalMain(Blimp *blimp, const char *path, const Options *options)
 
     Debugger db;
     if (options->debug) {
-        Debugger_Init(&db);
+        const BlimpSymbol *nt;
+        if (Options_NonTerminal(options, blimp, &nt) != BLIMP_OK) {
+            BlimpStream_Delete(stream);
+            Blimp_DumpLastError(blimp, stderr);
+            return 1;
+        }
+
+        Debugger_Init(&db, nt);
         Blimp_Check(Debugger_Attach(&db, blimp));
 
         Readline_Init(options);
@@ -534,7 +569,9 @@ static int EvalMain(Blimp *blimp, const char *path, const Options *options)
     );
     PushInterruptHandler(InterruptAction, blimp);
     BlimpParseTree *tree;
-    if (Blimp_Parse(blimp, stream, &tree) != BLIMP_OK) {
+    if (Blimp_Parse(blimp, stream, Blimp_DefaultNonTerminal(blimp), &tree)
+            != BLIMP_OK)
+    {
         Blimp_DumpLastError(blimp, stderr);
         if (options->debug) {
             Debugger_Detach(&db);
@@ -587,6 +624,8 @@ typedef enum {
         // all the flags have unique values.
 
     FLAG_CORE,
+    FLAG_RAW,
+    FLAG_NON_TERMINAL,
     FLAG_HISTORY_FILE,
     FLAG_HISTORY_LIMIT,
     FLAG_NO_HISTORY_LIMIT,
@@ -596,6 +635,8 @@ int main(int argc, char *const *argv)
 {
     struct option flags[] = {
         {"core",                    no_argument,        NULL, FLAG_CORE},
+        {"raw",                     no_argument,        NULL, FLAG_RAW},
+        {"non-terminal",            required_argument,  NULL, FLAG_NON_TERMINAL},
         {"debug",                   no_argument,        NULL, FLAG_DEBUG},
         {"import-path",             required_argument,  NULL, FLAG_IMPORT_PATH},
         {"preload",                 required_argument,  NULL, FLAG_PRELOAD},
@@ -630,7 +671,15 @@ int main(int argc, char *const *argv)
                 break;
 
             case FLAG_CORE:
-                options.implicit_prelude = false;
+                options.dialect = DIALECT_CORE;
+                break;
+
+            case FLAG_RAW:
+                options.dialect = DIALECT_RAW;
+                break;
+
+            case FLAG_NON_TERMINAL:
+                options.non_terminal = optarg;
                 break;
 
             case FLAG_DEBUG:
@@ -724,16 +773,26 @@ int main(int argc, char *const *argv)
 
     Blimp_Check(BlimpModule_Init(blimp, options.import_path));
 
-    // Automatically prepend the `std_bootstrap' prelude if requested by the
-    // user.
-    if (options.implicit_prelude) {
+    // Automatically prepend a prelude if requested by the user.
+    const char *prelude = NULL;
+    switch (options.dialect) {
+        case DIALECT_STD:
+            prelude = "std";
+            break;
+        case DIALECT_CORE:
+            prelude = "bootstrap";
+            break;
+        default:
+            break;
+    }
+    if (prelude != NULL) {
         options.prepend = realloc(
             options.prepend, ++options.prepend_len * sizeof(char *));
         if (options.prepend == NULL) {
             fprintf(stderr, "could not allocate preload");
             return EXIT_FAILURE;
         }
-        options.prepend[options.prepend_len-1] = "std_bootstrap";
+        options.prepend[options.prepend_len-1] = prelude;
     }
 
     if (optind == argc) {

@@ -920,6 +920,7 @@ BlimpStatus Blimp_GetTerminal(
     Blimp *blimp, const BlimpSymbol *sym, BlimpTerminal *terminal);
 BlimpStatus Blimp_GetNonTerminal(
     Blimp *blimp, const BlimpSymbol *sym, BlimpNonTerminal *non_terminal);
+BlimpNonTerminal Blimp_DefaultNonTerminal(Blimp *blimp);
 
 /**
  * \brief A symbol which matches a section of input during parsing.
@@ -1082,27 +1083,37 @@ BlimpStatus Blimp_DefineMacro(
     void *handler_arg);
 
 /**
- * \brief Parse the contents of `input` and construct a `BlimpParseTree`.
+ * \brief Parse the contents of `input` according to the given non-terminal.
  *
  * \note
  *      Blimp_Parse will close `input` by calling `input->Close(input)` when
  *      parsing is done.
  */
 BlimpStatus Blimp_Parse(
-    Blimp *blimp, BlimpStream *input, BlimpParseTree **output);
+    Blimp *blimp,
+    BlimpStream *input,
+    BlimpNonTerminal nt,
+    BlimpParseTree **output);
 
 /**
  * \brief
- *      Parse the contents of the file `path` and construct a `BlimpParseTree`.
+ *      Parse the contents of the file `path` according to the given
+ *      non-terminal.
  */
 BlimpStatus Blimp_ParseFile(
-    Blimp *blimp, const char *path, BlimpParseTree **output);
+    Blimp *blimp,
+    const char *path,
+    BlimpNonTerminal nt,
+    BlimpParseTree **output);
 
 /**
- * \brief Parse the contents of `str` and construct a `BlimpParseTree`.
+ * \brief Parse the contents of the `str`` according to the given non-terminal.
  */
 BlimpStatus Blimp_ParseString(
-    Blimp *blimp, const char *str, BlimpParseTree **output);
+    Blimp *blimp,
+    const char *str,
+    BlimpNonTerminal nt,
+    BlimpParseTree **output);
 
 /**
  * @}

@@ -35,6 +35,25 @@ void DefaultOptions(Options *options)
     options->history_limit = 1000;
     options->no_history_limit = false;
 
-    options->implicit_prelude = true;
+    options->dialect = DIALECT_STD;
+    options->non_terminal = NULL;
     options->debug = false;
+}
+
+BlimpStatus Options_NonTerminal(
+    const Options *options, Blimp *blimp, const BlimpSymbol **nt)
+{
+    // Figure out how to parse input based on the dialect.
+    if (options->non_terminal == NULL) {
+        switch (options->dialect) {
+            case DIALECT_STD:
+            case DIALECT_CORE: {
+                return Blimp_GetSymbol(blimp, "1", nt);
+            }
+            default:
+                return Blimp_GetSymbol(blimp, "_1", nt);
+        }
+    } else {
+        return Blimp_GetSymbol(blimp, options->non_terminal, nt);
+    }
 }

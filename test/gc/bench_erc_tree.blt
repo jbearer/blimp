@@ -3,7 +3,7 @@
 # Tests garbage collection of trees, one of the most well-behaved data
 # structures, since every node is referenced exactly once, by its parent.
 
-import std;
+import `std.lib`;
 
 nil{
     if_nil{^{

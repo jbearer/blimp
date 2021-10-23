@@ -1,2 +1,2 @@
-#: -floop-errors -istd
+#: -floop-errors --no-preload=bootstrap -lstd
 import macro_tests

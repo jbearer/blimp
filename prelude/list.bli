@@ -269,9 +269,9 @@ syntax __list_elems -> elem@<custom1> `,` elems@<__list_elems> {
 };
 
 syntax 7 -> `[` elems@<__list_elems> `]` {
-    t := [3|${[3|__new list|]} . |];
+    t := [_3|${[_3|__new list|]} . |];
     $elems each {^elem
-        t := [3|${[3|${$t} push|]} ${^elem}|]
+        t := [_3|${[_3|${$t} push|]} ${^elem}|]
     };
     $t
 };

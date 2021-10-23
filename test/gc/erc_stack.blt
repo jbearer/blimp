@@ -1,6 +1,6 @@
 #: -fno-gc-tracing
 
-import std;
+import `std.lib`;
 
 :gc_expect_clean;
 __push_stack_frame[];
