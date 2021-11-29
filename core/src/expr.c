@@ -328,11 +328,12 @@ void PrintClosure(FILE *f, const Expr *expr, DeBruijnMap *scopes)
                 BlimpObject_Print(f, expr->object);
                 break;
             case EXPR_BLOCK:
-                fputc('{', f);
                 if (Expr_MessageCaptured((Expr *)expr) != NO) {
                     fputs("{^", f);
                     fputs(expr->block.msg_name->name, f);
                     fputc(' ', f);
+                } else {
+                    fputc('{', f);
                 }
 
                 DBMap_Push(scopes, (void *)expr->block.msg_name);

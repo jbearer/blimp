@@ -8,9 +8,12 @@
 # each digit in the integer, starting from the least significant. The node for
 # the top-level trie (which is reached by following an empty sequence of digits)
 # corresponds to the integer 0.
-__int_trie{^} {
+__int_trie{^} {^default
     {
-        value{^} ({^cell {(^cell)}} (__cell[]));
+        value{^} ({^cell
+            ^cell {(^default)};
+            {(^cell)}
+        } (__cell[]));
         children{^} (
             # Initialize the map of children and pass it to this block, which
             # creates an accessor method for it.
@@ -26,7 +29,7 @@ __int_trie{^} {
                         {^node
                             ^ref {(^node)};
                             ^node
-                        } (__int_trie[])
+                        } (__int_trie ^default)
                     }
                 }
         );
