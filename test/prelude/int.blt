@@ -14,6 +14,16 @@ import `std.lib`;
 :expect((%5% + %5%) == (%9% + %1%));
 :expect((%5% + %7%) == (%9% + %3%));
 
+# Test successor
+:expect(%0% succ == %1%);
+:expect(%5% succ == %6%);
+:expect(%9% succ == %10%);
+:expect(%1000% succ == %1001%);
+:expect(%999% succ == %1000%);
+:expect(- %1% succ == %0%);
+:expect(- %10% succ == (- %9%));
+:expect(- %9% succ == (- %8%));
+
 # Test subtraction
 :expect((%0% - %0%) == %0%);
 :expect((%1% - %0%) == %1%);

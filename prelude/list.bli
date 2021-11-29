@@ -34,44 +34,6 @@
 # specialized data structure like a vector or a linked list.
 #
 
-# The digit trie data structure which is used as an index into the list. An
-# __int_trie has a node, which is a cell containing the node in the list indexed
-# by this trie, and children, which is a map from digits to __int_tries,
-# recursively.
-#
-# The node asssociated with a particulare integer in a trie index is the node
-# obtained by recursively descending into the appropriate child tries for each
-# digit in the integer, starting from the least significant. The node for the
-# top-level trie (which is reached by following an empty sequence of digits)
-# corresponds to the integer 0.
-__int_trie{^} {
-    {
-        node{^} ({^cell {(^cell)}} (__cell[]));
-        children{^} (
-            # Initialize the map of children and pass it to this block, which
-            # creates an accessor method for it.
-            {^children {(^children)}}
-                # The actual map object.
-                {^digit
-                    # If ^digit is already initialized to a getter for the
-                    # corresponding child trie, this message send just gets the
-                    # child. Otherwise, if ^digit is an uninitialized symbol,
-                    # the block executes and initializes it to a new, empty
-                    # trie.
-                    ^digit {^ref
-                        {^node
-                            ^ref {(^node)};
-                            ^node
-                        } (__int_trie[])
-                    }
-                }
-        );
-        {^msg
-            ^msg[]
-        }
-    }[]
-};
-
 # The symbol `__list_nil` is globally bound to a singleton object which
 # implements all of the node operations that can be implemented for a nil node.
 # Thus, this symbol can be used as a placeholder for a node. It is used for the
@@ -105,6 +67,12 @@ __list_nil{^} ({
     if_nil{^} {
         {^t{^f
             ^t[]
+        }}
+    };
+
+    cps{^} {
+        {^ok{^err
+            ^err[]
         }}
     };
 
@@ -149,6 +117,10 @@ __bind __list_node get{^self
 
 __bind __list_node if_nil{^self{^t{^f
     ^f[]
+}}};
+
+__bind __list_node cps{^self{^ok{^err
+    ^ok (^self value{^}) (^self next{^} cps)
 }}};
 
 __bind list __init {^self{
@@ -196,24 +168,14 @@ __bind list push {^self{^value
         # is equal to the old length of the list.
         ^self __at ^length {(^self __tail){^}};
 
-        ^length + %1%
+        ^length succ
     });
 
     ^self
 }};
 
 __bind list __at {^self{^index
-    curr_ref{^ ^};
-    curr curr_ref;
-    curr_ref (^self __index);
-
-    # Follow trie children for each digit in the index.
-    (^index) __digits each {^digit
-        curr_ref (curr children ^digit)
-    };
-
-    # Return the node associated with the trie where we ended up.
-    curr node
+    __index_int_trie (^self __index) ^index
 }};
 
 __bind list __get_item {^self{^index
@@ -228,6 +190,14 @@ __bind list each {^self{^f
     ^self __head{^} each ^f;
     .
 }};
+
+# Destructure a list in continuation passing style. This function will invoke
+# either the first continuation passed to it (when the list is non-empty,
+# passing it the head and tail) or the second continuation (when the list is
+# empty).
+__bind list __cps {^self
+    ^self __head{^} cps
+};
 
 __bind list := {^self{^values
     ^self __head{^} assign (^values __head{^});

@@ -1,16 +1,21 @@
 import `std.lib`;
 
+to_build{^} ([ ]);
+:benchmark{n{^ 1000}; list_build} {
+    to_build push x
+};
+
 l := [ %0% ];
 i := %0%;
 %1000% times {
-    i := ($i + %1%);
+    i := ($i succ);
     $l push($i)
 };
 
 i := %0%;
 %1001% times {
     :expect (($(($l)@($i))) == ($i));
-    i := ($i + %1%)
+    i := ($i succ)
 };
 
 :benchmark{n{^ 10}; list_index} {
@@ -29,7 +34,7 @@ i := %0%;
         if ($i == %1000%) {
             elem{(^elem)}
         };
-        i := ($i + %1%)
+        i := ($i succ)
     };
     elem[]
 };
@@ -47,7 +52,7 @@ i := %0%;
     i := %0%;
     $l length times {
         $(($l)@($i));
-        i := ($i + %1%)
+        i := ($i succ)
     }
 };
 

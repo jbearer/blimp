@@ -43,6 +43,27 @@ __dpair{^} {^carry{^result
     }
 }};
 
+# Helper for optmized successor method (2-3 times faster than adding 1). This
+# function adds 1 to the digit and then immediately invokes either the first
+# callback (in the common case where there is no carry) with a new, incremented
+# digit, or the second callback (when there is a carry).
+__inc{
+    __digit0{^} {^ok{^carry ^ok __digit1}};
+    __digit1{^} {^ok{^carry ^ok __digit2}};
+    __digit2{^} {^ok{^carry ^ok __digit3}};
+    __digit3{^} {^ok{^carry ^ok __digit4}};
+    __digit4{^} {^ok{^carry ^ok __digit5}};
+    __digit5{^} {^ok{^carry ^ok __digit6}};
+    __digit6{^} {^ok{^carry ^ok __digit7}};
+    __digit7{^} {^ok{^carry ^ok __digit8}};
+    __digit8{^} {^ok{^carry ^ok __digit9}};
+    __digit9{^} {^ok{^carry ^carry[]}};
+
+    ^{^digit{^ok{^carry
+        ^digit ^ok ^carry
+    }}}
+};
+
 ################################################################################
 # single-digit addition tables
 #
@@ -445,6 +466,10 @@ __dneg{
         }
     };
 
+    succ{^} {
+        __dpos
+    };
+
     equals{^} {
         {^x
             ^x case {
@@ -566,6 +591,10 @@ __dpos{
         }
     };
 
+    succ{^} {
+        __dcons __digit1 __dpos
+    };
+
     equals{^} {
         {^x
             ^x case {
@@ -622,23 +651,23 @@ __dpos{
     }
 };
 
-__dcons{^} {^lsd{^tail
-    lsd{^} {(^lsd)};
-    tail{^} {(^tail)};
+__dcons{
+    lsd{^} {^lsd{^tail ^lsd}};
+    tail{^} {^lsd{^tail ^tail}};
 
-    case{^} {
+    case{^} {^lsd{^tail
         {^dneg{^dpos{^dcons
             ^dcons[]
         }}}
-    };
+    }};
 
-    negative{^} {
+    negative{^} {^lsd{^tail
         (^tail negative)
             # The sign is determined by the terminator (whether it is __dpos or
             # __dneg) so just recurse down the tail until we get there.
-    };
+    }};
 
-    add_with_carry{^} {
+    add_with_carry{^} {^lsd{^tail
         {^complement{^y{^c
             # Take the complement of the LSD if requested.
             {^lsd
@@ -654,9 +683,17 @@ __dcons{^} {^lsd{^tail
                 } (__add_digits_with_carry ^lsd (^y lsd) ^c)
             } (^complement if_true {__digit_complement ^lsd} {(^lsd)})
         }}}
-    };
+    }};
 
-    equals{^} {
+    succ{^} {^lsd{^tail
+        __inc ^lsd {^lsd
+            __dcons ^lsd ^tail
+        } {
+            __dcons __digit0 (^tail succ)
+        }
+    }};
+
+    equals{^} {^lsd{^tail
         {^y
             (__digit_equals ^lsd (^y lsd)) and (^tail equals (^y tail))
                 # Since we do not allow leading zeros, two integers are equal if
@@ -664,9 +701,9 @@ __dcons{^} {^lsd{^tail
                 # significant digits and compare the remaining digits
                 # recursively.
         }
-    };
+    }};
 
-    times{^} {
+    times{^} {^lsd{^tail
         {^f
             __digit_times ^lsd ^f;
                 # Do the action `d` times for a ones digit of `d`.
@@ -686,16 +723,16 @@ __dcons{^} {^lsd{^tail
                 (^f[])
             }
         }
-    };
+    }};
 
-    each{^} {
+    each{^} {^lsd{^tail
         {^f
             ^f ^lsd;
             ^tail each ^f
         }
-    };
+    }};
 
-    __render{^} {
+    __render{^} {^lsd{^tail
         {^out
             # The list of digits is stored backwards, with the least-significant
             # digit first. So we render it in reverse order, by rendering the
@@ -705,12 +742,14 @@ __dcons{^} {^lsd{^tail
             # And then rendering the least-significant digit.
             ^out (__digit_symbol ^lsd)
         }
-    };
+    }};
 
-    {^msg
-        ^msg[]
-    }
-}};
+    ^{^lsd{^tail
+        {^msg
+            ^msg ^lsd ^tail
+        }
+    }}
+};
 
 __make_dcons{^} {^h{^t
     ^t case {
@@ -768,6 +807,10 @@ syntax `7` -> `%` n@<number> `%` {
 
 __bind integer __digits {^x
     ^x
+};
+
+__bind integer succ {^x
+    __wrap integer (^x succ)
 };
 
 __bind integer + {^x{^y

@@ -1,0 +1,54 @@
+# The digit trie data structure which is used to map integers to values. An
+# __int_trie has a value, which is a cell containing the value indexed by the
+# integer reprsented by this trie node, as well as children, which is a map from
+# subsequent digits to __int_tries, recursively.
+#
+# The value asssociated with a particular integer in a trie is the value of the
+# node obtained by recursively descending into the appropriate child tries for
+# each digit in the integer, starting from the least significant. The node for
+# the top-level trie (which is reached by following an empty sequence of digits)
+# corresponds to the integer 0.
+__int_trie{^} {
+    {
+        value{^} ({^cell {(^cell)}} (__cell[]));
+        children{^} (
+            # Initialize the map of children and pass it to this block, which
+            # creates an accessor method for it.
+            {^children {(^children)}}
+                # The actual map object.
+                {^digit
+                    # If ^digit is already initialized to a getter for the
+                    # corresponding child trie, this message send just gets the
+                    # child. Otherwise, if ^digit is an uninitialized symbol,
+                    # the block executes and initializes it to a new, empty
+                    # trie.
+                    ^digit {^ref
+                        {^node
+                            ^ref {(^node)};
+                            ^node
+                        } (__int_trie[])
+                    }
+                }
+        );
+        {^msg
+            ^msg[]
+        }
+    }[]
+};
+
+__index_int_trie{^} {^trie{^ix
+    curr_ref{^ ^};
+    curr curr_ref;
+    curr_ref ^trie;
+
+    # Follow trie children for each digit in the index.
+    ^ix __digits each {^digit
+        curr_ref (curr children ^digit)
+    };
+
+    # Return the cell containing the value associated with the trie where we
+    # ended up.
+    curr value
+}};
+
+.

@@ -11,14 +11,13 @@
 # method of the base to get the value of `index` in `base`.
 #
 
-__bind __at_path __init{^self
-    function(__new list[] push `base` push `index`) {
-        .
-        ^self __base ($base);
-        ^self __index ($index);
-        .
+__mk_at_path{^} {^base{^index
+    __base{^} {(^base)};
+    __index{^} {(^index)};
+    {^msg
+        ^msg[]
     }
-};
+}};
 
 __bind __at_path __get {^self
     (^self __base) __get_item (^self __index)
@@ -35,7 +34,7 @@ __bind __at_path render{^self{^out
 }};
 
 syntax 6 -> base@<6> `@` index@<6> {
-    [3|__new __at_path([ ${$base} , ${$index} ])|]
+    [3|__wrap __at_path(__mk_at_path ${$base} ${$index})|]
 };
 
 .

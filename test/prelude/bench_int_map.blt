@@ -1,0 +1,10 @@
+import `std.lib`;
+
+trie{^} (__int_trie[]);
+thousand{^} %1000%;
+
+:benchmark{n{^ 1000}; int_trie_index} {
+    __index_int_trie trie thousand
+};
+
+.

@@ -172,7 +172,7 @@ BlimpStatus BlimpModule_ImportExtension(
     ///< Changes that break backwards compatibility (e.g. removal of features
     ///  which old modules might rely on). Precompiled extension modules can
     ///  only be loaded by interpreters with the same major version.
-#define BLIMP_ABI_VERSION_MINOR 2
+#define BLIMP_ABI_VERSION_MINOR 3
     ///< Changes that break forward compatibility (e.g. introduction of features
     ///  that new modules might rely on). Precompiled extension modules can only
     ///  be loaded by interpreters with the same or a newer minor version.

@@ -1,0 +1,24 @@
+import `std.lib`;
+
+thousand{^} %1000%;
+one{^} %1%;
+
+:benchmark{n{^ 1000}; add_one_no_carry} {
+    thousand + one
+};
+
+:benchmark{n{^ 1000}; succ_no_carry} {
+    thousand succ
+};
+
+nines{^} %999%;
+
+:benchmark{n{^ 1000}; add_one_carry} {
+    nines + one
+};
+
+:benchmark{n{^ 1000}; succ_carry} {
+    nines succ
+};
+
+.

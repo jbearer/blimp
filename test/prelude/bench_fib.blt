@@ -21,54 +21,72 @@ test_fib_native := (function [fib] {
     .
 });
 
-fib_rec := (function(n) {
-    if (($n == %0%) or ($n == %1%)) {
+fib_rec{^} {^n
+    if ((^n == %0%) or (^n == %1%)) {
         %1%
     } else {
-        ($fib_rec($n - %1%)) + ($fib_rec($n - %2%))
+        (fib_rec(^n - %1%)) + (fib_rec(^n - %2%))
     }
-});
+};
 
-$test_fib[($fib_rec)];
+$test_fib[fib_rec];
 
-fib_iter := (function(n) {
-    prev1 := %1%;
-    prev2 := %1%;
-    $n times {
-        next := (($prev1) + ($prev2));
-        prev1 := ($prev2);
-        prev2 := ($next)
+fib_iter{^} {^n
+    prev1_ref{^ ^};
+    prev1 prev1_ref;
+
+    prev2_ref{^ ^};
+    prev2 prev2_ref;
+
+    prev1_ref {%1%};
+    prev2_ref {%1%};
+    ^n times {
+        {^prev2
+            {^next
+                prev1_ref {(^prev2)};
+                prev2_ref {(^next)}
+            } (prev1[] + ^prev2)
+        } (prev2[])
     };
 
-    $prev1
-});
+    prev1[]
+};
 
-$test_fib[($fib_iter)];
+$test_fib[fib_iter];
 
-fib_native := (function(n) {
-    prev1 := (native_int 1);
-    prev2 := (native_int 1);
-    $n times {
-        next := (($prev1) + ($prev2));
-        prev1 := ($prev2);
-        prev2 := ($next)
+fib_native{^} {^n
+    prev1_ref{^ ^};
+    prev1 prev1_ref;
+
+    prev2_ref{^ ^};
+    prev2 prev2_ref;
+
+    prev1_ref {native_int 1};
+    prev2_ref {native_int 1};
+    ^n times {
+        {^prev2
+            {^next
+                prev1_ref {(^prev2)};
+                prev2_ref {(^next)}
+            } (prev1[] + ^prev2)
+        } (prev2[])
     };
 
-    $prev1
-});
+    prev1[]
+};
 
-$test_fib_native[($fib_native)];
+$test_fib_native[fib_native];
 
 :benchmark{n{^ 100}; fib_rec} {
-    $fib_rec(%9%)
+    fib_rec(%9%)
 };
 
 :benchmark{n{^ 1000}; fib_iter} {
-    $fib_iter(%9%)
+    fib_iter(%9%)
 };
 
 :benchmark{n{^ 1000}; fib_native} {
-    $fib_native(native_int 9)
+    fib_native(native_int 9)
 };
 
 .

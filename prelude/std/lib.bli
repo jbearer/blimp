@@ -5,6 +5,7 @@ import macro;
 import bool;
 import function;
 import int;
+import int_map;
 import list;
 import struct;
 import path;
