@@ -1,7 +1,6 @@
 file(GLOB TEST_BLIMP_SRC "src/*.c")
 add_executable(blimp-test ${TEST_BLIMP_SRC})
 target_compile_options(blimp-test PRIVATE
-    -Wall -Wextra -Werror -std=c99
     -DSEMANTICS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/src/semantics.rkt"
     -DTEST_DIRECTORY="${CMAKE_CURRENT_SOURCE_DIR}"
     -DEXTENSIONS_PATH="${CMAKE_BINARY_DIR}/"
@@ -15,7 +14,6 @@ target_link_libraries(blimp-test m)
 # Binary modules for system tests
 function(test_module NAME)
     add_library(${NAME} SHARED system/${NAME}.c)
-    target_compile_options(${NAME} PRIVATE -Wall -Wextra -Werror -ansi -std=c99)
     target_link_libraries(${NAME} blimpmodule)
 endfunction()
 test_module(binary_module)

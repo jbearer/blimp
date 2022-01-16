@@ -1664,17 +1664,30 @@ BlimpStatus BlimpObject_GetCapturedMessageByName(
  */
 
 typedef struct {
+    size_t empty; ///< Number of objects with empty scopes.
+    size_t one; ///< Number of objects with one scope entry.
+    size_t many; ///< Number of objects with more than one scope entry.
+    size_t many_total;
+        ///< \brief Total number of scope entries in objects counted by `many`.
+        ///
+        ///  This can be used to obtain the average size of non-trivial scopes
+        ///  by the formula `(float)many_total/many`, or the average size of all
+        ///  scopes using `(float)(many_total + one)/(empty + one + many)`.
+} BlimpScopeSizeDistribution;
+
+typedef struct {
     size_t created;
         ///< The total number of objects ever created.
 
     size_t allocated;
         ///< The total number of objects allocated right now.
     size_t reachable;
-        ///< The number of currently allocated objects which are reachable from
-        ///  a live object (that is, one with a nonzero reference count).
+        ///< \brief The number of currently allocated objects which are
+        ///  reachable from a live object (that is, one with a nonzero reference
+        ///  count).
     size_t max_allocated;
-        ///< The largest number of objects which were ever allocated at one
-        ///  time.
+        ///< \brief The largest number of objects which were ever allocated at
+        ///  one time.
 
     size_t clumps;
         ///< The number of allocated entanglement clumps.
@@ -1687,6 +1700,10 @@ typedef struct {
 
     size_t collections;
         ///< The number of times the tracing garbage collector has run.
+
+    BlimpScopeSizeDistribution scope_size;
+        ///< \brief The distribution of scope sizes of scoped objects which have
+        ///  been garbage collected.
 } BlimpGCStatistics;
 
 BlimpGCStatistics Blimp_GetGCStatistics(Blimp *blimp);

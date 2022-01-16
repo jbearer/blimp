@@ -17,6 +17,7 @@
 struct Blimp {
     BlimpOptions options;
     SymbolTable symbols;
+    SymbolMapAllocator sym_alloc;
     ObjectPool objects;
     CallStack stack;
     ObjectStack result_stack;

@@ -21,6 +21,7 @@ Blimp *Blimp_New(const BlimpOptions *options)
     if (SymbolTable_Init(blimp, &blimp->symbols) != BLIMP_OK) {
         goto err_symbols;
     }
+    SymbolMapAllocator_Init(blimp, &blimp->sym_alloc);
 
     if (TokenTrie_Init(blimp, &blimp->tokens) != BLIMP_OK) {
         goto err_tokens;
@@ -81,6 +82,7 @@ err_objects:
 err_grammar:
     TokenTrie_Destroy(&blimp->tokens);
 err_tokens:
+    SymbolMapAllocator_Destroy(&blimp->sym_alloc);
     SymbolTable_Destroy(&blimp->symbols);
 err_symbols:
     free(blimp);
@@ -96,6 +98,7 @@ void Blimp_Delete(Blimp *blimp)
     ObjectPool_Destroy(&blimp->objects);
     Grammar_Destroy(&blimp->grammar);
     TokenTrie_Destroy(&blimp->tokens);
+    SymbolMapAllocator_Destroy(&blimp->sym_alloc);
     SymbolTable_Destroy(&blimp->symbols);
     free(blimp);
 }

@@ -10,35 +10,18 @@
 
 static inline Status Scope_Init(Blimp *blimp, Scope *scope)
 {
-    HashMapOptions options = HASH_MAP_DEFAULT_OPTIONS;
-    options.user_data = blimp;
-    options.create_empty = true;
-        // Create the scope with no associated memory. This is an optimization:
-        // since many bl:mp objects (especially symbols) never have values
-        // stored in their scopes, it doesn't make sense to proactively allocate
-        // memory until we are ready to store something in the scope.
-
-    return HashMap_Init(
-        blimp, scope,
-        sizeof(Symbol *), sizeof(Ref *),
-        (EqFunc)SymbolEq, (HashFunc)SymbolHash,
-        &options);
+    return SymbolMap_Init(scope, &blimp->sym_alloc);
 }
 
 static inline void Scope_Destroy(Scope *scope)
 {
-    HashMap_Destroy(scope);
-}
-
-static inline void Scope_Clear(Scope *scope)
-{
-    HashMap_Clear(scope);
+    SymbolMap_Destroy(scope);
 }
 
 // Get a reference to the value of `sym` in the given scope, or `NULL`.
-static inline Ref *Scope_Lookup(const Scope *scope, const Symbol *sym)
+static inline Ref *Scope_Lookup(Scope *scope, const Symbol *sym)
 {
-    Ref **ref = HashMap_Find(scope, &sym);
+    Ref **ref = (Ref **)SymbolMap_Find(scope, sym);
     if (ref == NULL) {
         return NULL;
     } else {
@@ -48,45 +31,29 @@ static inline Ref *Scope_Lookup(const Scope *scope, const Symbol *sym)
 
 static inline Status Scope_Update(Scope *scope, const Symbol *sym, Ref *ref)
 {
-    return HashMap_Update(scope, &sym, &ref);
+    SymbolMapEmplacement empl;
+    bool created;
+    TRY(SymbolMap_Emplace(scope, sym, &empl, &created));
+    *(Ref **)SymbolMap_CommitEmplace(scope, &empl) = ref;
+    return BLIMP_OK;
 }
 
-typedef HashMapEntry *ScopeIterator;
+typedef SymbolMapIterator ScopeIterator;
 
-static inline const Symbol *Scope_GetKey(Scope *scope, ScopeIterator it)
+static inline ScopeIterator Scope_Iterator(const Scope *scope)
 {
-    return *(const Symbol **)HashMap_GetKey(scope, it);
+    return SymbolMap_Iterator(scope);
 }
 
-static inline Ref *Scope_GetValue(Scope *scope, ScopeIterator it)
+static inline bool Scope_Next(
+    const Scope *scope, ScopeIterator *it, const Symbol **sym, Ref **ref)
 {
-    return *(Ref **)HashMap_GetValue(scope, it);
-}
-
-static inline ScopeIterator Scope_End(Scope *scope)
-{
-    return HashMap_End(scope);
-}
-
-static inline ScopeIterator Scope_Next(Scope *scope, ScopeIterator it)
-{
-    assert(it != Scope_End(scope));
-
-    do {
-        it = HashMap_Next(scope, it);
-    } while (it != Scope_End(scope) && Scope_GetValue(scope, it)->to == NULL);
-
-    return it;
-}
-
-static inline ScopeIterator Scope_Begin(Scope *scope)
-{
-    ScopeIterator it = HashMap_Begin(scope);
-    if (it != Scope_End(scope) && Scope_GetValue(scope, it)->to == NULL) {
-        it = Scope_Next(scope, it);
+    while (SymbolMap_Next(scope, it, sym, (void **)ref)) {
+        if ((*ref)->to != NULL) {
+            return true;
+        }
     }
-
-    return it;
+    return false;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -205,7 +172,7 @@ Status ObjectPool_Init(Blimp *blimp, ObjectPool *pool)
     Random_Init(&pool->random, 42);
     pool->seq = 0;
     pool->gc_collections = 0;
-
+    pool->scope_size = (BlimpScopeSizeDistribution){0};
     return BLIMP_OK;
 }
 
@@ -1509,11 +1476,12 @@ static void MarkReachable(ObjectPool *pool)
             // Everything on the stack has been reached.
 
         // Push this object's children onto the stack.
-        for (ScopeIterator it = Scope_Begin(&obj->scope);
-             it != Scope_End(&obj->scope);
-             it = Scope_Next(&obj->scope, it))
-        {
-            Object *child = Scope_GetValue(&obj->scope, it)->to;
+        const Symbol *sym;
+        Ref *ref;
+        for (ScopeIterator it = Scope_Iterator(&obj->scope);
+             Scope_Next(&obj->scope, &it, &sym, &ref);
+        ) {
+            Object *child = ref->to;
             assert(!Object_IsFree(child));
 
             if (IsGC_Object(child) && !((GC_Object *)child)->reached) {
@@ -1624,6 +1592,7 @@ BlimpGCStatistics ObjectPool_GetStats(ObjectPool *pool)
             // quite small, so this shouldn't overestimate by too much.
             PoolAllocator_HighWaterMark(&pool->reference_object_pool) +
             PoolAllocator_HighWaterMark(&pool->scoped_object_pool),
+        .scope_size = pool->scope_size,
     };
 
     MarkReachable(pool);
@@ -1738,12 +1707,12 @@ void ObjectPool_DumpHeap(FILE *f, ObjectPool *pool, bool include_reachable)
             }
 
             // Print an edge for each entry in its scope.
-            for (ScopeIterator it = Scope_Begin(&sobj->scope);
-                 it != Scope_End(&sobj->scope);
-                 it = Scope_Next(&sobj->scope, it))
-            {
-                const Symbol *sym = Scope_GetKey(&sobj->scope, it);
-                Object *child = Scope_GetValue(&sobj->scope, it)->to;
+            const Symbol *sym;
+            Ref *ref;
+            for (ScopeIterator it = Scope_Iterator(&sobj->scope);
+                 Scope_Next(&sobj->scope, &it, &sym, &ref);
+            ) {
+                Object *child = ref->to;
 
                 if (include_reachable ||
                     (IsGC_Object(child) && !((GC_Object *)child)->reached))
@@ -1787,17 +1756,27 @@ static void FreeObject(GC_Object *obj, bool recursive)
     assert(IsScopedObjectType(type));
     ScopedObject *sobj = (ScopedObject *)obj;
 
+    // Update the scope size distribution with this object's final scope size.
+    if (sobj->scope.size == 0) {
+        ++blimp->objects.scope_size.empty;
+    } else if (sobj->scope.size == 1) {
+        ++blimp->objects.scope_size.one;
+    } else {
+        blimp->objects.scope_size.many_total += sobj->scope.size;
+        ++blimp->objects.scope_size.many;
+    }
+
     if (blimp->options.gc_cycle_detection) {
         ERC_RemoveFromClump(sobj);
     }
 
     if (recursive) {
         // Release our references to all of the objects in this object's scope.
-        for (ScopeIterator entry = Scope_Begin(&sobj->scope);
-             entry != Scope_End(&sobj->scope);
-             entry = Scope_Next(&sobj->scope, entry))
-        {
-            Ref *ref = Scope_GetValue(&sobj->scope, entry);
+        const Symbol *sym;
+        Ref *ref;
+        for (ScopeIterator it = Scope_Iterator(&sobj->scope);
+             Scope_Next(&sobj->scope, &it, &sym, &ref);
+        ) {
             ReleaseRef((GC_Object *)sobj, ref);
             FreeRef(blimp, ref);
         }
@@ -1824,6 +1803,11 @@ static void FreeObject(GC_Object *obj, bool recursive)
         if (((ExtensionObject *)obj)->finalize) {
             ((ExtensionObject *)obj)->finalize(((ExtensionObject *)obj)->state);
         }
+    }
+
+    // Clean up our scope if this is a scoped object.
+    if (IsScopedObjectType(type)) {
+        Scope_Destroy(&((ScopedObject *)obj)->scope);
     }
 
     Object_SetType((Object *)obj, OBJ_FREE);
@@ -1893,12 +1877,12 @@ void BlimpObject_ForEachChild(
     }
 
     // Handle each entry in its scope.
-    for (ScopeIterator it = Scope_Begin(&sobj->scope);
-         it != Scope_End(&sobj->scope);
-         it = Scope_Next(&sobj->scope, it))
-    {
-        const Symbol *sym = Scope_GetKey(&sobj->scope, it);
-        Object *child = Scope_GetValue(&sobj->scope, it)->to;
+    const Symbol *sym;
+    Ref *ref;
+    for (ScopeIterator it = Scope_Iterator(&sobj->scope);
+         Scope_Next(&sobj->scope, &it, &sym, &ref);
+    ) {
+        Object *child = ref->to;
         func(blimp, obj, sym, child, arg);
     }
 }
@@ -1947,7 +1931,7 @@ static Status ScopedObject_New(
     GC_Object_Init((GC_Object *)*obj, blimp, type);
 
     // Initialized ScopedObject derived fields.
-    Scope_Clear(&(*obj)->scope);
+    Scope_Init(blimp, &(*obj)->scope);
     (*obj)->parent = parent;
     (*obj)->seq = blimp->objects.seq++;
 

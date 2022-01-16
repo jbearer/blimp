@@ -495,6 +495,12 @@ static BlimpStatus GC_PrintStats(
         printf("  clump min:       %zu\n", stats.min_clump);
     }
     printf("  # of collections: %zu\n", stats.collections);
+    printf("  scope size distribution:\n");
+    printf("    0: %zu\n", stats.scope_size.empty);
+    printf("    1: %zu\n", stats.scope_size.one);
+    printf("    many: %zu\n", stats.scope_size.many);
+    printf("    many avg: %f\n",
+        (float)stats.scope_size.many_total/(float)stats.scope_size.many);
 
     return VoidReturn(blimp, result);
 }

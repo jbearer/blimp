@@ -10,6 +10,8 @@ if (DOXYGEN_FOUND)
     set(DOXYGEN_PREDEFINED "DOXYGEN=1")
 endif()
 
+add_compile_options(-Wall -Wextra -Werror -ansi -std=c11)
+
 # Platform specific options
 if (USE_POSIX08)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -D_POSIX_C_SOURCE=200809L")

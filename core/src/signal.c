@@ -17,7 +17,7 @@ static inline sig_atomic_t AtomicExchange(
 static inline size_t CountTrailingZeros(sig_atomic_t word)
 {
     assert(word != 0);
-    return __builtin_ctz(word);
+    return __builtin_ctzl(word);
 }
 
 static inline sig_atomic_t SigMask(size_t signum)

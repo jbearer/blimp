@@ -93,6 +93,7 @@
 #include "internal/bytecode.h"
 #include "internal/pool_alloc.h"
 #include "internal/random.h"
+#include "internal/symbol.h"
 
 ////////////////////////////////////////////////////////////////////////////////
 // abstract class Object
@@ -241,7 +242,7 @@ typedef struct {
 // abstract class ScopedObject extends GC_Object
 //
 
-typedef HashMap Scope;
+typedef SymbolMap Scope;
 
 typedef struct Ref {
     Object *to;
@@ -534,6 +535,7 @@ typedef struct {
     Random random;
     size_t seq;
     size_t gc_collections;
+    BlimpScopeSizeDistribution scope_size;
 } ObjectPool;
 
 PRIVATE Status ObjectPool_Init(Blimp *blimp, ObjectPool *pool);
