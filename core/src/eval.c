@@ -60,7 +60,7 @@ static Status ExecuteSend(
         const Symbol *sym = (const Symbol *)receiver;
 
         Object *value;
-        if (ScopedObject_Get(scope, sym, &value) == BLIMP_OK) {
+        if (ScopedObject_Lookup(scope, sym, &value, NULL, NULL)) {
             if (value == (Object *)sym) {
                 TRY(LoopDetected(blimp, *jump_to, sym));
             }
