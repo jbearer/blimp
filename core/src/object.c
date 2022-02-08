@@ -31,11 +31,7 @@ static inline Ref *Scope_Lookup(Scope *scope, const Symbol *sym)
 
 static inline Status Scope_Update(Scope *scope, const Symbol *sym, Ref *ref)
 {
-    SymbolMapEmplacement empl;
-    bool created;
-    TRY(SymbolMap_Emplace(scope, sym, &empl, &created));
-    *(Ref **)SymbolMap_CommitEmplace(scope, &empl) = ref;
-    return BLIMP_OK;
+    return SymbolMap_Update(scope, sym, ref);
 }
 
 typedef SymbolMapIterator ScopeIterator;

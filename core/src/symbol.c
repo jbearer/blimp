@@ -240,10 +240,7 @@ static inline uintptr_t SymbolTag(const Symbol *sym)
 }
 
 Status SymbolMap_Emplace(
-    SymbolMap *map,
-    const Symbol *sym,
-    SymbolMapEmplacement *empl,
-    bool *created)
+    SymbolMap *map, const Symbol *sym, SymbolMapEmplacement *empl)
 {
     empl->evicted_sibling = NULL;
     empl->added_to_parent = NULL;
@@ -261,7 +258,7 @@ Status SymbolMap_Emplace(
         // symbol.
         if (curr->tag == tag) {
             empl->value = &curr->value;
-            *created = false;
+            empl->created = false;
             return BLIMP_OK;
         }
         // Next, the case where the current entry is a sub-tree which
@@ -290,7 +287,7 @@ Status SymbolMap_Emplace(
                     parent->first = curr_index;
                 }
 
-                *created = true;
+                empl->created = true;
                 return BLIMP_OK;
             } else {
                 // There is already a sub-tree here, so this entry does not

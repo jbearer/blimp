@@ -153,6 +153,9 @@ typedef struct {
         // parent's `first` index if we abort the emplacement.
     uint32_t old_parent_first;
         // The old value of `added_to_parent->first`, if applicable.
+    bool created;
+        // Whether a new entry was created (`true`) or an old one updated
+        // (`false`).
 } SymbolMapEmplacement;
 
 // An iterator over a symbol map is a path down the tree. When we encounter an
@@ -183,16 +186,24 @@ PRIVATE void SymbolMapAllocator_Destroy(SymbolMapAllocator *alloc);
 PRIVATE Status SymbolMap_Init(SymbolMap *map, SymbolMapAllocator *alloc);
 PRIVATE void SymbolMap_Destroy(SymbolMap *map);
 PRIVATE Status SymbolMap_Emplace(
-    SymbolMap *map,
-    const Symbol *sym,
-    SymbolMapEmplacement *empl,
-    bool *created);
+    SymbolMap *map, const Symbol *sym, SymbolMapEmplacement *empl);
 
 static inline void **SymbolMap_CommitEmplace(
     SymbolMap *map, SymbolMapEmplacement *empl)
 {
-    ++map->size;
+    if (empl->created) {
+        ++map->size;
+    }
     return empl->value;
+}
+
+static inline Status SymbolMap_Update(
+    SymbolMap *map, const Symbol *sym, void *value)
+{
+    SymbolMapEmplacement empl;
+    TRY(SymbolMap_Emplace(map, sym, &empl));
+    *SymbolMap_CommitEmplace(map, &empl) = value;
+    return BLIMP_OK;
 }
 
 PRIVATE void SymbolMap_AbortEmplace(SymbolMap *map, SymbolMapEmplacement *empl);
