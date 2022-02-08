@@ -132,34 +132,31 @@ size_t BlimpSymbol_Hash(const Symbol *sym)
 _Static_assert(MALLOC_ALIGN_BITS != (size_t)-1,
     "unable to determine malloc alignment");
 
+#define SIZEOF_FIELD(TYPE, FIELD) sizeof(((TYPE *)NULL)->FIELD)
+
 #define SYMBOL_TAG_INVALID ((uintptr_t)-1)
     // An invalid or not-present symbol is represented with a tag consisting of
     // all 1's. This is guaranteed to conflict with any tag or partial tag,
     // since tags are always smaller than a uintptr_t (the alignment bits are
     // shifted off first thing) and the extra bits are 0.
-#define SYMBOL_MAP_LOG_FANOUT 5
-    // The choice of fanout (or radix) is designed to strike a balance between
-    // performance and memory usage. A higher fanout decreases the likelihood of
-    // tag collisions, and thus shortens the average path to a unique symbol in
-    // the tree, but each additional fanout requires 2 extra words of storage
-    // per node (for an additional entry consisting of a tag and value), so each
-    // increment to SYMBOL_MAP_LOG_FANOUT effectively doubles the size of a
-    // node.
-    //
-    // The value of 5, for 32 entries per node and a node size of
-    // 512 + sizeof(SymbolNode) (assuming a word size of 8 bytes) is deemed
-    // reasonable.
 #define SYMBOL_MAP_FANOUT ((uintptr_t)1 << SYMBOL_MAP_LOG_FANOUT)
 #define SYMBOL_MAP_INDEX_MASK (SYMBOL_MAP_FANOUT - 1)
     // A bitmask for the next chunk of bits in a tag.
-#define SYMBOL_MAP_MAX_DEPTH (sizeof(uintptr_t)*CHAR_BIT/SYMBOL_MAP_LOG_FANOUT)
 #define SYMBOL_MAP_TAG_SHIFT MALLOC_ALIGN_BITS
     // We ignore the lowest few bits in a symbol address when constructing its
     // tag, since these bits are always 0 due to alignment and thus would lead
     // to frequent collisions at the first level of the tree.
 _Static_assert(
-    SYMBOL_MAP_FANOUT <= sizeof(((SymbolNode *)NULL)->sub_trees)*CHAR_BIT,
+    SYMBOL_MAP_FANOUT <= SIZEOF_FIELD(SymbolNode, sub_trees)*CHAR_BIT,
     "symbol map fanout is too large for allocated sub-trees bitmap");
+_Static_assert(
+    SYMBOL_MAP_LOG_FANOUT < SIZEOF_FIELD(SymbolNodeEntry, to_next)*CHAR_BIT,
+    "SymbolNodeEntry::to_next is too small to represent both positive and "
+    "negative offsets of up to SYMBOL_MAP_FANOUT");
+_Static_assert(
+    SYMBOL_MAP_LOG_FANOUT <= SIZEOF_FIELD(SymbolNode, first)*CHAR_BIT,
+    "SymbolNode::first is too small to represent indices up to "
+    "SYMBOL_MAP_FANOUT");
 
 static void SymbolMapAllocator_Free(SymbolMapAllocator *alloc, SymbolNode *node)
 {
@@ -249,6 +246,7 @@ Status SymbolMap_Emplace(
     bool *created)
 {
     empl->evicted_sibling = NULL;
+    empl->added_to_parent = NULL;
 
     SymbolNode *parent = NULL;
     SymbolNodeEntry *curr = &map->root;
@@ -277,6 +275,21 @@ Status SymbolMap_Emplace(
                 // allocating a new sub-tree.
                 curr->tag = tag;
                 empl->value = &curr->value;
+
+                // Add `curr` as a non-empty child of its parent.
+                if (parent != NULL) {
+                    // Save the old value of `parent->first` in case we have to
+                    // revert this emplacement.
+                    empl->added_to_parent = parent;
+                    empl->old_parent_first = parent->first;
+
+                    ptrdiff_t curr_index = curr - parent->entries;
+                    assert(0 <= curr_index
+                        && curr_index < (ptrdiff_t)SYMBOL_MAP_FANOUT);
+                    curr->to_next = parent->first - curr_index;
+                    parent->first = curr_index;
+                }
+
                 *created = true;
                 return BLIMP_OK;
             } else {
@@ -302,16 +315,26 @@ Status SymbolMap_Emplace(
         // then recursively insert `sym` into the new sub-tree.
         SymbolNode *new_node;
         TRY(SymbolMapAllocator_Alloc(map->alloc, &new_node));
-        // Note the location and value of the entry which is getting moved, in
-        // case we have to abort this emplacement and move it back.
-        empl->evicted_sibling = curr;
-        empl->sibling_tag = curr->tag;
-        empl->sibling_value = curr->value;
+        if (empl->evicted_sibling == NULL) {
+            // Note the location and value of the entry which is getting moved,
+            // in case we have to abort this emplacement and move it back. Note
+            // that we only do this if we haven't done it already. If we have
+            // already moved `evicted_sibling` from a higher sub-tree in a
+            // previous iteration of this loop, we want it to get moved all the
+            // way back there when we abort.
+            empl->evicted_sibling = curr;
+            empl->sibling_tag = curr->tag;
+            empl->sibling_value = curr->value;
+        }
         // Move the existing symbol's entry down into the sub-tree.
-        SymbolNodeEntry *new_entry =
-            &new_node->entries[curr->tag & SYMBOL_MAP_INDEX_MASK];
+        size_t new_entry_index = curr->tag & SYMBOL_MAP_INDEX_MASK;
+        SymbolNodeEntry *new_entry = &new_node->entries[new_entry_index];
         new_entry->tag = curr->tag >> SYMBOL_MAP_LOG_FANOUT;
         new_entry->value = curr->value;
+        // Add `new_entry` to `new_node`s list of children. It is the only
+        // entry, so it's `to_next` field is 0 to indicate the end of the list.
+        new_entry->to_next = 0;
+        new_node->first = new_entry_index;
         // Switch `curr` from the "unique symbol" state to the "sub-tree" state.
         curr->tag = SYMBOL_TAG_INVALID;
         curr->value = (void *)new_node;
@@ -322,6 +345,7 @@ Status SymbolMap_Emplace(
                 && curr < parent->entries + SYMBOL_MAP_FANOUT);
             parent->sub_trees |= ((uintptr_t)1 << (curr - parent->entries));
         }
+
         // Now we have reduced the situation to the case where we are trying to
         // emplace `sym` and we have discovered a non-empty sub-tree. We can
         // simply update `curr` and continue the loop.
@@ -348,6 +372,9 @@ void SymbolMap_AbortEmplace(SymbolMap *map, SymbolMapEmplacement *empl)
         SymbolMapAllocator_Free(map->alloc, empl->evicted_sibling->value);
         empl->evicted_sibling->tag = empl->sibling_tag;
         empl->evicted_sibling->value = empl->sibling_value;
+    }
+    if (empl->added_to_parent != NULL) {
+        empl->added_to_parent->first = empl->old_parent_first;
     }
 }
 
@@ -394,28 +421,41 @@ void **SymbolMap_Find(SymbolMap *map, const Symbol *sym)
     return NULL;
 }
 
-static inline uintptr_t inc_sub_tree_index(uintptr_t bits, size_t sub_tree)
+// `it` must point to a valid entry. This function advances `it` so that it
+// points to the first unique symbol entry in the sub-tree rooted at its
+// original value. Note that this may be the original value of `it`, if it
+// already points at a unique symbol entry.
+static inline const SymbolNodeEntry *AdvanceToFirstLeaf(SymbolMapIterator *it)
 {
-    if (sub_tree == 0) {
-        return SYMBOL_TAG_INVALID;
-    }
-    --sub_tree;
+    const SymbolNodeEntry *curr = it->path[it->depth];
+    assert(curr->tag != SYMBOL_TAG_INVALID || curr->value != NULL);
 
-    while (true) {
-        size_t offset = sub_tree*SYMBOL_MAP_LOG_FANOUT;
-        uintptr_t index = (bits >> offset) & SYMBOL_MAP_INDEX_MASK;
-        if (index + 1 == SYMBOL_MAP_FANOUT) {
-            if (sub_tree == 0) {
-                return SYMBOL_TAG_INVALID;
-            } else {
-                --sub_tree;
-                continue;
-            }
-        }
-
-        uintptr_t parent_indices = bits & (((uintptr_t)1 << offset) - 1);
-        return ((index + 1) << offset) | parent_indices;
+    while (curr->tag == SYMBOL_TAG_INVALID) {
+        assert(curr->value != NULL);
+        assert(it->depth < SYMBOL_MAP_MAX_DEPTH);
+        const SymbolNode *node = (const SymbolNode *)curr->value;
+        curr = &node->entries[node->first];
+        it->path[++it->depth] = curr;
     }
+
+    return curr;
+}
+
+SymbolMapIterator SymbolMap_Iterator(const SymbolMap *map)
+{
+    SymbolMapIterator it = {
+        .count = 0,
+        .depth = 0,
+    };
+    it.path[0] = &map->root;
+
+    if (map->size > 0) {
+        // If there is a leaf to go to, go to it so that when SymbolMap_Next()
+        // is called, the invariant that `it` always points to a leaf is upheld.
+        AdvanceToFirstLeaf(&it);
+    }
+
+    return it;
 }
 
 bool SymbolMap_Next(
@@ -424,45 +464,54 @@ bool SymbolMap_Next(
     const Symbol **sym,
     void **value)
 {
-    while (*it < SYMBOL_TAG_INVALID) {
-        const SymbolNodeEntry *curr = &map->root;
-        uintptr_t tag = *it;
-        for (size_t i = 0; i <= SYMBOL_MAP_MAX_DEPTH; ++i) {
-            assert(tag != SYMBOL_TAG_INVALID);
-
-            if (curr->tag != SYMBOL_TAG_INVALID) {
-                // The sub-tree rooted at this entry contains a single, unique
-                // symbol. Visit it and then skip to the next sub-tree.
-                size_t mask = (((uintptr_t)1) << i*SYMBOL_MAP_LOG_FANOUT) - 1;
-                    // Mask the bits in `*it` corresponding to the path we have
-                    // traversed thus far. These are the low-order `i` groups
-                    // of bits. The high-order bits of the symbol we're visiting
-                    // correspond to the tag remaining in `entry`.
-                *sym = (const Symbol *)
-                    (((*it & mask) | (curr->tag << i*SYMBOL_MAP_LOG_FANOUT))
-                        << SYMBOL_MAP_TAG_SHIFT);
-                *value = curr->value;
-                *it = inc_sub_tree_index(*it, i);
-                return true;
-            }
-
-            if (curr->value == NULL) {
-                // The sub-tree corresponding to the current value of `it` is
-                // empty. We can update `*it` to skip the entire sub-tree and
-                // try again with the next value of `*it`.
-                *it = inc_sub_tree_index(*it, i);
-                break;
-            }
-
-            // There is a non-trivial sub-tree here, so this entry does not
-            // uniquely identify any symbol. Just recurse into the sub-tree.
-            uintptr_t index = tag & SYMBOL_MAP_INDEX_MASK;
-            tag >>= SYMBOL_MAP_LOG_FANOUT;
-            assert(tag != SYMBOL_TAG_INVALID);
-            curr = &((SymbolNode *)curr->value)->entries[index];
-            continue;
-        }
+    if (it->count >= map->size) {
+        return false;
     }
 
-    return false;
+    const SymbolNodeEntry *curr = it->path[it->depth];
+
+    // If not exhausted, the iterator always points to a unique symbol entry,
+    // which is the next one to yield.
+    assert(curr->tag != SYMBOL_TAG_INVALID);
+    *sym = curr->sym;
+    *value = curr->value;
+
+    if (++it->count == map->size) {
+        // The iterator is exhausted now, and we will return `false` on the next
+        // call to SymbolMap_Next(), but this time we need to return `true` for
+        // the entry we yielded above.
+        return true;
+    }
+
+    // Based on `count`, we haven't visited every entry yet, so there must be a
+    // next unique symbol entry in the tree. Advance to it.
+    do {
+        if (curr->to_next) {
+            // There is at least one more sibling in this sub-tree. Go to it.
+            it->path[it->depth] = curr + curr->to_next;
+
+            // If the sibling is a sub-tree, it must have at least one
+            // symbol in it. Walk down to that symbol.
+            curr = AdvanceToFirstLeaf(it);
+            assert(curr->tag != SYMBOL_TAG_INVALID);
+        } else {
+            // `curr` was the last child in its sub-tree, so we start moving
+            // b;ack up the tree.
+            assert(it->depth > 0);
+                // We cannot have visited all of `curr`s siblings if `curr` is
+                // the root, because the root is an only child with no parent,
+                // yet we know there are more unvisited symbols in the tree.
+            curr = it->path[--it->depth];
+
+            // If we're moving up into an entry, it must have a sub-tree below
+            // it.
+            assert(curr->tag == SYMBOL_TAG_INVALID);
+            assert(curr->value != NULL);
+
+            // Continue the loop, moving to the next entry in the new current
+            // sub-tree (the old parent sub-tree).
+        }
+    } while (curr->tag == SYMBOL_TAG_INVALID);
+
+    return true;
 }

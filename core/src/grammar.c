@@ -298,19 +298,22 @@ static Status MacroHandler(ParserContext *ctx, ParseTree **tree)
     }
     BlimpObject_Release(output_tree);
 
-    // Replace the input tree with the output one.
-    ParseTree_Release(*tree);
-    *tree = output;
-
-    // Restore the source range to the location where the macro was invoked.
+    // Save the source range from where the macro was invoked so we can restore
+    // it after overwriting the parse tree. We have to do this now because
+    // `ctx->range` may be deallocated during ParseTree_Release().
     //
     // Note that we can improve error messages by _additionally_ tagging the
     // output tree with the location of the macro _definition_, or with a full
     // macro backtrace, but parse trees do not yet support multiple source
     // ranges.
-    if (ctx->range != NULL) {
-        (*tree)->range = *ctx->range;
-    }
+    SourceRange range = (*tree)->range;
+
+    // Replace the input tree with the output one.
+    ParseTree_Release(*tree);
+    *tree = output;
+
+    // Restore the source range to the location where the macro was invoked.
+    (*tree)->range = range;
 
     return BLIMP_OK;
 }

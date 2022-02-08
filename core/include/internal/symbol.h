@@ -41,7 +41,7 @@ PRIVATE size_t SymbolHash(const Symbol **symbol, void *arg);
 // a hash table is likely more efficient.
 //
 // Instead, we adopt the typical radix tree optimizations of merging only-
-// children with there parent nodes. That is, if there would only be one symbol
+// children with their parent nodes. That is, if there would only be one symbol
 // in a particular sub-tree, that sub-tree is not represented as a sub-tree at
 // all, but rather as a pointer to the value associated with the unique symbol
 // and a tag identifying the symbol. Thus, we only need to traverse additional
@@ -51,6 +51,20 @@ PRIVATE size_t SymbolHash(const Symbol **symbol, void *arg);
 // the probability of having paths more than 2 or 3 nodes in length is
 // exceedingly small, with paths of length 1 being quite common.
 //
+
+#define SYMBOL_MAP_LOG_FANOUT 5
+    // The choice of fanout (or radix) is designed to strike a balance between
+    // performance and memory usage. A higher fanout decreases the likelihood of
+    // tag collisions, and thus shortens the average path to a unique symbol in
+    // the tree, but each additional fanout requires 2 extra words of storage
+    // per node (for an additional entry consisting of a tag and value), so each
+    // increment to SYMBOL_MAP_LOG_FANOUT effectively doubles the size of a
+    // node.
+    //
+    // The value of 5, for 32 entries per node and a node size of
+    // 512 + sizeof(SymbolNode) (assuming a word size of 8 bytes) is deemed
+    // reasonable.
+#define SYMBOL_MAP_MAX_DEPTH (sizeof(uintptr_t)*CHAR_BIT/SYMBOL_MAP_LOG_FANOUT)
 
 // SymbolNodeEntry: an entry in a node, representing a child.
 //
@@ -71,6 +85,16 @@ typedef struct {
     void *value;
         // The value associated with this symbol (if
         // `tag != SYMBOL_TAG_INVALID`) or a pointer to a sub-tree.
+    int8_t to_next;
+        // The offset from this entry to the next entry (in reverse insertion
+        // order) in it's parent node. This is used to quickly find the next
+        // child of the parent sub-tree when iterating.
+        //
+        // We use an offset rather than an absolute index so that we can
+        // calculate the next entry from merely a pointer to this entry, without
+        // knowing this entry's index or the base pointer stored in the parent
+        // node.
+    const Symbol *sym;
 } SymbolNodeEntry;
 
 typedef struct SymbolNode {
@@ -78,6 +102,10 @@ typedef struct SymbolNode {
         // Bitmap of allocated child trees. There is a subtree at index `i` if
         // and only if the `i`th lowest order bit is set. This is used to
         // quickly find and deallocate all of the sub-trees of this node.
+    uint32_t first;
+        // The index of the first child (in reverse insertion order) of this
+        // node. The child can be a sub-tree or a leaf. This is used to quickly
+        // find the next child of a sub-tree when iterating.
     struct SymbolNode *next;
         // When a node is in a free list, this is the next free node.
     SymbolNodeEntry entries[];
@@ -119,15 +147,30 @@ typedef struct {
     void *sibling_value;
         // If `evicted_sibling` is set, `sibling_value` is the value associated
         // with the evicted symbol in the map.
+    SymbolNode *added_to_parent;
+        // If the emplacement caused a new unique symbol entry to be added to a
+        // parent node, the parent node is stored here so we can reset the
+        // parent's `first` index if we abort the emplacement.
+    uint32_t old_parent_first;
+        // The old value of `added_to_parent->first`, if applicable.
 } SymbolMapEmplacement;
 
-// An iterator over a symbol map is just the complete tag of a symbol.
-// Conceptually, we treat the map like a set of integers and increment the
-// iterator through all possible integers, from 0 to UINTPTR_MAX. In practice,
-// the iterator is made efficient by skipping entire empty sub-trees in a single
-// operation, by incrementing the chunk represeting the index of that sub-tree,
-// which may not be the lowest-order chunk of bits in the iterator.
-typedef uintptr_t SymbolMapIterator;
+// An iterator over a symbol map is a path down the tree. When we encounter an
+// empty sub-tree, or when we visit the last symbol in a sub-tree, we can easily
+// skip the entire sub-tree by incrementing the corresponding index in `path`
+// and discarding the corresponding suffix of `path`.
+typedef struct {
+    const SymbolNodeEntry *path[SYMBOL_MAP_MAX_DEPTH + 1];
+        // The nodes we have traversed to reach the current position in the
+        // tree. `path[0]` is always the root.
+    size_t depth;
+        // The depth in the tree of the current position in the traversal. Since
+        // `path[0]` is always the root, `path[depth]` is always the last valid
+        // entry in `path`.
+    size_t count;
+        // The number of entries we have visited. This is used to short-circuit
+        // the traversal once we have visited all the entries in the map.
+} SymbolMapIterator;
 
 static inline void SymbolMapAllocator_Init(
     Blimp *blimp, SymbolMapAllocator *alloc)
@@ -155,12 +198,7 @@ static inline void **SymbolMap_CommitEmplace(
 PRIVATE void SymbolMap_AbortEmplace(SymbolMap *map, SymbolMapEmplacement *empl);
 PRIVATE void **SymbolMap_Find(SymbolMap *map, const Symbol *sym);
 
-static inline SymbolMapIterator SymbolMap_Iterator(const SymbolMap *map)
-{
-    (void)map;
-    return 0;
-}
-
+PRIVATE SymbolMapIterator SymbolMap_Iterator(const SymbolMap *map);
 PRIVATE bool SymbolMap_Next(
     const SymbolMap *map,
     SymbolMapIterator *it,
