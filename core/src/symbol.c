@@ -39,44 +39,38 @@ bool SymbolEq(const Symbol **sym1, const Symbol **sym2, void *arg)
     return *sym1 == *sym2;
 }
 
-Status SymbolTable_Init(Blimp *blimp, SymbolTable *symbols)
+Status SymbolTable_Init(Blimp *blimp, SymbolTable *t)
 {
-    return HashMap_Init(
-        blimp, symbols, sizeof(String), sizeof(Symbol *),
-        (EqFunc)StringEq, (HashFunc)StringHash, NULL);
+    TRY(HashMap_Init(
+        blimp, &t->index, sizeof(String), sizeof(Symbol *),
+        (EqFunc)StringEq, (HashFunc)StringHash, NULL));
+    Vector_Init(blimp, &t->symbols, sizeof(Symbol *), FreeDestructor);
+    return BLIMP_OK;
 }
 
-void SymbolTable_Destroy(SymbolTable *symbols)
+void SymbolTable_Destroy(SymbolTable *t)
 {
-    Blimp *blimp = HashMap_GetBlimp(symbols);
-
-    for (HashMapEntry *entry = HashMap_Begin(symbols);
-         entry != HashMap_End(symbols);
-         entry = HashMap_Next(symbols, entry))
-    {
-        Free(blimp, (char **)HashMap_GetKey(symbols, entry));
-        Free(blimp, (Symbol **)HashMap_GetValue(symbols, entry));
-    }
-
-    HashMap_Destroy(symbols);
+    HashMap_Destroy(&t->index);
+    Vector_Destroy(&t->symbols);
 }
 
 Status SymbolTable_GetSymbol(
-    SymbolTable *symbols,
+    SymbolTable *t,
     const char *name,
     size_t length,
     const Symbol **symbol)
 {
-    Blimp *blimp = HashMap_GetBlimp(symbols);
+    Blimp *blimp = Vector_GetBlimp(&t->symbols);
 
+    // Check if a symbol with this name already exists in the index.
     HashMapEntry *entry;
     bool created;
-    TRY(HashMap_Emplace(symbols, &(String){name, length}, &entry, &created));
+    TRY(HashMap_Emplace(&t->index, &(String){name, length}, &entry, &created));
 
     String *key;
     Symbol **value;
     size_t hash;
-    HashMap_GetEntry(symbols, entry, (void **)&key, (void **)&value, &hash);
+    HashMap_GetEntry(&t->index, entry, (void **)&key, (void **)&value, &hash);
 
     if (!created) {
         // The entry we are using was already in the map, so it's fully valid,
@@ -92,26 +86,36 @@ Status SymbolTable_GetSymbol(
     // our own memory:
     Status ret;
     if ((ret = Strndup(blimp, name, length, (char **)&key->data)) != BLIMP_OK) {
-        HashMap_AbortEmplace(symbols, entry);
+        HashMap_AbortEmplace(&t->index, entry);
         return ret;
     }
     // The value of the entry is completely uninitialized. We need to create a
     // new symbol for it:
     Symbol *new_symbol;
     if ((ret = Malloc(blimp, sizeof(Symbol), &new_symbol)) != BLIMP_OK) {
-        HashMap_AbortEmplace(symbols, entry);
+        HashMap_AbortEmplace(&t->index, entry);
         return ret;
     }
     Object_Init((Object *)new_symbol, blimp, OBJ_SYMBOL);
     new_symbol->length = length;
     new_symbol->name   = key->data;
     new_symbol->hash   = hash;
+    new_symbol->index  = Vector_Length(&t->symbols);
     *value  = new_symbol;
     *symbol = new_symbol;
 
-    HashMap_CommitEmplace(symbols, entry);
+    // Add the new symbol to the list of all symbols.
+    if ((ret = Vector_PushBack(&t->symbols, &new_symbol)) != BLIMP_OK) {
+        HashMap_AbortEmplace(&t->index, entry);
+        Free(blimp, &new_symbol);
+        return ret;
+    }
+
+    HashMap_CommitEmplace(&t->index, entry);
     return BLIMP_OK;
 }
+
+
 
 const char *BlimpSymbol_GetName(const Symbol *sym)
 {
@@ -134,18 +138,9 @@ _Static_assert(MALLOC_ALIGN_BITS != (size_t)-1,
 
 #define SIZEOF_FIELD(TYPE, FIELD) sizeof(((TYPE *)NULL)->FIELD)
 
-#define SYMBOL_TAG_INVALID ((uintptr_t)-1)
-    // An invalid or not-present symbol is represented with a tag consisting of
-    // all 1's. This is guaranteed to conflict with any tag or partial tag,
-    // since tags are always smaller than a uintptr_t (the alignment bits are
-    // shifted off first thing) and the extra bits are 0.
 #define SYMBOL_MAP_FANOUT ((uintptr_t)1 << SYMBOL_MAP_LOG_FANOUT)
 #define SYMBOL_MAP_INDEX_MASK (SYMBOL_MAP_FANOUT - 1)
-    // A bitmask for the next chunk of bits in a tag.
-#define SYMBOL_MAP_TAG_SHIFT MALLOC_ALIGN_BITS
-    // We ignore the lowest few bits in a symbol address when constructing its
-    // tag, since these bits are always 0 due to alignment and thus would lead
-    // to frequent collisions at the first level of the tree.
+    // A bitmask for the next chunk of bits in a packed path.
 _Static_assert(
     SYMBOL_MAP_FANOUT <= SIZEOF_FIELD(SymbolNode, sub_trees)*CHAR_BIT,
     "symbol map fanout is too large for allocated sub-trees bitmap");
@@ -157,6 +152,10 @@ _Static_assert(
     SYMBOL_MAP_LOG_FANOUT <= SIZEOF_FIELD(SymbolNode, first)*CHAR_BIT,
     "SymbolNode::first is too small to represent indices up to "
     "SYMBOL_MAP_FANOUT");
+
+#define ENTRY_TYPE_EMPTY ((SymbolIndex)0)
+#define ENTRY_TYPE_SUB_TREE ((SymbolIndex)1)
+#define ENTRY_TYPE_SYMBOL ((SymbolIndex)2)
 
 static void SymbolMapAllocator_Free(SymbolMapAllocator *alloc, SymbolNode *node)
 {
@@ -189,12 +188,9 @@ static Status SymbolMapAllocator_Alloc(
     }
     assert((*node)->sub_trees == 0);
 
-    for (size_t i = 0; i < SYMBOL_MAP_FANOUT; ++i) {
-        (*node)->entries[i] = (SymbolNodeEntry) {
-            .tag = SYMBOL_TAG_INVALID,
-            .value = NULL,
-        };
-    }
+    // Make sure all of the entry types get set to ENTRY_TYPE_EMPTY.
+    assert(ENTRY_TYPE_EMPTY == 0);
+    memset((*node)->entries, 0, SYMBOL_MAP_FANOUT*sizeof(SymbolNodeEntry));
 
     return BLIMP_OK;
 }
@@ -217,8 +213,7 @@ Status SymbolMap_Init(SymbolMap *map, SymbolMapAllocator *alloc)
 {
     map->alloc = alloc;
     map->root = (SymbolNodeEntry) {
-        .tag = SYMBOL_TAG_INVALID,
-        .value = 0,
+        .type = ENTRY_TYPE_EMPTY,
     };
     map->size = 0;
     return BLIMP_OK;
@@ -226,17 +221,10 @@ Status SymbolMap_Init(SymbolMap *map, SymbolMapAllocator *alloc)
 
 void SymbolMap_Destroy(SymbolMap *map)
 {
-    if (map->root.value != NULL && map->root.tag == SYMBOL_TAG_INVALID) {
+    if (map->root.type == ENTRY_TYPE_SUB_TREE) {
         // If the root is in the "sub-tree" state, free the sub-tree.
         SymbolMapAllocator_Free(map->alloc, map->root.value);
     }
-}
-
-static inline uintptr_t SymbolTag(const Symbol *sym)
-{
-    assert(
-        ((uintptr_t)sym & (((uintptr_t)1 << SYMBOL_MAP_TAG_SHIFT) - 1)) == 0);
-    return (uintptr_t)sym >> SYMBOL_MAP_TAG_SHIFT;
 }
 
 Status SymbolMap_Emplace(
@@ -247,30 +235,112 @@ Status SymbolMap_Emplace(
 
     SymbolNode *parent = NULL;
     SymbolNodeEntry *curr = &map->root;
-    uintptr_t tag = SymbolTag(sym);
+    SymbolIndex path = sym->index;
     for (size_t i = 0; i <= SYMBOL_MAP_MAX_DEPTH; ++i) {
-        assert(tag != SYMBOL_TAG_INVALID);
+        switch (curr->type) {
+            case ENTRY_TYPE_SYMBOL:
+                // If the current entry is a unique symbol, we have two cases:
+                if (curr->index == sym->index) {
+                    // Case 1: it is the symbol we are emplacing. In this case,
+                    // we just get a pointer to the value. This is an update,
+                    // not an insert.
+                    empl->value = &curr->value;
+                    empl->created = false;
+                    return BLIMP_OK;
+                } else {
+                    // Case 2: it is a different symbol. We are inserting `sym`
+                    // into this sub-tree, so this entry will no longer uniquely
+                    // identify any symbol. We need to allocate a new sub-tree,
+                    // move the existing (symbol, value) pair to an entry in the
+                    // new sub-tree, and then recursively insert `sym` into the
+                    // new sub-tree.
+                    //
+                    // `sym` and the current symbol are likely to have indices
+                    // that differ in the next chunk of bits, so they will go in
+                    // different slots in the new sub-tree, but even if they
+                    // don't, and they collide once again, the next iteration of
+                    // this loop will hit this same case and move the original
+                    // symbol even further down the tree. Collisions become
+                    // decreasingly likely with each iteration, and eventually
+                    // impossible once we have accounted for all of the bits in
+                    // the symbol indices.
+                    SymbolNode *new_node;
+                    TRY(SymbolMapAllocator_Alloc(map->alloc, &new_node));
+                    if (empl->evicted_sibling == NULL) {
+                        // Note the location of the entry which is getting
+                        // moved, in case we have to abort this emplacement and
+                        // move it back.
+                        //
+                        // Note that we only do this if we haven't done it
+                        // already. If we have already moved `evicted_sibling`
+                        // from a higher sub-tree in a previous iteration of
+                        // this loop, we want it to get moved all the way back
+                        // there when we abort.
+                        //
+                        // However, we will set `empl->new_sibling`
+                        // unconditionally below, once we allocate a new entry
+                        // to store the evicted sibling. This way, `new_sibling`
+                        // always points at the _final_ location of the evicted
+                        // sibling if and when we go to move it back.
+                        empl->evicted_sibling = curr;
+                    }
+                    // Move the existing symbol's entry down into the sub-tree.
+                    size_t new_entry_index =
+                        (curr->index >> (i*SYMBOL_MAP_LOG_FANOUT))
+                      & SYMBOL_MAP_INDEX_MASK;
+                    SymbolNodeEntry *new_entry =
+                        &new_node->entries[new_entry_index];
+                    new_entry->type = ENTRY_TYPE_SYMBOL;
+                    new_entry->index = curr->index;
+                    new_entry->value = curr->value;
+                    empl->new_sibling = new_entry;
+                    // Add `new_entry` to `new_node`s list of children. It is
+                    // the only entry, so it's `to_next` field is 0 to indicate
+                    // the end of the list.
+                    new_entry->to_next = 0;
+                    new_node->first = new_entry_index;
+                    // Switch `curr` from the "unique symbol" state to the
+                    // "sub-tree" state.
+                    curr->type = ENTRY_TYPE_SUB_TREE;
+                    curr->value = (void *)new_node;
+                    // Set the bit in `parent`s bitmap to indicate that the
+                    // sub-tree at position `index` (that is, `curr`) is
+                    // allocated.
+                    if (parent != NULL) {
+                        assert(parent->entries <= curr
+                            && curr < parent->entries + SYMBOL_MAP_FANOUT);
+                        parent->sub_trees |=
+                            ((uintptr_t)1 << (curr - parent->entries));
+                    }
 
-        // Optimistically handle the lookup cases first, since looking up an
-        // existing symbol is more common than inserting a new symbol.
-        //
-        // First the case where the current entry uniquely matches the desired
-        // symbol.
-        if (curr->tag == tag) {
-            empl->value = &curr->value;
-            empl->created = false;
-            return BLIMP_OK;
-        }
-        // Next, the case where the current entry is a sub-tree which
-        // recursively contains a slot for the desired symbol.
-        if (curr->tag == SYMBOL_TAG_INVALID) {
-            if (curr->value == NULL) {
-                // If we have not yet allocated a sub-tree for this tag, then
-                // this is an insert after all. Since we are inserting into an
+                    // Now we have reduced the situation to the case where we
+                    // are trying to emplace `sym` and we have discovered a
+                    // non-empty sub-tree. We can simply update `curr` and
+                    // continue the loop.
+                    uintptr_t index = path & SYMBOL_MAP_INDEX_MASK;
+                    path >>= SYMBOL_MAP_LOG_FANOUT;
+                    assert(index < SYMBOL_MAP_FANOUT);
+                    parent = new_node;
+                    curr = &new_node->entries[index];
+                    continue;
+                }
+            case ENTRY_TYPE_SUB_TREE: {
+                // If the current entry is a sub-tree, recurse into it.
+                uintptr_t index = path & SYMBOL_MAP_INDEX_MASK;
+                path >>= SYMBOL_MAP_LOG_FANOUT;
+                assert(index < SYMBOL_MAP_FANOUT);
+                parent = (SymbolNode *)curr->value;
+                curr = &parent->entries[index];
+                continue;
+            }
+            case ENTRY_TYPE_EMPTY:
+                // If we have not yet allocated a sub-tree for this index, then
+                // this is definitely an insert. Since we are inserting into an
                 // empty sub-tree, the current entry uniquely identifies `sym`,
                 // and we can just stick `sym` into this entry directly, without
                 // allocating a new sub-tree.
-                curr->tag = tag;
+                curr->type = ENTRY_TYPE_SYMBOL;
+                curr->index = sym->index;
                 empl->value = &curr->value;
 
                 // Add `curr` as a non-empty child of its parent.
@@ -289,74 +359,12 @@ Status SymbolMap_Emplace(
 
                 empl->created = true;
                 return BLIMP_OK;
-            } else {
-                // There is already a sub-tree here, so this entry does not
-                // uniquely identify any symbol. Just recurse into the sub-tree.
-                uintptr_t index = tag & SYMBOL_MAP_INDEX_MASK;
-                tag >>= SYMBOL_MAP_LOG_FANOUT;
-                assert(index < SYMBOL_MAP_FANOUT);
-                assert(tag != SYMBOL_TAG_INVALID);
-
-                parent = (SymbolNode *)curr->value;
-                curr = &parent->entries[index];
-                continue;
-            }
         }
-
-        // The final case is where `entry->tag` is set, but is not equal to the
-        // tag of interest, which indicates that the current entry uniquely
-        // identifies some symbol, just not the one we want. We are inserting
-        // `sym` into this sub-tree, so this entry will no longer uniquely
-        // identify any symbol. We need to allocate a new sub-tree, move the
-        // existing (symbol, value) pair to an entry in the new sub-tree, and
-        // then recursively insert `sym` into the new sub-tree.
-        SymbolNode *new_node;
-        TRY(SymbolMapAllocator_Alloc(map->alloc, &new_node));
-        if (empl->evicted_sibling == NULL) {
-            // Note the location and value of the entry which is getting moved,
-            // in case we have to abort this emplacement and move it back. Note
-            // that we only do this if we haven't done it already. If we have
-            // already moved `evicted_sibling` from a higher sub-tree in a
-            // previous iteration of this loop, we want it to get moved all the
-            // way back there when we abort.
-            empl->evicted_sibling = curr;
-            empl->sibling_tag = curr->tag;
-            empl->sibling_value = curr->value;
-        }
-        // Move the existing symbol's entry down into the sub-tree.
-        size_t new_entry_index = curr->tag & SYMBOL_MAP_INDEX_MASK;
-        SymbolNodeEntry *new_entry = &new_node->entries[new_entry_index];
-        new_entry->tag = curr->tag >> SYMBOL_MAP_LOG_FANOUT;
-        new_entry->value = curr->value;
-        // Add `new_entry` to `new_node`s list of children. It is the only
-        // entry, so it's `to_next` field is 0 to indicate the end of the list.
-        new_entry->to_next = 0;
-        new_node->first = new_entry_index;
-        // Switch `curr` from the "unique symbol" state to the "sub-tree" state.
-        curr->tag = SYMBOL_TAG_INVALID;
-        curr->value = (void *)new_node;
-        // Set the bit in `parent`s bitmap to indicate that the sub-tree at
-        // position `index` (that is, `curr`) is allocated.
-        if (parent != NULL) {
-            assert(parent->entries <= curr
-                && curr < parent->entries + SYMBOL_MAP_FANOUT);
-            parent->sub_trees |= ((uintptr_t)1 << (curr - parent->entries));
-        }
-
-        // Now we have reduced the situation to the case where we are trying to
-        // emplace `sym` and we have discovered a non-empty sub-tree. We can
-        // simply update `curr` and continue the loop.
-        uintptr_t index = tag & SYMBOL_MAP_INDEX_MASK;
-        tag >>= SYMBOL_MAP_LOG_FANOUT;
-        assert(index < SYMBOL_MAP_FANOUT);
-        assert(tag != SYMBOL_TAG_INVALID);
-        parent = new_node;
-        curr = &new_node->entries[index];
     }
 
-    // We should not get here. Every symbol is guaranteed to have a unique word-
-    // sized tag, but if we get here without returning from the loop, then we
-    // have exhausted all of the bits in the symbol's tag without finding a
+    // We should not get here. Every symbol is guaranteed to have a unique
+    // index, but if we get here without returning from the loop, then we
+    // have exhausted all of the bits in the symbol's index without finding a
     // unique slot in the tree for it.
     assert(false);
     return ErrorMsg(
@@ -366,9 +374,22 @@ Status SymbolMap_Emplace(
 void SymbolMap_AbortEmplace(SymbolMap *map, SymbolMapEmplacement *empl)
 {
     if (empl->evicted_sibling != NULL) {
+        assert(empl->evicted_sibling->type == ENTRY_TYPE_SUB_TREE);
+            // The location whence the sibling was evicted must now be a
+            // sub-tree, since we evicted it to add another symbol under the
+            // same slot.
+        assert(empl->new_sibling != NULL);
+        assert(empl->new_sibling->type == ENTRY_TYPE_SYMBOL);
+            // The final location of the evicted symbol must be a unique symbol.
+
         SymbolMapAllocator_Free(map->alloc, empl->evicted_sibling->value);
-        empl->evicted_sibling->tag = empl->sibling_tag;
-        empl->evicted_sibling->value = empl->sibling_value;
+            // We allocated a sub-tree for this emplacement. Since we're
+            // aborting we can free it.
+
+        // Restore the original location of the sibling which was evicted.
+        empl->evicted_sibling->index = empl->new_sibling->index;
+        empl->evicted_sibling->value = empl->new_sibling->value;
+        empl->evicted_sibling->type = ENTRY_TYPE_SYMBOL;
     }
     if (empl->added_to_parent != NULL) {
         empl->added_to_parent->first = empl->old_parent_first;
@@ -378,41 +399,37 @@ void SymbolMap_AbortEmplace(SymbolMap *map, SymbolMapEmplacement *empl)
 void **SymbolMap_Find(SymbolMap *map, const Symbol *sym)
 {
     SymbolNodeEntry *curr = &map->root;
-    uintptr_t tag = SymbolTag(sym);
+    SymbolIndex path = sym->index;
     for (size_t i = 0; i <= SYMBOL_MAP_MAX_DEPTH; ++i) {
-        assert(tag != SYMBOL_TAG_INVALID);
-
-        // Optimistically handle the successful lookup case first, since the
-        // common case for Find is to succeed.
-        if (curr->tag == tag) {
-            return &curr->value;
-        }
-        // If this entry doesn't uniquely identify `sym`, try recursing into a
-        // sub-tree.
-        if (curr->tag == SYMBOL_TAG_INVALID) {
-            if (curr->value == NULL) {
-                // If there is no sub-tree in the slot that should contain this
-                // symbol, then the symbol is not in the map.
-                return NULL;
-            } else {
-                // There is a sub-tree, which identifies at least 2 distinct
-                // symbols, and is guaranteed to contain `sym` if `sym` is in
-                // the map. Recurse into the sub-tree.
-                uintptr_t index = tag & SYMBOL_MAP_INDEX_MASK;
-                tag >>= SYMBOL_MAP_LOG_FANOUT;
+        switch (curr->type) {
+            case ENTRY_TYPE_SYMBOL:
+                // If this entry identifies a unique symbol, then it is either
+                // our symbol, or our symbol is not in the tree.
+                if (curr->index == sym->index) {
+                    return &curr->value;
+                } else {
+                    return NULL;
+                }
+            case ENTRY_TYPE_SUB_TREE: {
+                // If this entry is a sub-tree which identifies at least 2
+                // distinct symbols, it is guaranteed to contain `sym` if `sym`
+                // is in the map. Recurse into the sub-tree.
+                size_t index = path & SYMBOL_MAP_INDEX_MASK;
+                path >>= SYMBOL_MAP_LOG_FANOUT;
                 assert(index < SYMBOL_MAP_FANOUT);
-                assert(tag != SYMBOL_TAG_INVALID);
                 curr = &((SymbolNode *)curr->value)->entries[index];
                 continue;
             }
+            case ENTRY_TYPE_EMPTY:
+                // If this entry contains no symbols, then `sym` is not in the
+                // map.
+                return NULL;
         }
-
-        return NULL;
     }
 
-    // We should not get here. Every symbol is guaranteed to have a unique word-
-    // sized tag, but if we get here without returning from the loop, then we
-    // have exhausted all of the bits in the symbol's tag without finding a
+    // We should not get here. Every symbol is guaranteed to have a unique
+    // index, but if we get here without returning from the loop, then we
+    // have exhausted all of the bits in the symbol's index without finding a
     // unique slot in the tree for it.
     assert(false);
     return NULL;
@@ -425,9 +442,9 @@ void **SymbolMap_Find(SymbolMap *map, const Symbol *sym)
 static inline const SymbolNodeEntry *AdvanceToFirstLeaf(SymbolMapIterator *it)
 {
     const SymbolNodeEntry *curr = it->path[it->depth];
-    assert(curr->tag != SYMBOL_TAG_INVALID || curr->value != NULL);
+    assert(curr->type != ENTRY_TYPE_EMPTY);
 
-    while (curr->tag == SYMBOL_TAG_INVALID) {
+    while (curr->type == ENTRY_TYPE_SUB_TREE) {
         assert(curr->value != NULL);
         assert(it->depth < SYMBOL_MAP_MAX_DEPTH);
         const SymbolNode *node = (const SymbolNode *)curr->value;
@@ -469,8 +486,8 @@ bool SymbolMap_Next(
 
     // If not exhausted, the iterator always points to a unique symbol entry,
     // which is the next one to yield.
-    assert(curr->tag != SYMBOL_TAG_INVALID);
-    *sym = curr->sym;
+    assert(curr->type == ENTRY_TYPE_SYMBOL);
+    *sym = SymbolTable_Index(&map->alloc->blimp->symbols, curr->index);
     *value = curr->value;
 
     if (++it->count == map->size) {
@@ -490,7 +507,7 @@ bool SymbolMap_Next(
             // If the sibling is a sub-tree, it must have at least one
             // symbol in it. Walk down to that symbol.
             curr = AdvanceToFirstLeaf(it);
-            assert(curr->tag != SYMBOL_TAG_INVALID);
+            assert(curr->type == ENTRY_TYPE_SYMBOL);
         } else {
             // `curr` was the last child in its sub-tree, so we start moving
             // b;ack up the tree.
@@ -502,13 +519,12 @@ bool SymbolMap_Next(
 
             // If we're moving up into an entry, it must have a sub-tree below
             // it.
-            assert(curr->tag == SYMBOL_TAG_INVALID);
-            assert(curr->value != NULL);
+            assert(curr->type == ENTRY_TYPE_SUB_TREE);
 
             // Continue the loop, moving to the next entry in the new current
             // sub-tree (the old parent sub-tree).
         }
-    } while (curr->tag == SYMBOL_TAG_INVALID);
+    } while (curr->type == ENTRY_TYPE_SUB_TREE);
 
     return true;
 }

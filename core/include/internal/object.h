@@ -339,6 +339,7 @@ struct BlimpSymbol {
     const char *name;
     size_t hash;
     size_t length;
+    SymbolIndex index;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
