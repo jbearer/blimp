@@ -161,9 +161,9 @@ Status ObjectPool_Init(Blimp *blimp, ObjectPool *pool)
 
     // Initialize the Ref allocation pool.
     PoolAllocator_Init(&pool->ref_pool,
-        sizeof(Ref),
+        sizeof(Ref), blimp->options.gc_batch_size,
         // No GC or one-time initializer
-        0, 0, NULL, NULL, NULL);
+        0, NULL, NULL, NULL);
 
     Random_Init(&pool->random, 42);
     pool->seq = 0;
