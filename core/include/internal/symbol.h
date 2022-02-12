@@ -135,6 +135,7 @@ typedef struct SymbolNode {
 // added to the free list.
 typedef struct {
     Blimp *blimp;
+    PoolAllocator base;
     SymbolNode *free_nodes;
 } SymbolMapAllocator;
 
@@ -187,13 +188,7 @@ typedef struct {
         // the traversal once we have visited all the entries in the map.
 } SymbolMapIterator;
 
-static inline void SymbolMapAllocator_Init(
-    Blimp *blimp, SymbolMapAllocator *alloc)
-{
-    alloc->blimp = blimp;
-    alloc->free_nodes = NULL;
-}
-
+PRIVATE void SymbolMapAllocator_Init(Blimp *blimp, SymbolMapAllocator *alloc);
 PRIVATE void SymbolMapAllocator_Destroy(SymbolMapAllocator *alloc);
 PRIVATE Status SymbolMap_Init(SymbolMap *map, SymbolMapAllocator *alloc);
 PRIVATE void SymbolMap_Destroy(SymbolMap *map);

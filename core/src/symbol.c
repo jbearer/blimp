@@ -168,9 +168,10 @@ static Status SymbolMapAllocator_Alloc(
     SymbolMapAllocator *alloc, SymbolNode **node)
 {
     if (alloc->free_nodes == NULL) {
-        TRY(Malloc(alloc->blimp,
-            sizeof(SymbolNode) +
-            SYMBOL_MAP_FANOUT*sizeof(SymbolNodeEntry), node));
+        *node = (SymbolNode *)PoolAllocator_Alloc(&alloc->base);
+        if (*node == NULL) {
+            return Error(alloc->blimp, BLIMP_OUT_OF_MEMORY);
+        }
         (*node)->sub_trees = 0;
     } else {
         *node = alloc->free_nodes;
@@ -195,6 +196,18 @@ static Status SymbolMapAllocator_Alloc(
     return BLIMP_OK;
 }
 
+void SymbolMapAllocator_Init(Blimp *blimp, SymbolMapAllocator *alloc)
+{
+    alloc->blimp = blimp;
+    alloc->free_nodes = NULL;
+    PoolAllocator_Init(
+        &alloc->base,
+        sizeof(SymbolNode) + SYMBOL_MAP_FANOUT*sizeof(SymbolNodeEntry),
+        blimp->options.gc_batch_size,
+        // No GC or one-time initializer.
+        0, NULL, NULL, NULL);
+}
+
 void SymbolMapAllocator_Destroy(SymbolMapAllocator *alloc)
 {
     while (alloc->free_nodes != NULL) {
@@ -205,8 +218,10 @@ void SymbolMapAllocator_Destroy(SymbolMapAllocator *alloc)
             // the allocated node and adds them to the list of free nodes. If
             // we didn't do this we would leak any attached sub-trees when we
             // free the node.
-        free(node);
+        PoolAllocator_Free(&alloc->base, node);
     }
+
+    PoolAllocator_Destroy(&alloc->base);
 }
 
 Status SymbolMap_Init(SymbolMap *map, SymbolMapAllocator *alloc)
