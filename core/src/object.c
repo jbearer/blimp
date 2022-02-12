@@ -52,6 +52,25 @@ static inline bool Scope_Next(
     return false;
 }
 
+typedef SymbolMapEmplacement ScopeEmplacement;
+
+static inline Status Scope_Emplace(
+    Scope *scope, const Symbol *sym, ScopeEmplacement *empl)
+{
+    return SymbolMap_Emplace(scope, sym, empl);
+}
+
+static inline void Scope_CommitEmplace(
+    Scope *scope, ScopeEmplacement *empl)
+{
+    SymbolMap_CommitEmplace(scope, empl);
+}
+
+static inline void Scope_AbortEmplace(Scope *scope, ScopeEmplacement *empl)
+{
+    SymbolMap_AbortEmplace(scope, empl);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // ObjectPool
 //
@@ -1493,6 +1512,9 @@ static void MarkReachable(ObjectPool *pool)
         for (size_t i = 0; i < obj->owned_captures; ++i) {
             Ref *ref = DBMap_Resolve(&obj->captures, i);
             if (ref != NULL) {
+                assert(ref->owner == obj);
+                    // Captured messages are always directly owned.
+
                 Object *captured = ref->to;
                 assert(!Object_IsFree(captured));
 
@@ -1692,6 +1714,8 @@ void ObjectPool_DumpHeap(FILE *f, ObjectPool *pool, bool include_reachable)
             for (size_t i = 0; i < sobj->owned_captures; ++i) {
                 Ref *ref = DBMap_Resolve(&sobj->captures, i);
                 if (ref != NULL) {
+                    assert(ref->owner == sobj);
+                        // Captured messages are always directly owned.
                     if (include_reachable ||
                         (IsGC_Object(ref->to) &&
                             !((GC_Object *)ref->to)->reached))
@@ -1773,14 +1797,20 @@ static void FreeObject(GC_Object *obj, bool recursive)
         for (ScopeIterator it = Scope_Iterator(&sobj->scope);
              Scope_Next(&sobj->scope, &it, &sym, &ref);
         ) {
-            ReleaseRef((GC_Object *)sobj, ref);
-            FreeRef(blimp, ref);
+            if (ref->owner == sobj) {
+                // Only release the object if we are the owner (not if this is a
+                // forwarding reference to an object owned by our parent).
+                ReleaseRef((GC_Object *)sobj, ref);
+                FreeRef(blimp, ref);
+            }
         }
 
         // Release our reference to our captured messages.
         for (size_t i = 0; i < sobj->owned_captures; ++i) {
             Ref *ref = DBMap_Resolve(&sobj->captures, i);
             if (ref != NULL) {
+                assert(ref->owner == sobj);
+                    // We own all of our captured messages.
                 ReleaseRef((GC_Object *)sobj, ref);
                 FreeRef(blimp, ref);
             }
@@ -1865,6 +1895,9 @@ void BlimpObject_ForEachChild(
     for (size_t i = 0; i < sobj->owned_captures; ++i) {
         Ref *ref = DBMap_Resolve(&sobj->captures, i);
         if (ref != NULL) {
+            assert(ref->owner == sobj);
+                // Captured messages are always directly owned.
+
             const Symbol *sym;
             if (Blimp_GetSymbol(blimp, "<capture>", &sym) == BLIMP_OK) {
                 func(blimp, obj, sym, ref->to, arg);
@@ -1878,8 +1911,12 @@ void BlimpObject_ForEachChild(
     for (ScopeIterator it = Scope_Iterator(&sobj->scope);
          Scope_Next(&sobj->scope, &it, &sym, &ref);
     ) {
-        Object *child = ref->to;
-        func(blimp, obj, sym, child, arg);
+        if (ref->owner == sobj) {
+            // Only visit directly owned objects, ignoring forwarding references
+            // to objects owned by our parent.
+            Object *child = ref->to;
+            func(blimp, obj, sym, child, arg);
+        }
     }
 }
 
@@ -1954,22 +1991,29 @@ static Status ScopedObject_New(
     return BLIMP_OK;
 }
 
-static Ref *Lookup(ScopedObject *obj, const Symbol *sym, ScopedObject **owner)
+static Ref *Lookup(ScopedObject *obj, const Symbol *sym)
 {
-    ScopedObject *curr = obj;
-    while (curr) {
-        Ref *ret = Scope_Lookup(&curr->scope, sym);
-        if (ret && ret->to) {
-            if (owner) {
-                *owner = curr;
-            }
-            return ret;
-        } else {
-            curr = curr->parent;
+    Ref *ref = Scope_Lookup(&obj->scope, sym);
+    if (ref == NULL || ref->to == NULL) {
+        if (obj->parent == NULL) {
+            return NULL;
         }
+
+        // If we don't have a Ref for this symbol, check if our parent does,
+        // recursively.
+        ref = Lookup(obj->parent, sym);
+        if (ref == NULL) {
+            return NULL;
+        }
+        CHECK(Scope_Update(&obj->scope, sym, ref));
+            // If we got an Ref by checking in a parent scope, cache the Ref in
+            // our scope so that next time we access it, we won't have to
+            // traverse parent pointers.
     }
 
-    return NULL;
+    assert(ref != NULL);
+    assert(ref->to != NULL);
+    return ref;
 }
 
 bool ScopedObject_Lookup(
@@ -1979,13 +2023,16 @@ bool ScopedObject_Lookup(
     ScopedObject **owner,
     bool *is_const)
 {
-    Ref *ref = Lookup(obj, sym, owner);
+    Ref *ref = Lookup(obj, sym);
     if (ref == NULL) {
         return false;
     }
 
     if (ret != NULL) {
         *ret = ref->to;
+    }
+    if (owner != NULL) {
+        *owner = ref->owner;
     }
     if (is_const != NULL) {
         *is_const = ref->is_const;
@@ -1995,7 +2042,7 @@ bool ScopedObject_Lookup(
 
 Status ScopedObject_Get(ScopedObject *obj, const Symbol *sym, Object **ret)
 {
-    Ref *value = Lookup(obj, sym, NULL);
+    Ref *value = Lookup(obj, sym);
     if (value) {
         *ret = value->to;
         return BLIMP_OK;
@@ -2012,8 +2059,7 @@ Status ScopedObject_Set(ScopedObject *obj, const Symbol *sym, Object *val)
     Blimp *blimp = Object_Blimp((Object *)obj);
 
     // If the symbol is already in scope, update the existing value.
-    ScopedObject *owner;
-    Ref *ref = Lookup(obj, sym, &owner);
+    Ref *ref = Lookup(obj, sym);
     if (ref) {
         if (ref->is_const) {
             return RuntimeErrorMsg(
@@ -2022,7 +2068,7 @@ Status ScopedObject_Set(ScopedObject *obj, const Symbol *sym, Object *val)
         }
 
         if (ref->to) {
-            ReleaseRef((GC_Object *)owner, ref);
+            ReleaseRef((GC_Object *)ref->owner, ref);
                 // This scope owned a reference to the existing value. After
                 // this operation, the old value will no longer be reachable
                 // through this scope, so we have to release our reference.
@@ -2031,17 +2077,20 @@ Status ScopedObject_Set(ScopedObject *obj, const Symbol *sym, Object *val)
         ref->to = val;
             // Reinitialize the reference to point to the new value.
 
-        BorrowRef((GC_Object *)owner, ref);
+        BorrowRef((GC_Object *)ref->owner, ref);
             // Borrow the new value on behalf of the existing owner of the scope
             // entry.
     } else if ((ref = Scope_Lookup(&obj->scope, sym)) != NULL) {
+        assert(ref->owner == NULL);
         assert(ref->to == NULL);
         assert(!ref->is_const);
+        ref->owner = obj;
         ref->to = val;
         BorrowRef((GC_Object *)obj, ref);
     } else {
         // Otherwise, add it to the innermost scope.
         TRY(AllocRef(blimp, &ref));
+        ref->owner = obj;
         ref->to = val;
         ref->is_const = false;
         ref->reserved = false;
@@ -2065,6 +2114,7 @@ Status ScopedObject_CaptureMessage(ScopedObject *obj, Object *message)
             return Reraise(blimp);
         }
 
+        ref->owner = obj;
         ref->to = message;
         BorrowRef((GC_Object *)obj, ref);
     } else {
@@ -2132,6 +2182,7 @@ static Status ScopedObject_Reserve(
             }
         } else {
             TRY(AllocRef(Object_Blimp((Object *)obj), &ref));
+            ref->owner = NULL;
             ref->to = NULL;
             ref->reserved = true;
             ref->is_const = false;
@@ -2144,7 +2195,7 @@ static Status ScopedObject_Reserve(
 
 static void ScopedObject_Freeze(ScopedObject *obj, const Symbol *sym)
 {
-    Ref *ref = Lookup(obj, sym, NULL);
+    Ref *ref = Lookup(obj, sym);
     if (ref != NULL && ref->reserved) {
         ref->is_const = true;
     }

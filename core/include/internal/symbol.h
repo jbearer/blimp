@@ -149,23 +149,24 @@ typedef struct {
 // SymbolMapEmplacement contains data required to undo an emplace operation in
 // the case of SymbolMap_AbortEmplace().
 typedef struct {
-    void **value;
-        // A pointer to the emplaced value.
+    SymbolNodeEntry *entry;
+        // The entry where the symbol was emplaced.
+    void *old_value;
+        // The old value of `entry`, in case we have to abort.
     SymbolNodeEntry *evicted_sibling;
         // If the emplacement caused a unique symbol to be replaced by a
         // sub-tree containing two symbols, we store the entry that originally
         // contained the unique symbol, so we can restore it to a unique symbol
         // in the case of an abort.
-    SymbolNodeEntry *new_sibling;
-        // If `evicted_sibling` is set, `new_sibling` is the node the evicted
-        // sibling was moved to, so that we can restore its contents to
-        // `evicted_sibling` in the case of an abort.
+    SymbolNode *evicted_from;
+        // The parent of `evicted_sibling`, or `NULL` if `evicted_sibling` is
+        // the root of the tree. Used to clear the sub-tree bit for
+        // `evicted_sibling` in `evicted_from` if we abort and change
+        // `evicted_sibling` back to a unique symbol entry.
     SymbolNode *added_to_parent;
         // If the emplacement caused a new unique symbol entry to be added to a
         // parent node, the parent node is stored here so we can reset the
         // parent's `first` index if we abort the emplacement.
-    uint32_t old_parent_first;
-        // The old value of `added_to_parent->first`, if applicable.
     bool created;
         // Whether a new entry was created (`true`) or an old one updated
         // (`false`).
@@ -201,7 +202,7 @@ static inline void **SymbolMap_CommitEmplace(
     if (empl->created) {
         ++map->size;
     }
-    return empl->value;
+    return &empl->entry->value;
 }
 
 static inline Status SymbolMap_Update(

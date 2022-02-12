@@ -183,6 +183,7 @@ static Status SymbolMapAllocator_Alloc(
         // through and deallocate any sub-trees belonging to this node.
         while ((*node)->sub_trees != 0) {
             size_t index = __builtin_ctzl((*node)->sub_trees);
+            assert((*node)->entries[index].type == ENTRY_TYPE_SUB_TREE);
             SymbolMapAllocator_Free(alloc, (*node)->entries[index].value);
             (*node)->sub_trees &= ~((uintptr_t)1 << index);
         }
@@ -259,7 +260,8 @@ Status SymbolMap_Emplace(
                     // Case 1: it is the symbol we are emplacing. In this case,
                     // we just get a pointer to the value. This is an update,
                     // not an insert.
-                    empl->value = &curr->value;
+                    empl->entry = curr;
+                    empl->old_value = curr->value;
                     empl->created = false;
                     return BLIMP_OK;
                 } else {
@@ -281,7 +283,7 @@ Status SymbolMap_Emplace(
                     // the symbol indices.
                     SymbolNode *new_node;
                     TRY(SymbolMapAllocator_Alloc(map->alloc, &new_node));
-                    if (empl->evicted_sibling == NULL) {
+                    if (!empl->evicted_sibling) {
                         // Note the location of the entry which is getting
                         // moved, in case we have to abort this emplacement and
                         // move it back.
@@ -291,13 +293,8 @@ Status SymbolMap_Emplace(
                         // from a higher sub-tree in a previous iteration of
                         // this loop, we want it to get moved all the way back
                         // there when we abort.
-                        //
-                        // However, we will set `empl->new_sibling`
-                        // unconditionally below, once we allocate a new entry
-                        // to store the evicted sibling. This way, `new_sibling`
-                        // always points at the _final_ location of the evicted
-                        // sibling if and when we go to move it back.
                         empl->evicted_sibling = curr;
+                        empl->evicted_from = parent;
                     }
                     // Move the existing symbol's entry down into the sub-tree.
                     size_t new_entry_index =
@@ -308,7 +305,6 @@ Status SymbolMap_Emplace(
                     new_entry->type = ENTRY_TYPE_SYMBOL;
                     new_entry->index = curr->index;
                     new_entry->value = curr->value;
-                    empl->new_sibling = new_entry;
                     // Add `new_entry` to `new_node`s list of children. It is
                     // the only entry, so it's `to_next` field is 0 to indicate
                     // the end of the list.
@@ -356,15 +352,17 @@ Status SymbolMap_Emplace(
                 // allocating a new sub-tree.
                 curr->type = ENTRY_TYPE_SYMBOL;
                 curr->index = sym->index;
-                empl->value = &curr->value;
+                empl->entry = curr;
+                empl->old_value = NULL;
+                    // This is an insert, there was no old value.
 
-                // Add `curr` as a non-empty child of its parent.
                 if (parent != NULL) {
-                    // Save the old value of `parent->first` in case we have to
-                    // revert this emplacement.
+                    // Save the parent of the newly inserted entry in case we
+                    // have to revert this emplacement and remove the new entry
+                    // from `parent`s list of non-empty entries.
                     empl->added_to_parent = parent;
-                    empl->old_parent_first = parent->first;
 
+                    // Add `curr` as a non-empty child of its parent.
                     ptrdiff_t curr_index = curr - parent->entries;
                     assert(0 <= curr_index
                         && curr_index < (ptrdiff_t)SYMBOL_MAP_FANOUT);
@@ -386,28 +384,71 @@ Status SymbolMap_Emplace(
         map->alloc->blimp, BLIMP_ERROR, "unreachable in SymbolMap_Emplace");
 }
 
+static void FlattenSingletonSubtree(
+    SymbolMap *map, SymbolNode *parent, SymbolNodeEntry *entry)
+{
+    assert(entry->type != ENTRY_TYPE_EMPTY);
+        // An empty sub-tree is not a singleton sub-tree.
+    if (entry->type == ENTRY_TYPE_SYMBOL) {
+        // The sub-tree is already flat.
+        return;
+    }
+    assert(entry->type == ENTRY_TYPE_SUB_TREE);
+
+    SymbolNode *sub_tree = entry->value;
+    SymbolNodeEntry *sub_entry = &sub_tree->entries[sub_tree->first];
+    assert(sub_entry->type != ENTRY_TYPE_EMPTY);
+        // `first` should never point to an empty entry.
+    assert(sub_entry->to_next == 0);
+        // The sub-tree must be a singleton.
+    FlattenSingletonSubtree(map, sub_tree, sub_entry);
+
+    // Move the `sub_entry`, which now represents the unique symbol in
+    // `sub_tree`, into `entry`, so we can delete `sub_tree`.
+    assert(sub_entry->type == ENTRY_TYPE_SYMBOL);
+    entry->type = ENTRY_TYPE_SYMBOL;
+    entry->index = sub_entry->index;
+    entry->value = sub_entry->value;
+    assert(sub_tree->sub_trees == 0);
+        // The recursive call should have cleared the bit representing the
+        // sub-tree we just flattened, which should have been the last sub-tree
+        // under `sub_tree`.
+    SymbolMapAllocator_Free(map->alloc, sub_tree);
+
+    if (parent != NULL) {
+        // Clear the sub-tree bit for this entry in `parent`.
+        parent->sub_trees &= ~((uintptr_t)1 << parent->first);
+    }
+}
+
 void SymbolMap_AbortEmplace(SymbolMap *map, SymbolMapEmplacement *empl)
 {
-    if (empl->evicted_sibling != NULL) {
-        assert(empl->evicted_sibling->type == ENTRY_TYPE_SUB_TREE);
-            // The location whence the sibling was evicted must now be a
-            // sub-tree, since we evicted it to add another symbol under the
-            // same slot.
-        assert(empl->new_sibling != NULL);
-        assert(empl->new_sibling->type == ENTRY_TYPE_SYMBOL);
-            // The final location of the evicted symbol must be a unique symbol.
+    empl->entry->value = empl->old_value;
+    if (empl->created) {
+        // If we created a new entry, we must remove it when we abort.
+        assert(empl->entry->type == ENTRY_TYPE_SYMBOL);
+        empl->entry->type = ENTRY_TYPE_EMPTY;
 
-        SymbolMapAllocator_Free(map->alloc, empl->evicted_sibling->value);
-            // We allocated a sub-tree for this emplacement. Since we're
-            // aborting we can free it.
-
-        // Restore the original location of the sibling which was evicted.
-        empl->evicted_sibling->index = empl->new_sibling->index;
-        empl->evicted_sibling->value = empl->new_sibling->value;
-        empl->evicted_sibling->type = ENTRY_TYPE_SYMBOL;
+        // If there was a parent node, we must have added the new entry to its
+        // non-empty child list. We need to remove it now.
+        if (empl->added_to_parent != NULL) {
+            // Compute the index of the old first entry, by finding the absolute
+            // index of the added entry, then using the offset to its successor
+            // to find the absolute index of the successor entry.
+            ptrdiff_t entry_index = empl->entry - empl->added_to_parent->entries;
+            assert(0 <= entry_index && (size_t)entry_index < SYMBOL_MAP_FANOUT);
+            ptrdiff_t succ_index = entry_index + empl->entry->to_next;
+            assert(0 <= succ_index && (size_t)succ_index < SYMBOL_MAP_FANOUT);
+            empl->added_to_parent->first = succ_index;
+        }
+    } else {
+        assert(empl->added_to_parent == NULL);
+            // We cannot have added a new entry to the parent node's non-empty
+            // list if we didn't create a new entry.
     }
-    if (empl->added_to_parent != NULL) {
-        empl->added_to_parent->first = empl->old_parent_first;
+
+    if (empl->evicted_sibling != NULL) {
+        FlattenSingletonSubtree(map, empl->evicted_from, empl->evicted_sibling);
     }
 }
 

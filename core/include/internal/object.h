@@ -245,6 +245,7 @@ typedef struct {
 typedef SymbolMap Scope;
 
 typedef struct Ref {
+    struct ScopedObject *owner;
     Object *to;
     bool reserved;
     bool is_const;
