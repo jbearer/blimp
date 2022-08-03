@@ -14,6 +14,10 @@
 
 (module+ test
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; runtime semantics
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 ; Eval a symbol literal
 (check-equal?
     (judgment-holds
@@ -119,6 +123,87 @@
             H x)
         x)
     '(bar)
+)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; built-in grammar
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; parsing an empty symbol
+(check-equal?
+    (judgment-holds
+        (run-bl:mp (a a) H (obj r x e))
+        e
+    )
+    '(||)
+)
+
+; parsing a non-empty symbol
+(check-equal?
+    (judgment-holds
+        (run-bl:mp (a b c a) H (obj r x e))
+        e
+    )
+    '(bc)
+)
+
+; parsing a block
+(check-equal?
+    (judgment-holds
+        (run-bl:mp (|\| x |\| |`| x |`|) H (obj r x e))
+        e
+    )
+    '((block x x))
+)
+
+; parsing a send
+(check-equal?
+    (judgment-holds
+        (run-bl:mp (< |`| x |`| |`| y |`|) H (obj r x e))
+        e
+    )
+    '((x y))
+)
+
+; parsing an identity overlay
+(check-equal?
+    (judgment-holds
+        (run-bl:mp (> |\| x |\| |`| x |`| < |`| x |`| |`| y |`|) H (obj r x e))
+        e
+    )
+    '((x y))
+)
+
+; an overlay that modifies the input stream, skipping every other character
+(check-equal?
+    (judgment-holds
+        ; \g -> \p s -> g p $ \a -> (s a; s a)
+        (run-bl:mp (
+            > |\| g |\| |\| s |\| |\| p |\|
+                < < |`| g |`|
+                    |\| a |\|
+                        |;| < |`| s |`| |`| a |`|
+                            < |`| s |`| |`| a |`|
+                    |`| p |`|
+              a < a |`| a x a |`| a |`| a y a |`|
+        ) H (obj r x e))
+        e
+    )
+    '((x y ))
+)
+
+; an overlay that modifies the previous grammar by prepending a character before each production
+(check-equal?
+    (judgment-holds
+        (run-bl:mp (
+            > |\| g |\| |\| s |\| |\| p |\|
+                    |;| < |`| s |`| |`| a |`|
+                        < < |`| g |`| |`| s |`| |`| p |`|
+              a |\| x |\| a |`| x |`|
+        ) H (obj r x e))
+        e
+    )
+    '((block x x))
 )
 
 )

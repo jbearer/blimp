@@ -1,0 +1,3 @@
+[submodule "submodules/coq-record-update"]
+	path = submodules/coq-record-update
+	url = https://github.com/tchajed/coq-record-update.git

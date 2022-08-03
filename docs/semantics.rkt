@@ -4,6 +4,7 @@
     bl:mp
     bl:mp-machine
 
+    run-bl:mp
     eval
     new-machine
     steps-to)
@@ -110,12 +111,16 @@
 
     (e ::= ....
         (value v)
-        (primitive-set r x e))
+        (primitive-set r x e)
+        input         ; Take a character from the built-in input stream
+        (grammar e e) ; The built-in grammar overlay.
+    )
 
     ; Values: the final result of evaluating a bl:mp expression.
     (v ::=
         x               ; A symbol object
-        (obj r x e))    ; A block with reference-to-scope:r parameter:x body:e
+        (obj r x e)     ; A block with reference-to-scope:r parameter:x body:e
+    )
 
     ; Scope: map from symbols to values.
     ;
@@ -140,6 +145,9 @@
     ; should always be greater than the maximum of all the references in the heap.
     (H r (r -> S : H))
     (r number)              ; References are just numbers
+
+    ; Input: the input program being evaluated, as a sequence of characters.
+    (I (x ...))
 
     #:binding-forms
     (obj r x e #:refers-to x)
@@ -335,74 +343,98 @@
 ;;
 
 (define-judgment-form bl:mp-machine
-    #:mode     (steps-to I I I O O)
-    #:contract (steps-to H r e H v)
-    ; (steps-to H_1 r e H_2 v) holds if `e` evaluates to `v` in the scope `r` given initial heap
-    ; `H_1`, and the new heap is `H_2`.
+    #:mode     (steps-to I I I I I O O O)
+    #:contract (steps-to H I v r e H I v)
+    ; (steps-to H_1 I_1 v_G r e H_2 I_2 v) holds if `e` evaluates to `v` in the scope `r` given
+    ; initial heap `H_1`, input stream `I_1`, and grammar overlay v_G. The new heap is `H_2` and the
+    ; updated input stream is `I_2`.
 
     ; A symbol is a primitive: just create a new symbol object.
     [
     -----------------------------------------------------
-      (steps-to H r x H x)
+      (steps-to H I v_G r x H I x)
     ]
 
     ; To evaluate a block, allocate a scope for it and return a new object.
-    [ (new H_1 r_parent                         H_2 r_scope)
+    [ (new-block H_1 r_parent x e H_2 v)
     --------------------------------------------------------------------------
-      (steps-to H_1 r_parent (block x e)    H_2 (obj r_scope x e))
+      (steps-to H_1 I v_G r_parent (block x e) H_2 I v)
     ]
 
     ; To evaluate a message sent to an object,
-    [ (steps-to H_1 r e_rcv H_2 (obj r_scope x e))
+    [ (steps-to H_1 I_1 v_G r e_rcv H_2 I_2 (obj r_scope x e))
             ; first evaluate the receier
-      (steps-to H_2 r e_msg H_3 v_msg)
+      (steps-to H_2 I_2 v_G r e_msg H_3 I_3 v_msg)
             ; and then the message
-      (steps-to H_3 r_scope (substitute e x (value v_msg)) H_4 v_result)
+      (steps-to H_3 I_3 v_G r_scope (substitute e x (value v_msg)) H_4 I_4 v_result)
             ; Evaluate the body.
     -------------------------------------------------------------------------
-      (steps-to H_1 r (e_rcv e_msg) H_4 v_result)
+      (steps-to H_1 I_1 v_G r (e_rcv e_msg) H_4 I_4 v_result)
     ]
 
     ; To evaluate a message sent to a symbol which is in scope,
-    [ (steps-to H_1 r e_rcv H_2 x)
+    [ (steps-to H_1 I_1 v_G r e_rcv H_2 I_2 x)
             ; first evaluate the receiver
       (get H_2 r x v)
             ; get the symbol's value
-      (steps-to H_2 r ((value v) e_msg) H_3 v_result)
+      (steps-to H_2 I_2 v_G r ((value v) e_msg) H_3 I_3 v_result)
             ; and then send the message to that value
     -------------------------------------------------------------------------
-      (steps-to H_1 r (e_rcv e_msg) H_3 v_result)
+      (steps-to H_1 I_1 v_G r (e_rcv e_msg) H_3 I_3 v_result)
     ]
 
     ; To evaluate a message sent to a symbol which is not in scope,
-    [ (steps-to H_1 r e_rcv H_2 x)
+    [ (steps-to H_1 I_1 v_G r e_rcv H_2 I_2 x)
             ; first evaluate the receier
       (side-condition (¬ (in-scope H_2 r x)))
             ; check that the symbol does not exist
-      (steps-to H_2 r (e_msg (block freshvar (primitive-set r x freshvar))) H_3 v_result)
+      (steps-to H_2 I_2 v_G r (e_msg (block freshvar (primitive-set r x freshvar))) H_3 I_3 v_result)
             ; create a reference which can be used to set the value of the symbol, and pass it to
             ; the message, which will act as a constructor for the symbol
     -------------------------------------------------------------------------
-      (steps-to H_1 r (e_rcv e_msg) H_3 v_result)
+      (steps-to H_1 I_1 v_G r (e_rcv e_msg) H_3 I_3 v_result)
     ]
 
     [
     ----------------------------------
-      (steps-to H r (value v) H v)
+      (steps-to H I v_G r (value v) H I v)
     ]
 
     [
       (set H_1 r_capture x v H_2)
     ------------------------------------------------------------------
-      (steps-to H_1 r (primitive-set r_capture x (value v)) H_2 x)
+      (steps-to H_1 I v_G r (primitive-set r_capture x (value v)) H_2 I x)
+    ]
+
+    [
+    ----------------------------------------------------
+      (steps-to H (x x_s ...) v_G r input H (x_s ...) x)
+    ]
+
+    [ (steps-to H_1 I_1 v_G r e_g H_2 I_2 v_g)
+      (steps-to H_2 I_2 v_G r e_s H_3 I_3 v_s)
+      (built-in-parse H_3 I_3 v_G r v_g v_s H_4 I_4 v_result)
+    ------------------------------------------------------------------------
+      (steps-to H_1 I_1 v_G r (grammar e_g e_s) H_4 I_4 v_result)
     ]
 
     ; A `seq` evaluates the first expression only for its effects on the environment, and then
     ; evaluates the second expression for its result.
-    [ (steps-to H_1 r e_1                   H_2 v_1 )
-      (steps-to H_2 r e_2                   H_3 v_2 )
+    [ (steps-to H_1 I_1 v_G r e_1                   H_2 I_2 v_1 )
+      (steps-to H_2 I_2 v_G r e_2                   H_3 I_3 v_2 )
     ----------------------------------------------------------
-      (steps-to H_1 r (seq e_1 e_2)         H_3 v_2 )
+      (steps-to H_1 I_1 v_G r (seq e_1 e_2)         H_3 I_3 v_2 )
+    ]
+)
+
+(define-judgment-form bl:mp-machine
+    #:mode     (new-block I I I I O O)
+    #:contract (new-block H r x e H v)
+
+    ; To evaluate a block, allocate a scope for it and return a new object.
+    [ (new H_1 r_parent H_2 r_scope)
+    -----------------------------------------------
+      (new-block H_1 r_parent x e H_2 (obj r_scope x e))
     ]
 )
 
@@ -421,17 +453,163 @@
 (define-judgment-form bl:mp-machine
     #:mode     (eval I O O)
     #:contract (eval e H v)
-    ; (eval e H v) holds if `e` evaluates to `v` in the global scope with an empty eap, and the
-    ; resulting Heap is `H`.
+    ; (eval e H v) holds if `e` evaluates to `v` in the global scope with an empty heap and the
+    ; built-in grammar overlay, and the resulting Heap is `H`.
     ;
     ; This is the top-level entrypoint for evaluating complete bl:mp programs.
 
-    [ (new-machine H r_global)
-      (steps-to H r_global e H_2 v)
+    [ (new-machine H r)
+      (steps-to H () (obj r g (block s (grammar g s))) r e H_3 I v)
     ----------------------------------
-      (eval e H_2 v)
+      (eval e H_3 v)
     ]
 
+)
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Parsing
+;;
+
+(define-judgment-form bl:mp-machine
+    #:mode     (parse I I I I I O O O)
+    #:contract (parse H I v r v H I v)
+
+    [
+      (steps-to H I v_G r ((value v_G) (value v_s)) H_1 I_1 v_g)
+      (steps-to H_1 I_1 v_G r (((Z()) (value v_g)) a) H_r I_r v_r)
+    ----------------------------------------------------------------
+      (parse H I v_G r v_s H_r I_r v_r)
+    ]
+)
+
+(define-judgment-form bl:mp-machine
+    #:mode     (parse-sub-expr I I I I I I O O O)
+    #:contract (parse-sub-expr H I v r v v H I e)
+
+    [ (steps-to H I v_G r ((value v_g) a) H_r I_r (obj r_r x_r e_r))
+    ---------------------------------------------------------------------------
+      (parse-sub-expr H I v_G r v_g v_s H_r I_r e_r)
+    ]
+
+)
+
+(define-judgment-form bl:mp-machine
+    #:mode     (built-in-parse I I I I I I O O O)
+    #:contract (built-in-parse H I v r v v H I v)
+
+    [ (steps-to H I v_G r ((value v_s) a) H_1 I_1 x)
+      (built-in-parse-tail x H_1 I_1 v_G r v_g v_s H_r I_r v_r)
+    ---------------------------------------
+      (built-in-parse H I v_G r v_g v_s H_r I_r v_r)
+    ]
+
+    [ (steps-to H I v_G r ((value v_s) a) H_r I_r v_r)
+      (side-condition (¬(symbol v_r)))
+    --------------------------------------
+      (built-in-parse H I v_G r v_g v_s H_r I_r v_r)
+    ]
+)
+
+(define-judgment-form bl:mp-machine
+    #:mode     (built-in-parse-tail I I I I I I I O O O)
+    #:contract (built-in-parse-tail x H I v r v v H I v)
+
+    [
+      (parse-sub-expr H I v_G r v_g v_s H_1 I_1 e_O)
+      (steps-to H_1 I_1 v_G r (e_O (value v_G)) H_2 I_2 v_G2)
+      (parse H_2 I_2 v_G2 r v_s H_r I_r v_r)
+    ---------------------------------------------------------
+      (built-in-parse-tail |>| H I v_G r v_g v_s H_r I_r v_r)
+    ]
+
+    [ (parse-sub-expr H I v_G r v_g v_s H_1 I_1 e_rcv)
+      (parse-sub-expr H_1 I_1 v_G r v_g v_s H_2 I_2 e_msg)
+      (new-block H_2 r a (e_rcv e_msg) H_r v_r)
+    ---------------------------------------------------------------
+      (built-in-parse-tail |<| H I v_G r v_g v_s H_r I_2 v_r)
+    ]
+
+    [ (built-in-parse-symbol |\| H I v_G r v_s H_1 I_1 x_msg)
+      (parse-sub-expr H_1 I_1 v_G r v_g v_s H_2 I_2 e_body)
+      (new-block H_2 r a (block x_msg e_body) H_r v_r)
+    -----------------------------------------------------------------------------------
+      (built-in-parse-tail |\| H I v_G r v_g v_s H_r I_2 v_r)
+    ]
+
+    [ (parse-sub-expr H I v_G r v_g v_s H_1 I_1 e_1)
+      (parse-sub-expr H_1 I_1 v_G r v_g v_s H_2 I_2 e_2)
+      (new-block H_2 r a (seq e_1 e_2) H_r v_r)
+    ---------------------------------------------------------------
+      (built-in-parse-tail |;| H I v_G r v_g v_s H_r I_2 v_r)
+    ]
+
+    [ (side-condition (¬(special-char x)))
+      (built-in-parse-symbol x H I v_G r v_s H_1 I_1 x_sym)
+      (new-block H_1 r a x_sym H_r v_r)
+    ----------------------------------------------------------------------------------
+      (built-in-parse-tail x H I v_G r v_g v_s H_r I_1 v_r)
+    ]
+)
+
+(define-judgment-form bl:mp-machine
+    #:mode     (built-in-parse-symbol I I I I I I O O O)
+    #:contract (built-in-parse-symbol x H I v r v H I v)
+
+    [ (steps-to H I v_G r ((value v_s) a) H_r I_r x_quote)
+      (side-condition (done x_quote))
+    ---------------------------------------------------------------
+      (built-in-parse-symbol x_quote H I v_G r v_s H_r I_r ||)
+    ]
+
+    [ (steps-to H I v_G r ((value v_s) a) H_1 I_1 x_c)
+      (side-condition (¬(= x_c x_quote)))
+      (built-in-parse-symbol x_quote H_1 I_1 v_G r v_s H_r I_r x_tail)
+      (where v_r (sym-append x_c x_tail))
+    --------------------------------------------------------------------
+      (built-in-parse-symbol x_quote H I v_G r v_s H_r I_r v_r)
+    ]
+)
+
+(define-judgment-form bl:mp-machine
+    #:mode     (run-bl:mp I O O)
+    #:contract (run-bl:mp I H v)
+
+    [ (new-machine H r)
+      (parse H I (obj r s (block g (block a (grammar g s)))) r (obj r a input) H_r I_r v_r)
+    ----------------------------------
+      (run-bl:mp I H_r v_r)
+    ]
+)
+
+(define-metafunction bl:mp
+    Z : () -> e
+    [(Z()) (block g ((block x (g (block v ((x x) v)))) (block x (g (block v ((x x) v))))))]
+)
+
+(define-metafunction bl:mp
+    special-char : x -> boolean
+
+    [(special-char |>|) #t]
+    [(special-char |<|) #t]
+    [(special-char |\|) #t]
+    [(special-char x) #f]
+)
+
+(define-metafunction bl:mp-machine
+    symbol : v -> boolean
+
+    [(symbol x) #t]
+    [(symbol v) #f]
+)
+
+(define-metafunction bl:mp
+    sym-append : x x -> x
+
+    [(sym-append x_1 x_2) ,(string->symbol
+        (string-append
+            (symbol->string (term x_1))
+            (symbol->string (term x_2)))
+    )]
 )
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -448,4 +626,18 @@
     ¬ : boolean -> boolean
     [(¬ #t) #f]
     [(¬ #f) #t]
+)
+
+(define-metafunction bl:mp
+    = : any any -> boolean
+    [(= any any) #t]
+    [(= any_1 any_2) #f]
+)
+
+(define-metafunction bl:mp
+    trace : x any -> boolean
+    [(trace x any) ,(begin
+        (printf "~a: ~a\n" (term x) (term any))
+        #t
+    )]
 )
