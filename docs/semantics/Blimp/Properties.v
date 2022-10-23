@@ -449,9 +449,9 @@ Lemma parse_symbol'_depth_irrelevance (eval : Expr -> Machine Value)
     parse_symbol' eval' delim stream d' i = parse_symbol' eval delim stream d i.
 Proof.
 (* begin details *)
-revert i.
+revert i stream.
 unfold parse_symbol'.
-induction d; intros i H_final eval' d' H_eval_ex_eq H_ge.
+induction d; intros i stream H_final eval' d' H_eval_ex_eq H_ge.
 { exfalso; inversion H_final. }
 apply S_n_le_m_pred in H_ge as [p [H_eq_d'_S_p H_le]].
 rewrite H_eq_d'_S_p in *.
@@ -483,6 +483,20 @@ crush_blimp.
 (* end details *)
 Qed.
 #[export] Hint Resolve parse_sub_expr'_depth_irrelevance : depth_irrelevance_hints.
+
+Lemma parse_ret'_depth_irrelevance (eval : Expr -> Machine Value)
+                                   (e : Expr) (stream : Value)
+                                   (d : nat) (i : Input) :
+  final (parse_ret' eval e stream d i) ->
+  forall eval' d', eval_ex_eq eval eval' -> d' >= d ->
+    parse_ret' eval' e stream d' i = parse_ret' eval e stream d i.
+Proof.
+(* begin details *)
+unfold parse_ret'.
+intros H_final eval' d' H_eval_ex_eq H_ge.
+auto_blimp.
+Qed.
+#[export] Hint Resolve parse_ret'_depth_irrelevance : depth_irrelevance_hints.
 
 (** **** [eval_depth_irrelevance] *)
 Lemma eval_depth_irrelevance (e : Expr) (d : nat) (i : Input) :
@@ -679,7 +693,10 @@ Qed.
 (** **** [parses]: [parses p e] means [p] terminates and produces the parse tree
 [e] *)
 Inductive parses (p : string) (e : Expr) : Prop :=
-| parses_block : forall a x, returns p (VBlock a x e) -> parses p e
+| parses_block : forall s v d d' s' a x,
+    run_blimp p d = Ok s v ->
+    eval (A $ EValue v) d' (initial_input<|state := s|>) = Ok s' (VBlock a x e) ->
+    parses p e
 .
 Notation "p '~>' e" := (parses p e) (at level 70).
 
@@ -807,4 +824,4 @@ apply direct_loop_diverges'.
 (* end details *)
 Qed.
 
-End Divergence.
+End Divergence.   

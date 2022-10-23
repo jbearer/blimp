@@ -254,8 +254,8 @@ with Primitive : Set :=
   (** Parse the contents of [stream] using the built-in grammar, with
   sub-expressions parsed by [recurse] *)
   | PrimParse (stream : Expr) (recurse : Expr)
-  (** Extract a character from the built-in input stream. *)
-  | PrimInput
+  (** Fail and trigger backtracking *)
+  | PrimFail
 .
 
 (** *** Generic substitution in key-value-like containers. 
@@ -303,7 +303,7 @@ match p with
 | PrimSet addr sym val => PrimSet addr sym (update_expr x f val)
 | PrimParse stream recurse =>
     PrimParse (update_expr x f stream) (update_expr x f recurse)
-| PrimInput => PrimInput
+| PrimFail => PrimFail
 end.
 
 #[export] Instance expr_substitute : Substitute Expr Symbol Value :=
@@ -336,10 +336,9 @@ Definition Heap : Type := Address -> Scope.
 (** **** [State]: global, mutable state *)
 Record State : Type :=
   { heap : Heap
-  ; next_addr : Address
-  ; input : list Symbol }.
+  ; next_addr : Address }.
 #[export] Instance etaState : Settable _ :=
-  settable! Build_State <heap; next_addr; input>.
+  settable! Build_State <heap; next_addr>.
 
 (** **** [Context]: local state *)
 Record Context : Type := { scope : Address; grammar : Value }.
@@ -397,7 +396,7 @@ Notation "m >>= f" :=
 Notation "m >> n" :=
   (bind m $ fun _ => n) (at level 42, right associativity) : blimp_scope.
 Notation "'do' x <- a ; b" :=
-  (bind a (fun x => b)) (at level 100, right associativity) : blimp_scope.
+  (bind a (fun x => b)) (at level 100, x pattern, right associativity) : blimp_scope.
 
 (** **** failure
 
@@ -486,6 +485,12 @@ Definition lookup : Symbol -> Machine (option Value) := fix-machine lookup x =>
   end
 .
 
+(** **** [pair combinators]: construct a pair, destruct with [car] and [cdr] *)
+Definition P (x : Expr) (y : Expr) : Expr :=
+  EBlock "^" $ EChoice (ESend (ESymbol "^") x) y.
+Definition A (p : Expr) : Expr := ESend p (EBlock "^" $ ESymbol "^").
+Definition D (p : Expr) : Expr := ESend p (EBlock "^" $ EPrimitive PrimFail).
+
 (** **** [Z] : a fixpoint combinator on bl:mp objects *)
 Definition Z (g : Expr) : Expr :=
 ESend (EBlock "g" $
@@ -519,10 +524,10 @@ Definition send' (eval : Expr -> Machine Value)
     (** if it is in scope, recursively send the message to the value *)
     | Some rcv' => send (rcv', msg)
     | None =>
-        (** otherwise, intepret [msg] as an initializer for [x], create a setter
+        (** otherwise, interpret [msg] as an initializer for [x], create a setter
         for [x] in the current scope, and send it to [msg] *)
         do a <- reads scope;
-        send (msg, VBlock a "v" $ EPrimitive $ PrimSet a x $ ESymbol "v")
+        send (msg, VBlock a "^" $ EPrimitive $ PrimSet a x $ ESymbol "^")
     end
   | VBlock a x e =>
       (** to send to a block, simply evaluate the body (with [x] replaced by the
@@ -553,29 +558,38 @@ input stream, and interprets the first delimiter character yielded by the stream
 to be the closing delimiter.
 *)
 Definition parse_symbol' (eval : Expr -> Machine Value)
-  (delim : Symbol) (stream : Value) : Machine Symbol :=
+  (delim : Symbol) (stream : Value) : Machine (Symbol * Value) :=
 (fix-machine parse_symbol (delim, stream) =>
   (** send to the stream to read a character of input *)
-  do c <- send' eval stream stream;
+  do c <- eval $ A $ EValue stream;
+  do cs <- eval $ D $ EValue stream;
   match c with
-  | VSymbol x => if x == delim then ret "" else
+  | VSymbol x => if x == delim then ret ("", cs) else
       (** if the character is not the closing delimiter, recursively parse the
       rest of the symbol and then prepend the character *)
-      do xs <- parse_symbol (delim, stream);
-      ret $ append x xs
+      do (xs, cs) <- parse_symbol (delim, cs);
+      ret (append x xs, cs)
   | _ => fail
   end
 ) (delim, stream).
 
+Definition parse_ret' (eval : Expr -> Machine Value)
+                      (e : Expr) (stream : Value) : Machine Value :=
+do tree <- new "^" e;
+eval $ P (EValue tree) (EValue stream).
+
 (** **** parse an expression
 
-Sends [stream] to [parser] and interprets the result as a tethered expression,
-extracting the expression from the body of the block and returning it. *)
+Send [stream] to [parser] and interpret the result as a pair of a tethered
+expression and a new stream. Extract the expression fr  om the body of the block\
+and returning it along with the new stream. *)
 Definition parse_sub_expr' (eval : Expr -> Machine Value)
-  (stream : Value) (parser : Value) : Machine Expr :=
+  (stream : Value) (parser : Value) : Machine (Expr * Value) :=
 do v <- send' eval parser stream;
-match v with
-| VBlock _ _ e => ret e
+do tree <- eval (A $ EValue v);
+do stream <- eval (D $ EValue v);
+match tree with
+| VBlock _ _ e => ret (e, stream)
 | VSymbol _ => fail
 end.
 
@@ -584,6 +598,7 @@ Definition eval : Expr -> Machine Value := fix-machine eval e =>
 let send := send' eval in
 let parse := parse' eval in
 let parse_sub_expr := parse_sub_expr' eval in
+let parse_ret := parse_ret' eval in
 (** [primitive_parse] : parse a stream using the built-in grammar *)
 let primitive_parse
   (x : Value) (stream : Value) (recurse : Value) : Machine Value :=
@@ -592,30 +607,30 @@ match x with
 
     Parse a _grammar overlay_ as a subexpression, and derive a new grammar by
     appying it to the current grammar. *)
-    do overlay <- parse_sub_expr stream recurse;
+    do (overlay, stream) <- parse_sub_expr stream recurse;
     do overlay' <- eval overlay;
     do g <- reads grammar;
     do g' <- send overlay' g;
     (** Parse more input using the modified grammar. *)
     with_ctx (put grammar g') $ parse stream
 | VSymbol "\" => (** block : [<expr> ::= "\" <symbol> "." <expr>] *)
-    do x <- parse_symbol' eval "." stream;
-    do e <- parse_sub_expr stream recurse;
-    new "_" $ EBlock x e
+    do (x, stream) <- parse_symbol' eval "." stream;
+    do (e, stream) <- parse_sub_expr stream recurse;
+    parse_ret (EBlock x e) stream
 | VSymbol "<" => (** send : [<expr> ::= "<" <expr> <expr>] *)
-    do rcv <- parse_sub_expr stream recurse;
-    do msg <- parse_sub_expr stream recurse;
-    new "_" $ ESend rcv msg
+    do (rcv, stream) <- parse_sub_expr stream recurse;
+    do (msg, stream) <- parse_sub_expr stream recurse;
+    parse_ret (ESend rcv msg) stream
 | VSymbol ";" => (** choice : [<expr> ::= ";" <expr> <expr>] *)
-    do l <- parse_sub_expr stream recurse;
-    do r <- parse_sub_expr stream recurse;
-    new "_" $ EChoice l r
+    do (l, stream) <- parse_sub_expr stream recurse;
+    do (r, stream) <- parse_sub_expr stream recurse;
+    parse_ret (EChoice l r) stream
 | VSymbol delim => (** symbol : [<expr> ::= <symbol>] *)
-    do x <- parse_symbol' eval delim stream;
-    new "_" $ ESymbol x
+    do (x, stream) <- parse_symbol' eval delim stream;
+    parse_ret (ESymbol x) stream
 | VBlock _ _ _ => 
     (** If the stream yields a non-symbol object, just pass it through as-is. *)
-    ret x
+    parse_ret (EValue x) stream
 end in
 (** [eval_primitive] : built-in functionality *)
 let eval_primitive (p : Primitive) : Machine Value := match p with
@@ -624,16 +639,11 @@ let eval_primitive (p : Primitive) : Machine Value := match p with
     with_state $ fun s =>
       (s<|heap ::= update a (substitute x $ Some v)|>, VSymbol x)
 | PrimParse stream recurse =>
-    do stream' <- eval stream;
+    do c <- eval $ A stream;
+    do stream' <- eval $ D stream;
     do recurse' <- eval recurse;
-    do c <- send stream' stream';
     primitive_parse c stream' recurse'
-| PrimInput =>
-    do i <- gets input;
-    match i with
-    | cons c i' => puts input i' >> ret (VSymbol c)
-    | nil => fail
-    end
+| PrimFail => fail
 end in
 (** expression interpretation *)
 match e with
@@ -650,9 +660,9 @@ end.
 
 Definition send : Value -> Value -> Machine Value := send' eval.
 Definition parse : Value -> Machine Value := parse' eval.
-Definition parse_symbol : Symbol -> Value -> Machine Symbol :=
+Definition parse_symbol : Symbol -> Value -> Machine (Symbol * Value) :=
   parse_symbol' eval.
-Definition parse_sub_expr : Value -> Value -> Machine Expr :=
+Definition parse_sub_expr : Value -> Value -> Machine (Expr * Value) :=
   parse_sub_expr' eval.
 
 (** **** the [Input] used to evaluate all complete bl:mp programs
@@ -661,23 +671,27 @@ In the initial input, the heap is empty, the input stream consists of the text
 of the program being evaluated, the ambient grammar is the built-in grammar, and
 execution proceeds in scope [0], the global scope.
 *)
-Definition initial_input (program : string) : Input :=  {|
+Definition initial_input : Input :=  {|
   state := {|
     heap := fun _ => empty_scope None;
     next_addr := 1;
-    input := map (fun c => String c EmptyString) $ list_ascii_of_string program;
   |};
   ctx := {|
     scope := 0;
-    grammar := VBlock 0 "s" $ EBlock "p" $ EBlock "_" $
+    grammar := VBlock 0 "^" $ EBlock "p" $ EBlock "s" $
       EPrimitive $ PrimParse (ESymbol "s") (ESymbol "p");
   |}
 |}.
 
+Fixpoint mk_stream (s : string) : Expr := match s with
+| "" => EBlock "_" $ EPrimitive PrimFail
+| String c cs => P (ESymbol $ String c "") (mk_stream cs)
+end.
+
 (** **** execute a complete bl:mp program from its source code *)
 Definition run_blimp (program : string) (depth : nat) : Result Value :=
   let m :=
-    do stream <- eval $ EBlock "_" $ EPrimitive PrimInput;
+    do stream <- eval $ mk_stream program;
     parse stream
-  in m depth $ initial_input program
+  in m depth initial_input
 .

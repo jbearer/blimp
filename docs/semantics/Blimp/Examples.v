@@ -91,7 +91,7 @@ Open Scope string_scope.
 (** ** example evaluations *)
 
 (** *** parsing examples *)
-
+(*
 Lemma parse_symbol : "`x`" ~> ESymbol "x".
 eval_blimp.
 Qed.
@@ -109,7 +109,7 @@ Lemma parse_send : "<\x.`x``y`" ~>
 eval_blimp.
 Qed.
 
-Lemma parse_trivial_macro : ">\g.\s.\p.\x.\x.`z`" ~> ESymbol "z".
+Lemma parse_trivial_macro : ">\g.\s.\p.\x.\f.;<`f`\_.`z``x`" ~> ESymbol "z".
 eval_blimp.
 Qed.
 
@@ -119,25 +119,60 @@ Lemma parse_id_macro : remove_whitespace "
 eval_blimp.
 Qed.
 
+Lemma parse_error : fails $ remove_whitespace "`".
+eval_blimp.
+Qed.
+
 Lemma parse_lex_macro : remove_whitespace "
-> \g.\s.
-    <`g` \_.
-     <<\A.\B.`B` <`s` `s`
-                 <`s` `s`
-  .<.`.x.`.`.y.`
-" ~> ESend (ESymbol "x") (ESymbol "y").
+> \g.\_.\p. <\p'.\s.
+    <\F.
+      # Parse using `p'` (= `g _ p`), except that if the input starts with `$`,
+      # prepend a `\` to the input stream.
+                  # Initialize `$` to a parse function which applies `F` to the
+                  # input stream.
+      <<\A.\B.`B` <`$`\ref. <`ref` \_.
+                    <`p'` <`F` `s`
+                  # Get the first character of input.
+                  <\c.
+                                # Initialize the first character in this scope
+                                # to a parse function which simply calls `p'`.
+                                # If `c` is `$`, this will do nothing, since
+                                # sending to `$` just gets a parser object.
+                    <<\A.\B.`B` <`c`\ref. <`ref` \_. <`p'` `s`
+                                # Send to `c`, dynamically looking up the parser
+                                # to return based on the value of `c`.
+                                <`c``.`
+                  <`s`\c.`c`
+      # Prepend a `\` to an input stream.
+      \s.\F.; <`F``\` `s`
+    <<`g``_``p`
+  $.`foo`
+" ~> EBlock "$" (ESymbol "foo").
 eval_blimp.
 Qed.
 
-Lemma parse_grammar_macro : remove_whitespace "
-> \g.\s.\p.
-  <<\A.\B.`B` <`s` `s`
-              <<`g` `s` `p`
-  .\x..`x`
-" ~> EBlock "x" (ESymbol "x").
+Lemma parse_grammar_macro : exists a a', remove_whitespace "
+> \g.\_.\p. <\p'.\s.
+    # Parse using the original grammar, capturing the result as `R`.
+    <\R.
+      # Transform the parse tree in the result, by wrapping it in `\_.`,
+      # effectively taking the parse tree itself and treating it as a
+      # value-expression inside a larger parse tree. Return a pair of that
+      # larger parse tree and the remaining stream from the original result.
+      \F. <\T.
+          # If `F` succeeds, then `R F` (or `T`) is the parse tree from `R`. We
+          # thus transform `T` and send the result to `F`.
+        ; <`F` \_.`T`
+          # Otherwise, `R F` (or `T`) is the stream part of `R`.
+          `T`
+        <`R` `F`
+    <`p'` `s`
+    <<`g``_``p`
+  \x.`x`
+" ~> EValue (VBlock a "^" $ EBlock "x" $ EValue $ VBlock a' "^" $ ESymbol "x").
 eval_blimp.
 Qed.
-
+*)
 (** *** execution examples *)
 
 (** **** [bang]: a prelude for executing bl:mp programs
@@ -155,16 +190,16 @@ Definition bang (p : string) := remove_whitespace $ "
     # Parse using the fixpoint of `g`, the original grammar. This ensures that
     # sub-expressions will be parsed using `g` as well, not this overlay, and
     # therefore sub-expressions will not be eagerly evaluated.
-    < < \g. <
+    << < \g. <
           \x. < `g` \v. < < `x` `x` `v`
           \x. < `g` \v. < < `x` `x` `v`
         < `g` `s`
       `x`
     # Send to the resulting parse tree, which evaluates the top-level parse tree.
-    `_`
+    \T.`T` `_`
 " ++ p.
 Notation "! p" := (bang p) (at level 60).
-
+(*
 Lemma eval_symbol : !"`x`" ~!> VSymbol "x".
 eval_blimp.
 Qed.
@@ -218,8 +253,8 @@ eval_blimp.
 Qed.
 
 Lemma shadowing : !"
-<<\A.\B.`B` <`parent-ref` \^.<`^` `^`
-<<\A.\B.`B` <`child-ref` \^.<`^` `^`
+<<\A.\B.`B` <`parent-ref` \ref.<`ref` `ref`
+<<\A.\B.`B` <`child-ref` \ref.<`ref` `ref`
 <<\A.\B.`B` <`foo` \foo-ref. <`parent-ref` `foo-ref`
             <\_.
 <<\A.\B.`B`   <`foo` \foo-ref. <`child-ref` `foo-ref`
@@ -232,8 +267,8 @@ eval_blimp.
 Qed.
 
 Lemma shadowed : !"
-<<\A.\B.`B` <`parent-ref` \^.<`^` `^`
-<<\A.\B.`B` <`child-ref` \^.<`^` `^`
+<<\A.\B.`B` <`parent-ref` \ref.<`ref` `ref`
+<<\A.\B.`B` <`child-ref` \ref.<`ref` `ref`
 <<\A.\B.`B` <`foo` \foo-ref. <`parent-ref` `foo-ref`
 <<\A.\B.`B` <\_.
 <<\A.\B.`B`   <`foo` \foo-ref. <`child-ref` `foo-ref`
@@ -241,7 +276,7 @@ Lemma shadowed : !"
               <`child-ref` \_. `bar`
             `.`
             <`foo` `_`
-(* " ~!> VSymbol "foo".
+" ~!> VSymbol "foo".
 eval_blimp.
 Qed.
 
@@ -272,14 +307,14 @@ Lemma second_choice : remove_whitespace ">\g.\s.\p.\x.
               # symbols. This will force the built-in grammar to parse a
               # sub-expression, and fail since a symbol is not a parse tree.
               <<<`g`
-                \_.`<`
+                \F.<`F` `<`
                 \_.`.`
-                \_.`<`
+                \F.<`F` `<`
   <`foo` `.`
 " ~!> VSymbol "bar".
 eval_blimp.
 Qed.
-
+*)
 (** ** non-termination
 
 An example of proving non-termination of a bl:mp program. Here we will prove
@@ -458,10 +493,9 @@ Fixpoint filter_heap (h : Heap) (max : nat) : Heap := match max with
   h'[n := empty_scope p]
 end.
 
-(** **** [bang_initial_input]: the input to [p] after the [!] prelude has
-executed. *)
-Definition bang_initial_input (p : string) :=
-  initial_input (remove_whitespace p)
+(** **** [bang_initial_input]: the input after the [!] prelude has executed. *)
+Definition bang_initial_input :=
+  initial_input
     <|state;next_addr := 112|>
     <|state;heap := filter_heap (heap $ result_state $ run_blimp (!"") 35) 112|>
     <|ctx := Build_Context 111 $
@@ -480,11 +514,11 @@ appended to it *)
 Definition bang_parse (p : string) (d : nat) :=
   eval (ESend
     (Z $ ESend
-      (EValue $ VBlock 0 "s" $ EBlock "p" $ EBlock "_" $
+      (EValue $ VBlock 0 "_" $ EBlock "p" $ EBlock "s" $
         EPrimitive $ PrimParse (ESymbol "s") (ESymbol "p"))
-      (EValue $ VBlock 1 "_" $ EPrimitive PrimInput))
-    (EValue $ VBlock 1 "_" $ EPrimitive PrimInput)
-  ) d (bang_initial_input p)
+      (mk_stream $ remove_whitespace p))
+    (mk_stream $ remove_whitespace p)
+  ) d bang_initial_input
 .
 
 (** **** [bang_diverge]: prove that a program using the [!] prelude diverges.
@@ -496,7 +530,7 @@ Lemma bang_diverge (p : string) : forall s a x e,
   (** evaluating [e] (by sending to the parse tree for [e]) in the state after
   parsing diverges *)
   (forall d, exists s', eval e[x := VSymbol "_"] d
-    (bang_initial_input p <|state := s|><|ctx;scope := a|>) = Diverge s') ->
+    (bang_initial_input <|state := s|><|ctx;scope := a|>) = Diverge s') ->
   diverges (!p).
 Proof.
 (* begin details *)
@@ -519,6 +553,7 @@ sequence of bl:mp statements. We then evaluate the head statement and proceed
 into the rest of the statements. *)
 unfold run_blimp.
 unfold head.
+simpl.
 rewrite_eval_blimp; [simpl input|now eexists].
 do 2 unfold head.
 do 3 (unfold head; fold eval; rewrite_eval_blimp; [simpl input|now eexists]).
